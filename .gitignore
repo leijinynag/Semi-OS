@@ -1,0 +1,12 @@
+.DS_Store
+node_modules/
+dist/
+target/
+.env
+.env.*
+!.env.example
+playwright/.auth/
+*.log
+
+# Local Feishu authoring workspace. The published source lives in docs/feishu/.
+draft_*/

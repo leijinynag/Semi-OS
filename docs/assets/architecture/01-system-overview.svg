@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Semi-OS 系统总览</title>
+  <desc id="desc">展示产品界面、本地核心、能力适配器及其主要通信关系。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#536174"/>
+    </marker>
+    <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#e0613d"/>
+    </marker>
+    <style>
+      .sans { font-family: "Noto Sans SC", "PingFang SC", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+      .title { font-size: 27px; font-weight: 650; fill: #202936; }
+      .subtitle { font-size: 12px; fill: #6c7788; }
+      .zone { fill: rgba(32,41,54,.018); stroke: rgba(32,41,54,.18); stroke-width: 1; stroke-dasharray: 5 5; }
+      .zone-label { font-size: 10px; font-weight: 600; fill: #778292; letter-spacing: 1.4px; }
+      .node { fill: #ffffff; stroke: #687587; stroke-width: 1.2; }
+      .node-soft { fill: #f1f4f6; stroke: #8994a3; stroke-width: 1.1; }
+      .node-focus { fill: #fff1ec; stroke: #e0613d; stroke-width: 1.5; }
+      .name { font-size: 16px; font-weight: 650; fill: #202936; }
+      .detail { font-size: 11px; fill: #697587; }
+      .tag { font-size: 9px; fill: #7b8797; letter-spacing: .8px; }
+      .flow { fill: none; stroke: #536174; stroke-width: 1.35; marker-end: url(#arrow); }
+      .flow-dashed { fill: none; stroke: #84909f; stroke-width: 1.1; stroke-dasharray: 5 4; marker-end: url(#arrow); }
+      .flow-accent { fill: none; stroke: #e0613d; stroke-width: 1.5; marker-end: url(#arrow-accent); }
+      .label-bg { fill: #f7f8f8; }
+      .flow-label { font-size: 9px; fill: #697587; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="720" fill="#f7f8f8"/>
+  <text x="46" y="52" class="sans title">Semi-OS 系统总览</text>
+  <text x="46" y="76" class="sans subtitle">一个 Pi 推理闭环，由 Rust 掌握本地权限和持久化，由可替换适配器连接外部能力</text>
+
+  <rect x="40" y="108" width="210" height="548" rx="8" class="zone"/>
+  <rect x="54" y="103" width="90" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="99" y="116" text-anchor="middle" class="mono zone-label">产品界面</text>
+
+  <rect x="280" y="108" width="520" height="548" rx="8" class="zone"/>
+  <rect x="294" y="103" width="102" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="345" y="116" text-anchor="middle" class="mono zone-label">本地核心</text>
+
+  <rect x="830" y="108" width="330" height="548" rx="8" class="zone"/>
+  <rect x="844" y="103" width="112" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="900" y="116" text-anchor="middle" class="mono zone-label">能力适配器</text>
+
+  <!-- Connections are drawn before nodes. -->
+  <path d="M 210 209 H 286 Q 294 209 294 217 V 255 Q 294 263 302 263 H 330" class="flow"/>
+  <path d="M 210 389 H 286 Q 294 389 294 381 V 305 Q 294 297 302 297 H 330" class="flow"/>
+  <line x1="520" y1="280" x2="575" y2="280" class="flow-accent"/>
+  <path d="M 425 330 V 462" class="flow-dashed"/>
+  <path d="M 670 330 V 462" class="flow"/>
+
+  <path d="M 765 258 H 808 Q 816 258 816 250 V 190 Q 816 182 824 182 H 870" class="flow"/>
+  <path d="M 765 272 H 818 Q 826 272 826 280 V 314 Q 826 322 834 322 H 870" class="flow"/>
+  <path d="M 765 288 H 818 Q 826 288 826 296 V 454 Q 826 462 834 462 H 870" class="flow"/>
+  <path d="M 765 304 H 808 Q 816 304 816 312 V 586 Q 816 594 824 594 H 870" class="flow"/>
+
+  <rect x="254" y="225" width="68" height="16" rx="2" class="label-bg"/>
+  <text x="288" y="236" text-anchor="middle" class="mono flow-label">Tauri IPC</text>
+  <rect x="524" y="267" width="48" height="16" rx="2" class="label-bg"/>
+  <text x="548" y="278" text-anchor="middle" class="mono flow-label">JSONL</text>
+  <rect x="398" y="385" width="54" height="16" rx="2" class="label-bg"/>
+  <text x="425" y="396" text-anchor="middle" class="mono flow-label">事件 / 状态</text>
+  <rect x="642" y="385" width="56" height="16" rx="2" class="label-bg"/>
+  <text x="670" y="396" text-anchor="middle" class="mono flow-label">动态注入</text>
+
+  <rect x="70" y="166" width="140" height="86" rx="6" class="node"/>
+  <text x="140" y="196" text-anchor="middle" class="sans name">桌面助手</text>
+  <text x="140" y="218" text-anchor="middle" class="sans detail">聆听 · 进度 · 确认</text>
+  <text x="140" y="237" text-anchor="middle" class="mono tag">TRANSIENT UI</text>
+
+  <rect x="70" y="346" width="140" height="86" rx="6" class="node"/>
+  <text x="140" y="376" text-anchor="middle" class="sans name">客户端</text>
+  <text x="140" y="398" text-anchor="middle" class="sans detail">任务 · 记忆 · 设置</text>
+  <text x="140" y="417" text-anchor="middle" class="mono tag">CONTROL CENTER</text>
+
+  <rect x="330" y="230" width="190" height="100" rx="6" class="node-focus"/>
+  <text x="425" y="261" text-anchor="middle" class="sans name">Rust Host</text>
+  <text x="425" y="284" text-anchor="middle" class="sans detail">权限、策略、监督、持久化</text>
+  <text x="425" y="306" text-anchor="middle" class="mono tag">LOCAL AUTHORITY</text>
+
+  <rect x="575" y="230" width="190" height="100" rx="6" class="node"/>
+  <text x="670" y="261" text-anchor="middle" class="sans name">Node Agent Worker</text>
+  <text x="670" y="284" text-anchor="middle" class="sans detail">Pi 会话、Skills、工具编排</text>
+  <text x="670" y="306" text-anchor="middle" class="mono tag">REASONING RUNTIME</text>
+
+  <rect x="330" y="462" width="190" height="94" rx="6" class="node-soft"/>
+  <text x="425" y="492" text-anchor="middle" class="sans name">SQLite + Keychain</text>
+  <text x="425" y="515" text-anchor="middle" class="sans detail">事件、回执、记忆、密钥引用</text>
+  <text x="425" y="537" text-anchor="middle" class="mono tag">DURABLE STATE</text>
+
+  <rect x="575" y="462" width="190" height="94" rx="6" class="node-soft"/>
+  <text x="670" y="492" text-anchor="middle" class="sans name">工具与 Skill 注册表</text>
+  <text x="670" y="515" text-anchor="middle" class="sans detail">能力 ∩ 权限 ∩ 策略 ∩ 上下文</text>
+  <text x="670" y="537" text-anchor="middle" class="mono tag">DYNAMIC SURFACE</text>
+
+  <rect x="870" y="144" width="250" height="76" rx="6" class="node"/>
+  <text x="995" y="172" text-anchor="middle" class="sans name">语音与模型 Provider</text>
+  <text x="995" y="195" text-anchor="middle" class="sans detail">STT · TTS · LLM，可替换</text>
+  <text x="995" y="211" text-anchor="middle" class="mono tag">HTTPS</text>
+
+  <rect x="870" y="284" width="250" height="76" rx="6" class="node"/>
+  <text x="995" y="312" text-anchor="middle" class="sans name">浏览器自动化</text>
+  <text x="995" y="335" text-anchor="middle" class="sans detail">Playwright 持久化用户配置</text>
+  <text x="995" y="351" text-anchor="middle" class="mono tag">OPEN · CLICK · TYPE · EXTRACT</text>
+
+  <rect x="870" y="424" width="250" height="76" rx="6" class="node"/>
+  <text x="995" y="452" text-anchor="middle" class="sans name">macOS 桌面控制</text>
+  <text x="995" y="475" text-anchor="middle" class="sans detail">Accessibility 优先，视觉回退</text>
+  <text x="995" y="491" text-anchor="middle" class="mono tag">OBSERVE · ACT · VERIFY</text>
+
+  <rect x="870" y="556" width="250" height="76" rx="6" class="node"/>
+  <text x="995" y="584" text-anchor="middle" class="sans name">本地 Coding Agent</text>
+  <text x="995" y="607" text-anchor="middle" class="sans detail">启动、观察、引导、取消、验收</text>
+  <text x="995" y="623" text-anchor="middle" class="mono tag">DELEGATED SUBTASK</text>
+
+  <text x="46" y="694" class="sans subtitle">核心约束：模型文本不代表成功；每个副作用都必须产生可审计回执，并由真实环境证据完成验证。</text>
+</svg>

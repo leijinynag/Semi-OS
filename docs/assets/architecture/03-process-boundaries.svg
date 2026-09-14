@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="740" viewBox="0 0 1200 740" role="img" aria-labelledby="title desc">
+  <title id="title">Semi-OS 进程与信任边界</title>
+  <desc id="desc">展示 macOS 本地进程、受保护系统能力以及云端提供商的部署关系。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#536174"/>
+    </marker>
+    <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#2e63a7"/>
+    </marker>
+    <style>
+      .sans { font-family: "Noto Sans SC", "PingFang SC", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+      .title { font-size: 27px; font-weight: 650; fill: #202936; }
+      .subtitle { font-size: 12px; fill: #6c7788; }
+      .zone { fill: rgba(32,41,54,.018); stroke: rgba(32,41,54,.24); stroke-width: 1; stroke-dasharray: 5 5; }
+      .zone-cloud { fill: rgba(46,99,167,.025); stroke: rgba(46,99,167,.35); stroke-width: 1; stroke-dasharray: 5 5; }
+      .zone-label { font-size: 10px; font-weight: 600; fill: #778292; letter-spacing: 1.3px; }
+      .infra { fill: #fff; stroke: #667486; stroke-width: 1.2; }
+      .infra-focus { fill: #fff1ec; stroke: #e0613d; stroke-width: 1.5; }
+      .infra-cloud { fill: #f8fbff; stroke: #6685aa; stroke-width: 1.1; }
+      .node-name { font-size: 15px; font-weight: 650; fill: #202936; }
+      .node-detail { font-size: 10px; fill: #687486; }
+      .tag-box { fill: #edf0f2; stroke: #a0a9b4; stroke-width: .7; }
+      .tag { font-size: 8px; fill: #667384; letter-spacing: .8px; }
+      .chip { fill: #f1f3f5; stroke: #98a2af; stroke-width: .8; }
+      .chip-name { font-size: 11px; fill: #303b49; }
+      .chip-version { font-size: 9px; fill: #727e8e; }
+      .path { fill: none; stroke: #536174; stroke-width: 1.25; marker-end: url(#arrow); }
+      .path-return { fill: none; stroke: #7f8a99; stroke-width: 1.05; stroke-dasharray: 5 4; marker-end: url(#arrow); }
+      .path-link { fill: none; stroke: #2e63a7; stroke-width: 1.25; marker-end: url(#arrow-link); }
+      .path-label { font-size: 9px; fill: #5f6c7d; }
+      .label-bg { fill: #f7f8f8; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="740" fill="#f7f8f8"/>
+  <text x="46" y="50" class="sans title">进程部署与信任边界</text>
+  <text x="46" y="74" class="sans subtitle">WebView 无特权，Worker 可丢弃；Rust Host 是唯一能授权系统副作用与写入持久状态的本地权威</text>
+
+  <rect x="40" y="106" width="805" height="570" rx="8" class="zone"/>
+  <rect x="54" y="101" width="122" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="115" y="114" text-anchor="middle" class="mono zone-label">本地 macOS 设备</text>
+
+  <rect x="70" y="145" width="360" height="225" rx="8" class="zone"/>
+  <rect x="84" y="140" width="118" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="143" y="153" text-anchor="middle" class="mono zone-label">TAURI 应用进程</text>
+
+  <rect x="455" y="145" width="360" height="492" rx="8" class="zone"/>
+  <rect x="469" y="140" width="132" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="535" y="153" text-anchor="middle" class="mono zone-label">受监督子进程</text>
+
+  <rect x="875" y="106" width="285" height="570" rx="8" class="zone-cloud"/>
+  <rect x="889" y="101" width="116" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="947" y="114" text-anchor="middle" class="mono zone-label">外部提供商</text>
+
+  <!-- Paths -->
+  <line x1="235" y1="275" x2="235" y2="397" class="path"/>
+  <path d="M 400 488 H 426 Q 434 488 434 480 V 272 Q 434 264 442 264 H 480" class="path"/>
+  <line x1="635" y1="343" x2="635" y2="424" class="path"/>
+  <path d="M 610 597 V 620 Q 610 628 602 628 H 415 Q 407 628 407 620 V 530" class="path-return"/>
+  <path d="M 790 245 H 842 Q 850 245 850 237 V 211 Q 850 203 858 203 H 900" class="path-link"/>
+  <path d="M 790 285 H 842 Q 850 285 850 293 V 428 Q 850 436 858 436 H 900" class="path-link"/>
+
+  <rect x="204" y="326" width="62" height="16" rx="2" class="label-bg"/>
+  <text x="235" y="337" text-anchor="middle" class="mono path-label">Tauri IPC</text>
+  <rect x="405" y="360" width="60" height="16" rx="2" class="label-bg"/>
+  <text x="435" y="371" text-anchor="middle" class="mono path-label">JSONL stdio</text>
+  <rect x="603" y="380" width="64" height="16" rx="2" class="label-bg"/>
+  <text x="635" y="391" text-anchor="middle" class="mono path-label">stdio / RPC</text>
+  <rect x="821" y="188" width="58" height="16" rx="2" class="label-bg"/>
+  <text x="850" y="199" text-anchor="middle" class="mono path-label">HTTPS/TLS</text>
+  <rect x="821" y="397" width="58" height="16" rx="2" class="label-bg"/>
+  <text x="850" y="408" text-anchor="middle" class="mono path-label">HTTPS/TLS</text>
+
+  <!-- Tauri process -->
+  <rect x="98" y="180" width="274" height="95" rx="6" class="infra"/>
+  <rect x="110" y="192" width="54" height="18" rx="2" class="tag-box"/>
+  <text x="137" y="204" text-anchor="middle" class="mono tag">WEBVIEW</text>
+  <text x="235" y="218" text-anchor="middle" class="sans node-name">React UI</text>
+  <rect x="118" y="232" width="234" height="28" rx="4" class="chip"/>
+  <text x="130" y="250" class="sans chip-name">Desktop Assistant + Client</text>
+  <text x="340" y="250" text-anchor="end" class="mono chip-version">Vite</text>
+
+  <rect x="98" y="397" width="274" height="133" rx="6" class="infra-focus"/>
+  <rect x="110" y="409" width="56" height="18" rx="2" class="tag-box"/>
+  <text x="138" y="421" text-anchor="middle" class="mono tag">NATIVE</text>
+  <text x="235" y="437" text-anchor="middle" class="sans node-name">Rust Host</text>
+  <rect x="118" y="450" width="234" height="28" rx="4" class="chip"/>
+  <text x="130" y="468" class="sans chip-name">Tauri + Policy + Supervisor</text>
+  <text x="340" y="468" text-anchor="end" class="mono chip-version">2.x</text>
+  <rect x="118" y="488" width="234" height="28" rx="4" class="chip"/>
+  <text x="130" y="506" class="sans chip-name">SQLite WAL + Keychain refs</text>
+  <text x="340" y="506" text-anchor="end" class="mono chip-version">local</text>
+
+  <!-- Worker zone -->
+  <rect x="480" y="180" width="310" height="163" rx="6" class="infra"/>
+  <rect x="492" y="192" width="62" height="18" rx="2" class="tag-box"/>
+  <text x="523" y="204" text-anchor="middle" class="mono tag">SIDECAR</text>
+  <text x="635" y="220" text-anchor="middle" class="sans node-name">Agent Worker</text>
+  <rect x="500" y="234" width="270" height="28" rx="4" class="chip"/>
+  <text x="512" y="252" class="sans chip-name">Node.js runtime</text>
+  <text x="758" y="252" text-anchor="end" class="mono chip-version">&gt;=22.19</text>
+  <rect x="500" y="272" width="270" height="28" rx="4" class="chip"/>
+  <text x="512" y="290" class="sans chip-name">Pi Coding Agent SDK</text>
+  <text x="758" y="290" text-anchor="end" class="mono chip-version">0.85.1</text>
+  <rect x="500" y="310" width="270" height="20" rx="4" class="chip"/>
+  <text x="512" y="324" class="sans chip-name">Runtime Adapter + Skills</text>
+  <text x="758" y="324" text-anchor="end" class="mono chip-version">built-in</text>
+
+  <rect x="480" y="424" width="310" height="173" rx="6" class="infra"/>
+  <rect x="492" y="436" width="64" height="18" rx="2" class="tag-box"/>
+  <text x="524" y="448" text-anchor="middle" class="mono tag">CHILDREN</text>
+  <text x="635" y="464" text-anchor="middle" class="sans node-name">受控工具进程</text>
+  <rect x="500" y="480" width="270" height="28" rx="4" class="chip"/>
+  <text x="512" y="498" class="sans chip-name">Playwright service</text>
+  <text x="758" y="498" text-anchor="end" class="mono chip-version">1.63.0</text>
+  <rect x="500" y="518" width="270" height="28" rx="4" class="chip"/>
+  <text x="512" y="536" class="sans chip-name">Coding Agent Provider</text>
+  <text x="758" y="536" text-anchor="end" class="mono chip-version">pluggable</text>
+  <rect x="500" y="556" width="270" height="28" rx="4" class="chip"/>
+  <text x="512" y="574" class="sans chip-name">macOS Desktop Adapter</text>
+  <text x="758" y="574" text-anchor="end" class="mono chip-version">MVP</text>
+
+  <!-- Cloud -->
+  <rect x="900" y="160" width="235" height="132" rx="6" class="infra-cloud"/>
+  <rect x="912" y="172" width="62" height="18" rx="2" class="tag-box"/>
+  <text x="943" y="184" text-anchor="middle" class="mono tag">CLOUD</text>
+  <text x="1017" y="201" text-anchor="middle" class="sans node-name">STT / TTS Provider</text>
+  <rect x="920" y="218" width="195" height="28" rx="4" class="chip"/>
+  <text x="932" y="236" class="sans chip-name">Streaming STT / TTS</text>
+  <text x="1103" y="236" text-anchor="end" class="mono chip-version">replaceable</text>
+  <text x="1017" y="269" text-anchor="middle" class="sans node-detail">只接收所选操作所需数据</text>
+
+  <rect x="900" y="378" width="235" height="132" rx="6" class="infra-cloud"/>
+  <rect x="912" y="390" width="62" height="18" rx="2" class="tag-box"/>
+  <text x="943" y="402" text-anchor="middle" class="mono tag">CLOUD</text>
+  <text x="1017" y="419" text-anchor="middle" class="sans node-name">Model Provider</text>
+  <rect x="920" y="436" width="195" height="28" rx="4" class="chip"/>
+  <text x="932" y="454" class="sans chip-name">Model API</text>
+  <text x="1103" y="454" text-anchor="end" class="mono chip-version">replaceable</text>
+  <text x="1017" y="487" text-anchor="middle" class="sans node-detail">边界在遥测和 UI 中明确展示</text>
+
+  <text x="46" y="710" class="sans subtitle">MVP 以单机部署为前提。二进制数据以本地文件引用和摘要传递，不把截图、音频或大型结果直接塞进 JSONL。</text>
+</svg>

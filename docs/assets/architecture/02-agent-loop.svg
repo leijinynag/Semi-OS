@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Semi-OS 语音到动作闭环</title>
+  <desc id="desc">展示用户、语音界面、Pi Worker、Rust Host 和工具之间的时序。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#536174"/>
+    </marker>
+    <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#e0613d"/>
+    </marker>
+    <style>
+      .sans { font-family: "Noto Sans SC", "PingFang SC", sans-serif; }
+      .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+      .title { font-size: 27px; font-weight: 650; fill: #202936; }
+      .subtitle { font-size: 12px; fill: #6c7788; }
+      .actor { fill: #fff; stroke: #687587; stroke-width: 1.2; }
+      .actor-focus { fill: #fff1ec; stroke: #e0613d; stroke-width: 1.4; }
+      .actor-name { font-size: 15px; font-weight: 650; fill: #202936; }
+      .actor-tag { font-size: 8px; fill: #778292; letter-spacing: .7px; }
+      .life { stroke: rgba(32,41,54,.22); stroke-width: 1; stroke-dasharray: 4 4; }
+      .activation { fill: #edf0f2; stroke: #758191; stroke-width: .8; }
+      .activation-focus { fill: #fff1ec; stroke: #e0613d; stroke-width: .8; }
+      .call { stroke: #536174; stroke-width: 1.3; marker-end: url(#arrow); }
+      .return { stroke: #7c8897; stroke-width: 1.1; stroke-dasharray: 5 4; marker-end: url(#arrow); }
+      .headline { stroke: #e0613d; stroke-width: 1.5; marker-end: url(#arrow-accent); }
+      .message { font-size: 11px; fill: #3f4a59; }
+      .note { fill: #f0f3f5; stroke: #a2abb6; stroke-width: .8; }
+      .note-text { font-size: 10px; fill: #596576; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="#f7f8f8"/>
+  <text x="46" y="50" class="sans title">语音到动作的 Agent 闭环</text>
+  <text x="46" y="74" class="sans subtitle">先响应，再推理；每次动作都经过策略、执行、回执与验证</text>
+
+  <!-- Lifelines -->
+  <line x1="120" y1="148" x2="120" y2="700" class="life"/>
+  <line x1="350" y1="148" x2="350" y2="700" class="life"/>
+  <line x1="600" y1="148" x2="600" y2="700" class="life"/>
+  <line x1="850" y1="148" x2="850" y2="700" class="life"/>
+  <line x1="1080" y1="148" x2="1080" y2="700" class="life"/>
+
+  <!-- Activation bars -->
+  <rect x="346" y="185" width="8" height="449" class="activation"/>
+  <rect x="596" y="278" width="8" height="329" class="activation-focus"/>
+  <rect x="846" y="346" width="8" height="197" class="activation"/>
+  <rect x="1076" y="418" width="8" height="96" class="activation"/>
+
+  <!-- Messages -->
+  <line x1="120" y1="190" x2="350" y2="190" class="call"/>
+  <text x="235" y="181" text-anchor="middle" class="sans message">按住快捷键并说出任务</text>
+
+  <line x1="350" y1="235" x2="120" y2="235" class="headline"/>
+  <text x="235" y="226" text-anchor="middle" class="sans message">快速语音确认：已收到，开始处理</text>
+
+  <line x1="350" y1="280" x2="600" y2="280" class="call"/>
+  <text x="475" y="271" text-anchor="middle" class="sans message">完整句子 + 当前上下文</text>
+
+  <line x1="600" y1="325" x2="850" y2="325" class="call"/>
+  <text x="725" y="316" text-anchor="middle" class="sans message">请求工具：目标、参数、风险类别</text>
+
+  <line x1="850" y1="370" x2="600" y2="370" class="return"/>
+  <text x="725" y="361" text-anchor="middle" class="sans message">策略结果：自动执行 / 等待确认</text>
+
+  <line x1="850" y1="420" x2="1080" y2="420" class="call"/>
+  <text x="965" y="411" text-anchor="middle" class="sans message">基于新鲜观察执行一个原子动作</text>
+
+  <line x1="1080" y1="468" x2="850" y2="468" class="return"/>
+  <text x="965" y="459" text-anchor="middle" class="sans message">结构化执行结果</text>
+
+  <line x1="850" y1="515" x2="1080" y2="515" class="call"/>
+  <text x="965" y="506" text-anchor="middle" class="sans message">重新观察并验证预期状态</text>
+
+  <line x1="850" y1="560" x2="600" y2="560" class="return"/>
+  <text x="725" y="551" text-anchor="middle" class="sans message">ExecutionReceipt + Verification</text>
+
+  <line x1="600" y1="607" x2="350" y2="607" class="return"/>
+  <text x="475" y="598" text-anchor="middle" class="sans message">首个完整回答句 + 后续进度事件</text>
+
+  <line x1="350" y1="652" x2="120" y2="652" class="headline"/>
+  <text x="235" y="643" text-anchor="middle" class="sans message">流式 TTS 播报已验证结果</text>
+
+  <!-- Actors are drawn over lifelines. -->
+  <rect x="55" y="98" width="130" height="52" rx="6" class="actor"/>
+  <text x="120" y="120" text-anchor="middle" class="sans actor-name">用户</text>
+  <text x="120" y="138" text-anchor="middle" class="mono actor-tag">INTENT</text>
+
+  <rect x="275" y="98" width="150" height="52" rx="6" class="actor"/>
+  <text x="350" y="120" text-anchor="middle" class="sans actor-name">语音与悬浮界面</text>
+  <text x="350" y="138" text-anchor="middle" class="mono actor-tag">VOICE UX</text>
+
+  <rect x="525" y="98" width="150" height="52" rx="6" class="actor-focus"/>
+  <text x="600" y="120" text-anchor="middle" class="sans actor-name">Pi Agent Worker</text>
+  <text x="600" y="138" text-anchor="middle" class="mono actor-tag">ONE LOOP</text>
+
+  <rect x="775" y="98" width="150" height="52" rx="6" class="actor"/>
+  <text x="850" y="120" text-anchor="middle" class="sans actor-name">Rust Host</text>
+  <text x="850" y="138" text-anchor="middle" class="mono actor-tag">POLICY AUTHORITY</text>
+
+  <rect x="1015" y="98" width="130" height="52" rx="6" class="actor"/>
+  <text x="1080" y="120" text-anchor="middle" class="sans actor-name">真实工具</text>
+  <text x="1080" y="138" text-anchor="middle" class="mono actor-tag">ENVIRONMENT</text>
+
+  <rect x="430" y="683" width="340" height="40" rx="5" class="note"/>
+  <text x="600" y="699" text-anchor="middle" class="sans note-text">用户随时可暂停、取消或追加指令</text>
+  <text x="600" y="715" text-anchor="middle" class="sans note-text">Pi 通过 steer / continuation 在同一任务上下文中恢复</text>
+</svg>

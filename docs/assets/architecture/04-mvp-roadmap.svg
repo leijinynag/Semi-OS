@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Semi-OS MVP 交付故事地图</title>
+  <desc id="desc">按用户使用顺序展示 MVP、下一版本和后续版本的能力切片。</desc>
+  <style>
+    .sans { font-family: "Noto Sans SC", "PingFang SC", sans-serif; }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+    .title { font-size: 27px; font-weight: 650; fill: #202936; }
+    .subtitle { font-size: 12px; fill: #6c7788; }
+    .backbone { fill: #edf0f2; stroke: #7b8796; stroke-width: 1; }
+    .backbone-name { font-size: 14px; font-weight: 650; fill: #202936; }
+    .eyebrow { font-size: 8px; fill: #778292; letter-spacing: 1px; }
+    .step { fill: #fff; stroke: #5f6c7d; stroke-width: 1; }
+    .step-text { font-size: 11px; fill: #303b49; }
+    .band { fill: rgba(32,41,54,.025); }
+    .lane { font-size: 9px; fill: #657182; letter-spacing: 1px; }
+    .card { fill: #fff; stroke: #9aa4b0; stroke-width: .9; }
+    .card-risk { fill: #fff1ec; stroke: #e0613d; stroke-width: 1.2; stroke-dasharray: 5 4; }
+    .card-title { font-size: 11px; font-weight: 600; fill: #273240; }
+    .card-sub { font-size: 8px; fill: #778292; }
+    .cut { stroke: #e0613d; stroke-width: 1.7; }
+    .separator { stroke: rgba(32,41,54,.12); stroke-width: .8; stroke-dasharray: 4 4; }
+    .risk-tag { fill: #e0613d; }
+    .risk-text { font-size: 7px; fill: #fff; letter-spacing: .8px; }
+  </style>
+
+  <rect width="1200" height="760" fill="#f7f8f8"/>
+  <text x="46" y="50" class="sans title">MVP 交付故事地图</text>
+  <text x="46" y="74" class="sans subtitle">横向是用户完成一次电脑任务的叙事顺序，纵向是版本范围；红线即初版必须形成的闭环</text>
+
+  <!-- Column separators -->
+  <line x1="304" y1="105" x2="304" y2="650" class="separator"/>
+  <line x1="514" y1="105" x2="514" y2="650" class="separator"/>
+  <line x1="724" y1="105" x2="724" y2="650" class="separator"/>
+  <line x1="934" y1="105" x2="934" y2="650" class="separator"/>
+
+  <!-- Backbone -->
+  <rect x="100" y="105" width="194" height="64" rx="6" class="backbone"/>
+  <text x="114" y="123" class="mono eyebrow">ACTIVITY 1</text>
+  <text x="197" y="149" text-anchor="middle" class="sans backbone-name">唤起与表达</text>
+
+  <rect x="310" y="105" width="194" height="64" rx="6" class="backbone"/>
+  <text x="324" y="123" class="mono eyebrow">ACTIVITY 2</text>
+  <text x="407" y="149" text-anchor="middle" class="sans backbone-name">理解与规划</text>
+
+  <rect x="520" y="105" width="194" height="64" rx="6" class="backbone"/>
+  <text x="534" y="123" class="mono eyebrow">ACTIVITY 3</text>
+  <text x="617" y="149" text-anchor="middle" class="sans backbone-name">操作电脑</text>
+
+  <rect x="730" y="105" width="194" height="64" rx="6" class="backbone"/>
+  <text x="744" y="123" class="mono eyebrow">ACTIVITY 4</text>
+  <text x="827" y="149" text-anchor="middle" class="sans backbone-name">确认与干预</text>
+
+  <rect x="940" y="105" width="194" height="64" rx="6" class="backbone"/>
+  <text x="954" y="123" class="mono eyebrow">ACTIVITY 5</text>
+  <text x="1037" y="149" text-anchor="middle" class="sans backbone-name">验证与复用</text>
+
+  <!-- Walking skeleton -->
+  <rect x="110" y="188" width="174" height="38" rx="4" class="step"/>
+  <text x="197" y="212" text-anchor="middle" class="sans step-text">按住快捷键说任务</text>
+  <rect x="320" y="188" width="174" height="38" rx="4" class="step"/>
+  <text x="407" y="212" text-anchor="middle" class="sans step-text">Pi 统一理解与选工具</text>
+  <rect x="530" y="188" width="174" height="38" rx="4" class="step"/>
+  <text x="617" y="212" text-anchor="middle" class="sans step-text">观察、动作、再观察</text>
+  <rect x="740" y="188" width="174" height="38" rx="4" class="step"/>
+  <text x="827" y="212" text-anchor="middle" class="sans step-text">必要时确认或转向</text>
+  <rect x="950" y="188" width="174" height="38" rx="4" class="step"/>
+  <text x="1037" y="212" text-anchor="middle" class="sans step-text">用证据报告结果</text>
+
+  <!-- MVP band -->
+  <rect x="36" y="248" width="1110" height="112" class="band"/>
+  <text x="67" y="272" class="mono lane">MVP</text>
+
+  <rect x="110" y="272" width="174" height="64" rx="4" class="card"/>
+  <text x="122" y="294" class="sans card-title">Push-to-talk + 快速回应</text>
+  <text x="122" y="316" class="mono card-sub">VOICE · FLOATING UI</text>
+
+  <rect x="320" y="272" width="174" height="64" rx="4" class="card"/>
+  <text x="332" y="294" class="sans card-title">Pi Session + 动态工具</text>
+  <text x="332" y="316" class="mono card-sub">AGENT RUNTIME</text>
+
+  <rect x="530" y="272" width="174" height="64" rx="4" class="card-risk"/>
+  <rect x="654" y="278" width="42" height="16" rx="2" class="risk-tag"/>
+  <text x="675" y="289" text-anchor="middle" class="mono risk-text">RISK</text>
+  <text x="542" y="294" class="sans card-title">浏览器 + 原生桌面</text>
+  <text x="542" y="316" class="mono card-sub">PLAYWRIGHT · MACOS</text>
+
+  <rect x="740" y="272" width="174" height="64" rx="4" class="card"/>
+  <text x="752" y="294" class="sans card-title">外部副作用确认</text>
+  <text x="752" y="316" class="mono card-sub">PAUSE · STEER · CANCEL</text>
+
+  <rect x="950" y="272" width="174" height="64" rx="4" class="card"/>
+  <text x="962" y="294" class="sans card-title">回执、验证、任务历史</text>
+  <text x="962" y="316" class="mono card-sub">EVIDENCE LOOP</text>
+
+  <line x1="36" y1="370" x2="1146" y2="370" class="cut"/>
+  <rect x="1035" y="361" width="102" height="18" rx="2" fill="#f7f8f8"/>
+  <text x="1086" y="374" text-anchor="middle" class="mono lane" fill="#e0613d">RELEASE CUT</text>
+
+  <!-- Release 2 -->
+  <text x="51" y="412" class="mono lane">RELEASE 2</text>
+
+  <rect x="110" y="424" width="174" height="64" rx="4" class="card"/>
+  <text x="122" y="446" class="sans card-title">自动检测说话结束</text>
+  <text x="122" y="468" class="mono card-sub">VAD</text>
+
+  <rect x="320" y="424" width="174" height="64" rx="4" class="card"/>
+  <text x="332" y="446" class="sans card-title">MCP 互操作入口</text>
+  <text x="332" y="468" class="mono card-sub">EXTENSION GATEWAY</text>
+
+  <rect x="740" y="424" width="174" height="64" rx="4" class="card"/>
+  <text x="752" y="446" class="sans card-title">按工具细化策略</text>
+  <text x="752" y="468" class="mono card-sub">POLICY PROFILES</text>
+
+  <rect x="950" y="424" width="174" height="64" rx="4" class="card"/>
+  <text x="962" y="446" class="sans card-title">偏好与项目记忆</text>
+  <text x="962" y="468" class="mono card-sub">SCOPED RECALL</text>
+
+  <!-- Later -->
+  <rect x="36" y="520" width="1110" height="112" class="band"/>
+  <text x="55" y="544" class="mono lane">LATER</text>
+
+  <rect x="110" y="552" width="174" height="64" rx="4" class="card"/>
+  <text x="122" y="574" class="sans card-title">唤醒词与常驻聆听</text>
+  <text x="122" y="596" class="mono card-sub">OPT-IN AMBIENT MODE</text>
+
+  <rect x="530" y="552" width="174" height="64" rx="4" class="card"/>
+  <text x="542" y="574" class="sans card-title">Windows / Linux</text>
+  <text x="542" y="596" class="mono card-sub">PLATFORM ADAPTERS</text>
+
+  <rect x="950" y="552" width="174" height="64" rx="4" class="card"/>
+  <text x="962" y="574" class="sans card-title">第三方 Skill 与插件</text>
+  <text x="962" y="596" class="mono card-sub">TRUSTED MARKETPLACE</text>
+
+  <!-- Legend -->
+  <line x1="46" y1="674" x2="1154" y2="674" stroke="rgba(32,41,54,.18)" stroke-width="1"/>
+  <rect x="52" y="698" width="34" height="18" rx="3" class="card"/>
+  <text x="96" y="711" class="sans step-text">版本故事</text>
+  <rect x="210" y="698" width="34" height="18" rx="3" class="card-risk"/>
+  <text x="254" y="711" class="sans step-text">最高实现风险</text>
+  <line x1="400" y1="707" x2="446" y2="707" class="cut"/>
+  <text x="456" y="711" class="sans step-text">MVP 范围线</text>
+  <text x="1150" y="711" text-anchor="end" class="sans subtitle">目标：先交付完整、可验证的语音操控闭环，再扩展触发方式与生态。</text>
+</svg>

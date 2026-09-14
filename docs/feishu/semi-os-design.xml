@@ -1,0 +1,491 @@
+<title>Semi-OS 产品与技术设计方案 v0.1</title>
+<p align="center"><b>Voice-first · Local-first · Evidence-driven</b></p>
+<p align="center"><span text-color="gray">架构基线 · 2026-09-14</span></p>
+
+<callout emoji="💡" background-color="light-blue" border-color="blue">
+  <p><b>一句话定位：</b>Semi-OS 不是“加了语音的聊天客户端”，而是一个能理解口头意图、操作真实电脑、接受中途干预，并用环境证据证明结果的本地桌面 Agent。</p>
+</callout>
+
+<h1 seq="auto">执行摘要</h1>
+<p>Semi-OS 的初版目标，是打通一条完整且可信的语音操控闭环：用户按住快捷键说出任务，系统快速语音回应，由 Pi 统一完成推理与工具选择，随后操作浏览器、macOS 桌面或本地 Coding Agent；涉及外部副作用时请求确认，最后通过真实环境状态验证结果并用语音汇报。</p>
+<p>推荐技术基线为 <b>Tauri + React + TypeScript + Rust Host + 受监督的 Node Agent Worker</b>。Pi 通过 <b>AgentRuntimeAdapter</b> 嵌入，作为唯一 Agent Loop。Rust 掌握系统权限、策略执行、SQLite、密钥引用和进程监督；Node Worker 负责 Pi 会话、动态工具、Skills、语音 Provider 与子任务编排。</p>
+
+<whiteboard type="svg" path="@./docs/assets/architecture/01-system-overview.svg"></whiteboard>
+
+<h1 seq="auto">产品目标与 MVP 边界</h1>
+<h2 seq="auto">初版必须证明什么</h2>
+<ul>
+  <li>按住全局快捷键说出任务，并立即看到监听状态。</li>
+  <li>在模型开始长回答之前，先获得不夸大结果的快速语音确认。</li>
+  <li>通过同一个 Pi 会话完成浏览器、桌面与 Coding Agent 类型任务。</li>
+  <li>任务执行中可暂停、取消、追加指令，并延续原有上下文。</li>
+  <li>发送消息、提交表单、发布等外部副作用在默认策略下必须确认。</li>
+  <li>进程或网络出现普通故障后，系统能够恢复或明确进入待用户处理状态。</li>
+  <li>最终结果必须由工具回执和环境证据支持，而不是由模型文字自我声明。</li>
+  <li>第一版具备真正有用的偏好与项目记忆，而不是无限堆积聊天记录。</li>
+</ul>
+
+<h2 seq="auto">明确不做</h2>
+<ul>
+  <li>不在首版追求全天候自主运行和后台无限执行。</li>
+  <li>不在首版开放第三方 Skill、插件市场和任意 MCP Server。</li>
+  <li>不把截图坐标点击作为原生桌面控制的唯一方案。</li>
+  <li>不把全部内部工具调用和推理细节暴露给普通用户。</li>
+  <li>不在首版同时实现 Windows、Linux 与 macOS 的完整原生控制。</li>
+</ul>
+
+<h2 seq="auto">两个产品界面</h2>
+<p><b>桌面助手</b>是临时、环境式、语音优先的界面，只在按住快捷键、执行任务或需要确认时出现。<b>客户端</b>是持久控制中心，提供对话、任务、记忆、Skills、权限和设置。</p>
+
+<grid>
+  <column width-ratio="0.5">
+    <p><b>桌面助手原型</b></p>
+    <p>承担聆听、状态反馈、简短确认与语音对话，不承载复杂配置。</p>
+  </column>
+  <column width-ratio="0.5">
+    <p><b>客户端原型</b></p>
+    <p>承担历史回看、任务检查、记忆管理、能力开关与风险策略设置。</p>
+  </column>
+</grid>
+<img path="@./docs/assets/prototype/desktop-assistant.png" caption="桌面助手原型；图中的临时名称后续统一为 Semi-OS"/>
+<img path="@./docs/assets/prototype/client.png" caption="客户端原型；视觉细节在实现阶段继续迭代"/>
+
+<h1 seq="auto">架构原则</h1>
+<table>
+  <colgroup>
+    <col width="180"/>
+    <col width="600"/>
+  </colgroup>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>原则</p></th>
+      <th background-color="light-gray"><p>设计含义</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p><b>Local-first authority</b></p></td>
+      <td><p>任务、策略、回执、记忆和设置默认留在本地；云端只获得当前操作所需数据。</p></td>
+    </tr>
+    <tr>
+      <td><p><b>One reasoning loop</b></p></td>
+      <td><p>所有有意义的用户任务都经过 Pi，不另造一个绕过 Pi 的“简单任务 Agent”。</p></td>
+    </tr>
+    <tr>
+      <td><p><b>Privilege separation</b></p></td>
+      <td><p>WebView 无权直接执行 Shell、访问密钥、写 SQLite 或控制系统；特权操作统一回到 Rust。</p></td>
+    </tr>
+    <tr>
+      <td><p><b>Evidence before completion</b></p></td>
+      <td><p>每个动作产生 ExecutionReceipt；任务完成必须绑定 DOM、窗口状态、测试结果或远端对象 ID 等证据。</p></td>
+    </tr>
+    <tr>
+      <td><p><b>Replaceable edges</b></p></td>
+      <td><p>Pi、STT、TTS、浏览器、桌面、Embedding 和 Coding Agent 都通过接口隔离。</p></td>
+    </tr>
+  </tbody>
+</table>
+
+<h1 seq="auto">进程架构与信任边界</h1>
+<whiteboard type="svg" path="@./docs/assets/architecture/03-process-boundaries.svg"></whiteboard>
+
+<h2 seq="auto">React UI</h2>
+<ul>
+  <li>渲染桌面助手和客户端窗口。</li>
+  <li>采集 Push-to-talk 意图并展示实时状态。</li>
+  <li>提交用户确认结果，消费结构化领域事件。</li>
+  <li>不保存 Provider 密钥，不直接执行特权动作。</li>
+</ul>
+
+<h2 seq="auto">Rust Host</h2>
+<ul>
+  <li>管理应用生命周期、托盘、窗口和全局快捷键。</li>
+  <li>检查麦克风、Accessibility、Screen Recording 等 macOS 权限。</li>
+  <li>持有 SQLite 连接、迁移、事务边界与 Keychain 引用。</li>
+  <li>执行原生桌面观察与动作，并强制落实风险策略。</li>
+  <li>启动、监督和有限重启 Node Worker，把 Worker 事件映射为 Tauri 事件。</li>
+</ul>
+
+<h2 seq="auto">Node Agent Worker</h2>
+<ul>
+  <li>通过 AgentRuntimeAdapter 创建 Pi Session 并转换事件。</li>
+  <li>根据平台、权限、策略、任务和运行健康度动态构建工具集合。</li>
+  <li>选择内置 Skill，并只加载被选中的详细指导和资源。</li>
+  <li>编排 STT/TTS、Playwright 和本地 Coding Agent。</li>
+  <li>管理 pause、abort、steer、follow-up、compaction 与 checkpoint。</li>
+</ul>
+
+<h2 seq="auto">通信协议</h2>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>通道</p></th>
+      <th background-color="light-gray"><p>传输</p></th>
+      <th background-color="light-gray"><p>用途</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p>React ↔ Rust</p></td>
+      <td><p>Tauri commands / events</p></td>
+      <td><p>用户意图、确认决定、领域事件流</p></td>
+    </tr>
+    <tr>
+      <td><p>Rust ↔ Node</p></td>
+      <td><p>stdio JSONL RPC</p></td>
+      <td><p>受监督控制与特权工具桥接</p></td>
+    </tr>
+    <tr>
+      <td><p>Node ↔ 子工具</p></td>
+      <td><p>stdio / 专用 RPC</p></td>
+      <td><p>Playwright、Coding Agent 与未来适配器</p></td>
+    </tr>
+  </tbody>
+</table>
+<p>每条 JSONL 记录包含 <b>protocolVersion、requestId、taskId、kind、payload</b> 和可选 <b>traceId</b>。未知协议版本失败关闭；截图、音频和大型结果通过本地文件引用与摘要传递。</p>
+
+<h1 seq="auto">Agent Runtime 与控制闭环</h1>
+<p>Pi 是统一推理 runtime，但 Semi-OS 不把业务直接绑定到 Pi API。所有调用经由 <b>AgentRuntimeAdapter</b>，使运行时升级、替换、测试和故障隔离都保持可控。</p>
+<whiteboard type="svg" path="@./docs/assets/architecture/02-agent-loop.svg"></whiteboard>
+
+<h2 seq="auto">暂停、打断与续接</h2>
+<p>Pause 是 Semi-OS 的领域语义，不只是停止一个 HTTP 请求。系统需要停止当前 TTS，在安全点取消模型或工具，保留最后完成的回执和 Pi Session 分支，把任务标记为 paused；恢复时注入简短续接上下文和用户的新指令。</p>
+<callout emoji="⚠️" background-color="light-orange" border-color="orange">
+  <p>工具动作无法保证未发生时，不能把“取消请求”解释为“动作已撤销”。任何可能已到达外部系统的操作都进入 unknown，并先做对账。</p>
+</callout>
+
+<h2 seq="auto">动态工具注入</h2>
+<pre lang="text" caption="有效工具集合"><code>built-in catalog
+∩ platform support
+∩ granted OS permissions
+∩ user policy
+∩ task workspace
+∩ runtime health
+∩ active skill requirements</code></pre>
+<p>Pi 已有的文件读取、写入和 Shell 能力不无理由重复实现。Semi-OS 首先补齐 Pi 不原生拥有的稳定能力：</p>
+<ul>
+  <li>浏览器：browser_open、browser_click、browser_type、browser_extract。</li>
+  <li>桌面：desktop_observe、desktop_click、desktop_type、desktop_key、desktop_scroll、desktop_focus_window、desktop_launch_app。</li>
+  <li>Coding Agent：启动、观察、引导、暂停或取消本地编码任务。</li>
+  <li>记忆：范围化 recall 与显式 memory proposal。</li>
+  <li>确认：由 Host 策略控制的内部 approval request。</li>
+</ul>
+
+<h2 seq="auto">Skill 与插件</h2>
+<p>Skill 由声明式指导、资源和可选脚本组成。MVP 只加载随应用发布的内置可信 Skill。选择流程是：确定性候选匹配 → 向 Agent 注入紧凑候选清单 → Agent 最终判断 → 只加载选中 Skill 的完整内容。Pi 原生资源加载和扩展钩子优先，Semi-OS 的 SkillRegistry 负责元数据、信任和兼容性。</p>
+
+<h1 seq="auto">语音架构与延迟</h1>
+<pre lang="text" caption="MVP 语音管线"><code>push-to-talk
+→ capture / denoise
+→ streaming STT
+→ final utterance
+→ deterministic acknowledgement
+→ Pi prompt
+→ first complete answer sentence
+→ streaming TTS
+→ continued task progress</code></pre>
+<p>MVP 等待用户第一句完整语句后再提交给 Agent。唤醒词和自动检测说话结束属于后续扩展分支。STT 是 Speech-to-Text，即把语音转成文本；TTS 是 Text-to-Speech，即把模型生成的文本转成语音。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>阶段</p></th>
+      <th background-color="light-gray"><p>目标体验</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p>快捷键 → 监听指示</p></td>
+      <td><p>用户感知上即时出现</p></td>
+    </tr>
+    <tr>
+      <td><p>说话结束 → 快速确认</p></td>
+      <td><p>Provider 允许时目标约 500 ms 内</p></td>
+    </tr>
+    <tr>
+      <td><p>确认 → 可见计划或进度</p></td>
+      <td><p>有事件就流式显示，不静默等待</p></td>
+    </tr>
+    <tr>
+      <td><p>首个完整回答句 → 音频</p></td>
+      <td><p>按句缓冲，立即开始 TTS</p></td>
+    </tr>
+  </tbody>
+</table>
+<p>延迟不能只归因于 Pi。必须分别测量音频采集、STT、模型首 Token、首个完整句、TTS 首包、工具排队、执行和验证时间。Provider 云端优先以加速 MVP，但 STT/TTS 均在可替换接口之后。</p>
+
+<h1 seq="auto">工具实现</h1>
+<h2 seq="auto">统一工具契约</h2>
+<pre lang="typescript" caption="ToolDefinition"><code>interface ToolDefinition&lt;I, O&gt; {
+  id: string;
+  version: string;
+  risk: "read" | "local_write" |
+        "external_side_effect" | "privileged";
+  availability(ctx: ToolContext): Availability;
+  summarize(input: I, ctx: ToolContext): ActionSummary;
+  execute(input: I, ctx: ToolContext, signal: AbortSignal): Promise&lt;O&gt;;
+  verify?(input: I, output: O, ctx: ToolContext): Promise&lt;Verification&gt;;
+  reconcile?(input: I, attempt: AttemptRecord): Promise&lt;Reconciliation&gt;;
+}</code></pre>
+
+<h2 seq="auto">浏览器自动化</h2>
+<ul>
+  <li>MVP 使用 Playwright 和 Semi-OS 独立持久化浏览器 Profile。</li>
+  <li>用户首次交互登录；Cookie 与存储状态按密钥材料保护，永不进入 Git。</li>
+  <li>定位优先级为 role、name、label、text，再考虑更脆弱的方式。</li>
+  <li>首批只稳定四个原语：open、click、type、extract。</li>
+  <li>每个改变状态的动作后重新观察，避免在陈旧页面状态上连续操作。</li>
+</ul>
+
+<h2 seq="auto">macOS 原生桌面控制</h2>
+<ol>
+  <li>观察当前应用、窗口和 Accessibility Tree。</li>
+  <li>优先用语义定位目标；语义不足时再使用截图与视觉定位。</li>
+  <li>只执行一个原子动作。</li>
+  <li>再次观察。</li>
+  <li>验证预期状态，或返回结构化不匹配。</li>
+</ol>
+<p>Agent 不得向桌面驱动直接提交不透明的多动作脚本。Skill 可以包含脚本，但每个特权动作仍穿过相同的策略与回执边界。</p>
+
+<h2 seq="auto">Coding Agent 委派</h2>
+<p>Coding Agent 是一种工具型子任务，不是另一个产品模式。Provider 需要支持启动、进度流、追加指导、暂停/取消、Diff、诊断、测试和退出状态收集，并阻止子 Agent 绕过 Semi-OS 的外部副作用确认策略。</p>
+
+<h1 seq="auto">风险策略、确认与安全</h1>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>风险类别</p></th>
+      <th background-color="light-gray"><p>示例</p></th>
+      <th background-color="light-gray"><p>MVP 默认</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td background-color="light-green"><p>read</p></td>
+      <td><p>读取文件、DOM、Accessibility Tree</p></td>
+      <td><p>自动执行</p></td>
+    </tr>
+    <tr>
+      <td background-color="light-blue"><p>local_write</p></td>
+      <td><p>编辑本地文件、创建本地产物</p></td>
+      <td><p>自动执行</p></td>
+    </tr>
+    <tr>
+      <td background-color="light-orange"><p>external_side_effect</p></td>
+      <td><p>发消息、提交表单、发布、购买</p></td>
+      <td><p>必须确认</p></td>
+    </tr>
+    <tr>
+      <td background-color="light-red"><p>privileged</p></td>
+      <td><p>安装软件、修改权限或安全设置</p></td>
+      <td><p>必须确认</p></td>
+    </tr>
+  </tbody>
+</table>
+<p>设置可以把低风险行为调得更严格，也可以调整部分默认项；当用户弱化高风险保护时必须明确警告。</p>
+
+<h2 seq="auto">确认绑定</h2>
+<p>一次批准只对特定 taskId、工具 ID 与版本、规范化目标、可读摘要、Payload Digest 和过期时间有效。目标或 Payload 变化会使批准失效并重新请求。</p>
+
+<h2 seq="auto">网络断开与 unknown</h2>
+<ol>
+  <li>请求确认尚未发出时，可有限重试。</li>
+  <li>请求可能已经到达外部系统时，将 Attempt 标记为 unknown。</li>
+  <li>停止自动重试，通过幂等键、远端搜索或状态回读执行 reconcile。</li>
+  <li>分类为 succeeded、failed 或 needs_user，并向用户明确说明不确定性。</li>
+</ol>
+
+<h1 seq="auto">任务状态与故障恢复</h1>
+<pre lang="text" caption="TaskRun 状态机"><code>created → listening → understanding → running
+                               ↘ waiting_confirmation
+running ↔ paused
+running → verifying → completed
+running → unknown → reconciling
+        → completed | failed | needs_user
+any active state → cancelling → cancelled
+any active state → failed</code></pre>
+<ul>
+  <li>状态变化以 append-only 事件保存，并投影到当前任务行。</li>
+  <li>Rust 用有界指数退避重启 Worker；运行中任务进入 recovering。</li>
+  <li>已完成的工具回执绝不重放。</li>
+  <li>不完整的 Attempt 在重试前必须 reconcile。</li>
+  <li>浏览器与桌面对象引用在恢复后视为失效，必须重新观察。</li>
+  <li>Pi Session、Steering 历史和任务 checkpoint 从最近持久点恢复。</li>
+</ul>
+
+<h1 seq="auto">长期记忆</h1>
+<p>记忆是独立子系统，不是无限增长的 Prompt Transcript。MVP 需要让重复任务明显减少重复说明，同时保持来源、范围和用户控制。</p>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>类别</p></th>
+      <th background-color="light-gray"><p>示例</p></th>
+      <th background-color="light-gray"><p>生命周期</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p>Profile</p></td>
+      <td><p>语言、称呼、无障碍需求</p></td>
+      <td><p>长期</p></td>
+    </tr>
+    <tr>
+      <td><p>Preference</p></td>
+      <td><p>修改某目录前先询问</p></td>
+      <td><p>长期、可编辑</p></td>
+    </tr>
+    <tr>
+      <td><p>Project</p></td>
+      <td><p>仓库约定与当前目标</p></td>
+      <td><p>项目范围长期</p></td>
+    </tr>
+    <tr>
+      <td><p>Episodic</p></td>
+      <td><p>上次任务发生了什么</p></td>
+      <td><p>摘要化、时间衰减</p></td>
+    </tr>
+    <tr>
+      <td><p>Procedural</p></td>
+      <td><p>成功且可重复的工作流</p></td>
+      <td><p>可晋升为 Skill 候选</p></td>
+    </tr>
+  </tbody>
+</table>
+<p><b>写入：</b>任务生成带来源的记忆提案 → 规则移除密钥与短期噪音 → 去重 → 高影响个人信息请求确认 → 保存标准文本、结构字段、来源和置信度。</p>
+<p><b>召回：</b>先按用户、工作区、应用和任务做范围过滤，再组合全文检索与可选 Embedding，只把少量高相关记忆连同来源注入 Agent。</p>
+
+<h1 seq="auto">数据模型与可观测性</h1>
+<h2 seq="auto">SQLite 核心表</h2>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>表</p></th>
+      <th background-color="light-gray"><p>职责</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><p>tasks</p></td><td><p>任务当前投影与生命周期</p></td></tr>
+    <tr><td><p>task_events</p></td><td><p>追加式状态与领域事件</p></td></tr>
+    <tr><td><p>agent_sessions</p></td><td><p>Pi Session 与 checkpoint 引用</p></td></tr>
+    <tr><td><p>tool_attempts</p></td><td><p>调用、策略、结果、验证和耗时</p></td></tr>
+    <tr><td><p>approvals</p></td><td><p>确认绑定与用户决定</p></td></tr>
+    <tr><td><p>artifacts</p></td><td><p>截图、Diff、下载与证据</p></td></tr>
+    <tr><td><p>memories / memory_sources</p></td><td><p>标准记忆与来源关系</p></td></tr>
+    <tr><td><p>settings / capabilities</p></td><td><p>策略设置与当前能力可用性</p></td></tr>
+  </tbody>
+</table>
+<p>SQLite 由 Rust 独占管理并启用 WAL。敏感 Payload 加密或替换为 Keychain 引用；原始音频默认短暂存在，不在用户未开启时持久化。</p>
+
+<h2 seq="auto">Telemetry 与测试</h2>
+<ul>
+  <li>每个任务持有 traceId，记录语音、模型、工具、确认、重启和验证阶段耗时。</li>
+  <li>日志结构化并脱敏；诊断导出必须由用户主动触发并预览内容。</li>
+  <li>测试覆盖单元、协议契约、Pi 事件映射、Playwright Fixtures、macOS Accessibility、故障恢复与端到端语音闭环。</li>
+  <li>验收必须包含权限被拒、确认 Payload 改变、目标过期、重复外部提交和无法对账等负向路径。</li>
+</ul>
+
+<h1 seq="auto">仓库结构</h1>
+<pre lang="text" caption="建议 Monorepo"><code>Semi-OS/
+├── apps/desktop/             React UI + Tauri app
+├── crates/host/              Rust commands, policy, supervisor
+├── crates/desktop-macos/     Accessibility and observation
+├── crates/storage/           SQLite schema and repositories
+├── packages/agent-worker/    Pi adapter and orchestration
+├── packages/protocol/        versioned message schemas
+├── packages/tool-sdk/        tool contracts and receipts
+├── packages/skills/          built-in trusted skills
+├── packages/shared/          runtime-independent domain types
+├── tests/                    contract, integration, e2e
+└── docs/</code></pre>
+<p>TypeScript 使用 pnpm workspace，Rust 使用 Cargo workspace。Rust 与 TypeScript 协议类型从同一 Schema 生成，避免维护两份手写消息结构。</p>
+
+<h1 seq="auto">实施路线</h1>
+<whiteboard type="svg" path="@./docs/assets/architecture/04-mvp-roadmap.svg"></whiteboard>
+
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>里程碑</p></th>
+      <th background-color="light-gray"><p>核心交付</p></th>
+      <th background-color="light-gray"><p>退出条件</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p><b>M0 基础</b></p></td>
+      <td><p>Workspace、Tauri 窗口、Rust/Node 协议、SQLite、接口骨架</p></td>
+      <td><p>Worker 可启动、崩溃后重启并重放假任务事件</p></td>
+    </tr>
+    <tr>
+      <td><p><b>M1 语音对话</b></p></td>
+      <td><p>STT/TTS、Pi Session、首句播报、悬浮状态、暂停与 steer</p></td>
+      <td><p>同一会话可语音发起、打断并继续</p></td>
+    </tr>
+    <tr>
+      <td><p><b>M2 浏览器与编码</b></p></td>
+      <td><p>四个 Playwright 工具、Coding Agent、动态工具、回执</p></td>
+      <td><p>一个浏览器任务和一个仓库任务带证据完成</p></td>
+    </tr>
+    <tr>
+      <td><p><b>M3 桌面与安全</b></p></td>
+      <td><p>权限中心、原生观察与动作、确认绑定、unknown/reconcile</p></td>
+      <td><p>桌面工作流跨过确认门并证明无重复副作用</p></td>
+    </tr>
+    <tr>
+      <td><p><b>M4 有用记忆</b></p></td>
+      <td><p>记忆 Schema、范围召回、提案流、编辑与删除</p></td>
+      <td><p>重复任务减少说明且不泄漏无关上下文</p></td>
+    </tr>
+  </tbody>
+</table>
+
+<h1 seq="auto">关键风险</h1>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>风险</p></th>
+      <th background-color="light-gray"><p>后果</p></th>
+      <th background-color="light-gray"><p>主要缓解方式</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><p>语音延迟明显</p></td><td><p>工具尚未体现价值，体验已经失败</p></td><td><p>确定性确认、流式 STT/TTS、分段预算</p></td></tr>
+    <tr><td><p>Pi API 变化</p></td><td><p>Worker 大范围重构</p></td><td><p>Adapter、锁定版本、契约测试</p></td></tr>
+    <tr><td><p>macOS 语义缺失</p></td><td><p>桌面操作脆弱</p></td><td><p>Accessibility 优先、视觉回退、每步重观察</p></td></tr>
+    <tr><td><p>浏览器 Profile 泄漏</p></td><td><p>账号被冒用</p></td><td><p>独立目录、严格权限、永不提交状态</p></td></tr>
+    <tr><td><p>子 Agent 绕过策略</p></td><td><p>失控外部副作用</p></td><td><p>特权与外部动作统一回到 Host Policy</p></td></tr>
+    <tr><td><p>记忆噪音或侵入</p></td><td><p>信任下降且推理变差</p></td><td><p>范围召回、来源、可编辑、保守写入</p></td></tr>
+    <tr><td><p>unknown 被盲目重试</p></td><td><p>消息或订单重复</p></td><td><p>幂等键和 reconcile 优先</p></td></tr>
+  </tbody>
+</table>
+
+<h1 seq="auto">尚待确定</h1>
+<ul>
+  <li>最终 STT/TTS Provider 及降级顺序。</li>
+  <li>首个支持的本地 Coding Agent Provider。</li>
+  <li>记忆 Embedding 模型和加密实现。</li>
+  <li>打包、自动更新、签名与分发策略。</li>
+  <li>最终产品视觉身份，以及唤醒词、MCP、第三方插件进入路线的时间点。</li>
+</ul>
+
+<h1 seq="auto">已验证技术基线</h1>
+<p>以下版本在 <b>2026-09-14</b> 核对，用于建立当前起点，不是永久架构约束；进入实现前需要再次验证。</p>
+<ul>
+  <li>Pi 官方仓库：earendil-works/pi，MIT License。</li>
+  <li>@earendil-works/pi-coding-agent：0.85.1，Node.js &gt;=22.19.0。</li>
+  <li>Tauri CLI：2.11.4；Tauri v2 支持外部二进制 / Sidecar。</li>
+  <li>Playwright：1.63.0；认证状态可冒用用户身份，必须按密钥材料保护。</li>
+  <li>SQLite WAL：适合同机多读一写，不应跨主机共享 WAL 数据库。</li>
+</ul>
+<p><b>参考：</b></p>
+<ul>
+  <li><a type="url-preview" href="https://github.com/earendil-works/pi">Pi 官方仓库</a></li>
+  <li><a type="url-preview" href="https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/sdk.md">Pi SDK 文档</a></li>
+  <li><a type="url-preview" href="https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/extensions.md">Pi Extensions 文档</a></li>
+  <li><a type="url-preview" href="https://v2.tauri.app/develop/sidecar/">Tauri Sidecar 文档</a></li>
+  <li><a type="url-preview" href="https://playwright.dev/docs/auth">Playwright Authentication 文档</a></li>
+  <li><a type="url-preview" href="https://sqlite.org/wal.html">SQLite WAL 文档</a></li>
+</ul>
+
+<hr/>
+<p align="center"><span text-color="gray">Semi-OS v0.1 · Architecture baseline · 2026-09-14</span></p>
