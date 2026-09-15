@@ -1,0 +1,19 @@
+{
+  "name": "semi-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A local-first, voice-first desktop agent.",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --filter @semi-os/desktop dev",
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "lint": "pnpm -r --if-present run lint",
+    "format": "pnpm -r --if-present run format",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
