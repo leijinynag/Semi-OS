@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semi-os.dev/schemas/protocol.schema.json",
+  "title": "Semi-OS Host Worker Protocol",
+  "type": "object",
+  "required": ["protocolVersion", "direction", "requestId", "kind", "payload"],
+  "properties": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "direction": {
+      "enum": ["request", "response", "event", "error"]
+    },
+    "requestId": {
+      "$ref": "#/$defs/requestId"
+    },
+    "taskId": {
+      "$ref": "#/$defs/taskId"
+    },
+    "taskRunId": {
+      "$ref": "#/$defs/taskRunId"
+    },
+    "traceId": {
+      "$ref": "#/$defs/traceId"
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {}
+  },
+  "$defs": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^task_[A-Za-z0-9_-]+$",
+      "x-semi-os-type": "TaskId"
+    },
+    "taskRunId": {
+      "type": "string",
+      "pattern": "^run_[A-Za-z0-9_-]+$",
+      "x-semi-os-type": "TaskRunId"
+    },
+    "traceId": {
+      "type": "string",
+      "pattern": "^trace_[A-Za-z0-9_-]+$",
+      "x-semi-os-type": "TraceId"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^req_[A-Za-z0-9_-]+$",
+      "x-semi-os-type": "RequestId"
+    },
+    "taskLifecycle": {
+      "type": "string",
+      "enum": [
+        "created",
+        "listening",
+        "understanding",
+        "running",
+        "paused",
+        "waiting_confirmation",
+        "verifying",
+        "completed",
+        "failed",
+        "unknown",
+        "reconciling",
+        "needs_user",
+        "cancelled"
+      ],
+      "x-semi-os-type": "TaskLifecycle"
+    },
+    "voiceState": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "listening",
+        "transcribing",
+        "thinking",
+        "speaking",
+        "interrupted",
+        "error"
+      ],
+      "x-semi-os-type": "VoiceState"
+    },
+    "toolRiskLevel": {
+      "type": "string",
+      "enum": ["read", "local_write", "external_side_effect", "privileged"],
+      "x-semi-os-type": "ToolRiskLevel"
+    },
+    "resultType": {
+      "type": "string",
+      "enum": ["success", "failure", "unknown", "cancelled", "needs_user"],
+      "x-semi-os-type": "ResultType"
+    },
+    "capabilityStatus": {
+      "type": "string",
+      "enum": ["available", "degraded", "unavailable", "unknown"],
+      "x-semi-os-type": "CapabilityStatus"
+    }
+  }
+}

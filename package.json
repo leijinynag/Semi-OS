@@ -9,6 +9,7 @@
     "typescript": "^5.8.3"
   },
   "scripts": {
+    "generate:protocol": "node scripts/generate-protocol.mjs",
     "dev": "pnpm --filter @semi-os/desktop dev",
     "build": "pnpm run build:js && pnpm run build:rust",
     "build:js": "pnpm -r --if-present run build",

@@ -1,44 +1,6 @@
-export type Brand<T, B extends string> = T & { readonly __brand: B };
+export * from "./generated/domain.generated.js";
 
-export type TaskId = Brand<string, "TaskId">;
-export type TaskRunId = Brand<string, "TaskRunId">;
-export type TraceId = Brand<string, "TraceId">;
-export type RequestId = Brand<string, "RequestId">;
-
-export type TaskLifecycle =
-  | "created"
-  | "listening"
-  | "understanding"
-  | "running"
-  | "paused"
-  | "waiting_confirmation"
-  | "verifying"
-  | "completed"
-  | "failed"
-  | "unknown"
-  | "reconciling"
-  | "needs_user"
-  | "cancelled";
-
-export type VoiceState =
-  | "idle"
-  | "listening"
-  | "transcribing"
-  | "thinking"
-  | "speaking"
-  | "interrupted"
-  | "error";
-
-export type ToolRiskLevel = "read" | "local_write" | "external_side_effect" | "privileged";
-
-export type ResultType =
-  | "success"
-  | "failure"
-  | "unknown"
-  | "cancelled"
-  | "needs_user";
-
-export type CapabilityStatus = "available" | "degraded" | "unavailable" | "unknown";
+import type { TaskId, TaskRunId, TraceId } from "./generated/domain.generated.js";
 
 export interface DomainContext {
   taskId?: TaskId;
