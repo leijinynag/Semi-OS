@@ -2,7 +2,7 @@
 
 > Version: v0.1
 >
-> Date: 2026-09-14
+> Date: 2026-09-15
 >
 > Stage: architecture baseline, before implementation
 >
@@ -14,18 +14,27 @@ Semi-OS is a local-first, voice-first desktop agent. Its core promise is not
 “talk to an AI”, but “speak an intention and let the system safely operate the
 computer until the result is verified”.
 
-The MVP supports two representative task families:
+The MVP supports three representative task families:
 
-1. General computer work: open a site, collect information, edit local files,
-   operate a macOS application and prepare or submit an external action.
+1. Research work: search multiple websites, collect relevant material, synthesize
+   the findings and report the result by voice.
 2. Coding work: delegate a repository task to a local coding agent, monitor its
    progress, interrupt or steer it, and report the verified outcome.
+3. General computer work: open an application, operate a macOS application or
+   use Lark CLI for a supported operation. WeChat-specific automation is
+   deferred until the generic application path is reliable.
 
 The proposed runtime is `Tauri + React + Rust Host + supervised Node Agent
 Worker`. Pi is embedded through an adapter and remains the unified reasoning
 loop. Rust owns privileged operating-system access and durable local state.
 Tools are exposed dynamically according to platform capability, user policy,
 task context and current permission state.
+
+The three MVP scenario families are not a mandatory technical sequence. They can
+be developed in parallel because they share the same voice pipeline, Pi session,
+TaskRun lifecycle, tool contract, event stream and evidence model. The main
+scenario-specific adapters are browser research, local coding-agent terminal
+sessions and native application/Lark operations.
 
 ![Semi-OS system overview](assets/architecture/01-system-overview.svg)
 
@@ -37,7 +46,10 @@ The first release succeeds when a user can:
 
 - hold a shortcut, speak a task and hear an acknowledgement quickly;
 - see a minimal floating assistant while the task is active;
-- let the agent use browser, native desktop and coding tools;
+- ask for a multi-site research report and hear a sourced synthesis;
+- describe a requirement in the current project and have a local coding agent
+  work on it through a PTY-like interaction;
+- let the agent use browser, native desktop, Lark CLI and coding tools;
 - interrupt with a new instruction without losing the task context;
 - approve or reject external side effects;
 - recover from ordinary process/network failures;
@@ -49,6 +61,7 @@ The first release succeeds when a user can:
 - It is not a fully autonomous background operator.
 - It is not a universal cross-platform automation engine on day one.
 - It is not a plugin marketplace.
+- It does not promise WeChat automation in the first release.
 - It does not treat screenshots as the only desktop control surface.
 - It does not expose raw chain-of-thought or every internal tool call.
 - It does not claim success from an assistant sentence without verification.
@@ -68,6 +81,106 @@ The experience intentionally has two surfaces:
 
 The prototype uses an earlier temporary label. `Semi-OS` is the repository and
 working product name; visual identity and micro-interactions remain adjustable.
+
+### 1.4 Interaction and task model
+
+The MVP does not require a separate intent classifier to decide whether a
+request is “simple” or “complex”. Every user turn enters the same Pi session.
+The runtime observes whether the Agent actually requests execution tools:
+
+- no execution tool: conversational response, with memory recall treated as
+  context retrieval rather than task execution;
+- one or more execution tools: create or continue a visible `TaskRun`, emit
+  progress milestones and collect execution evidence.
+
+The Agent may decide that a user interruption is a steering instruction for the
+active task, a request to pause or cancel, or a new task. Semi-OS preserves the
+same session and task evidence so this decision does not depend on hard-coded
+phrase matching.
+
+The desktop assistant can use expressive visual effects without making the
+animation a semantic state machine in the MVP. Mouse-following motion, a
+particle field and speech-synchronized waveform motion are presentation
+effects. The client still shows a clear, low-complexity task timeline with
+current step, recent action, waiting reason and final result.
+
+### 1.5 MVP acceptance scenarios
+
+#### Scenario A: multi-site research and voice briefing
+
+Input: the user asks Semi-OS to research a topic or question.
+
+Expected behavior:
+
+1. acknowledge the request by voice;
+2. search multiple relevant websites using the browser tool set;
+3. record source URLs, extracted facts and failed or blocked sources;
+4. synthesize the findings, distinguish facts from uncertainty and cite the
+   source list in the client;
+5. begin TTS with the first complete summary sentence and finish with a short
+   voice report;
+6. persist a task summary and useful, properly scoped memory candidates.
+
+Acceptance evidence: the task timeline shows sources visited, extracted
+artifacts, synthesis and final verification. A user can inspect the source
+list and replay the concise result without relying on model prose alone.
+
+#### Scenario B: delegate work to a local coding agent
+
+Input: the user describes a requirement for the currently open or selected
+project.
+
+Expected behavior:
+
+1. identify the repository and constraints from the active workspace and
+   relevant memory;
+2. start a registered local provider such as Pi, Claude Code or Codex through a
+   common PTY-like terminal adapter;
+3. stream useful milestones, output and changed-file summaries to the client;
+4. allow the user to speak a steering instruction, pause or cancel;
+5. collect the child agent exit state, diff, diagnostics and test results;
+6. report the verified outcome by voice, including incomplete or unknown work.
+
+Acceptance evidence: the task has a child-agent receipt, repository identity,
+changed-file summary and verification artifacts. A worker restart does not
+replay a completed child-agent action.
+
+The common terminal layer handles process lifecycle, input, output streaming,
+resize and cancellation. Provider adapters handle the differences that matter
+after the process starts: startup arguments, authentication state, interactive
+permission prompts, output/event parsing, resume semantics and result
+collection. These differences should not force separate task models.
+
+#### Scenario C: generic application operation
+
+Input: the user asks Semi-OS to open an application, operate a supported
+desktop surface or perform a Lark CLI operation.
+
+Expected behavior:
+
+1. launch or focus the target application;
+2. observe the current application state;
+3. perform one bounded operation at a time and observe again;
+4. show clear progress in the task timeline;
+5. speak the result or explain the exact point where user input is required.
+
+WeChat is intentionally not an MVP acceptance blocker. It can later reuse the
+generic desktop path or gain a dedicated adapter after the generic path has
+proven reliable.
+
+#### Shared acceptance rules
+
+- conversational turns remain fast and do not create a visible task unless an
+  execution tool is requested;
+- memory retrieval alone does not count as task complexity;
+- task progress is derived from domain events and receipts, not parsed from
+  assistant prose;
+- every execution scenario has a voice acknowledgement and a final voice
+  response;
+- the client allows manual personality editing and manual user-preference
+  entry;
+- an Agent may append or revise only memories it created, while user-authored
+  preferences and memories are read-only to the Agent.
 
 ## 2. Architecture principles
 
@@ -156,7 +269,7 @@ The worker owns reasoning-oriented orchestration:
 - build the dynamic tool set for each task/turn;
 - match built-in skills and inject selected resources;
 - coordinate STT/TTS providers;
-- manage pause, abort, steer, follow-up and compaction;
+- manage pause, abort, steer, follow-up and threshold-based compaction;
 - call Rust-owned privileged tools over a narrow RPC boundary;
 - supervise browser and coding-agent subprocesses.
 
@@ -234,7 +347,8 @@ duplicated without a policy reason. Semi-OS adds tools Pi does not natively own:
   `desktop_scroll`, `desktop_focus_window`, `desktop_launch_app`;
 - confirmation: internal policy-controlled approval requests;
 - coding delegation: start/observe/steer/cancel a local coding-agent task;
-- memory: scoped recall and explicit memory proposals.
+- memory: scoped recall, automatic memory writes and memory proposals where a
+  later policy requires review.
 
 ### 4.3 Skills
 
@@ -288,10 +402,12 @@ the entire answer.
 
 ### 5.3 Provider interfaces
 
-Cloud-first providers accelerate MVP quality, but all provider-specific events
-are normalized. Local Whisper-family STT and local TTS can be added later
-without changing task orchestration. Secrets remain in Keychain; the worker
-receives short-lived credentials or opaque provider handles where practical.
+The first release uses cloud STT, cloud TTS and a cloud LLM provider to reduce
+model-operational work during MVP development. All provider-specific events are
+normalized behind interfaces. Local Whisper-family STT, local TTS and local
+LLMs can be added later without changing task orchestration. Secrets remain in
+Keychain; the worker receives short-lived credentials or opaque provider handles
+where practical.
 
 ## 6. Tool architecture
 
@@ -435,36 +551,162 @@ receipts and evidence for debugging.
 
 ## 9. Memory architecture
 
-Memory is intentionally a separate subsystem rather than an ever-growing
-prompt transcript.
+Memory is a separate subsystem rather than an ever-growing prompt transcript.
+The design distinguishes current-context continuity, durable user knowledge,
+historical evidence, procedural knowledge and personality. A memory record is
+an extracted and scoped conclusion; the original conversation or task event is
+the evidence behind it.
 
-### 9.1 Memory classes
+### 9.1 Six memory layers
 
-| Class | Example | Lifetime |
+```text
+L0 Working Context
+  Pi session, recent turns, current plan and compaction summary
+        ↓
+L1 Standing Rules
+  safety boundaries, confirmation policy and access constraints
+        ↓
+L2 Curated Memory
+  profile, preferences, project facts and application habits
+        ↓
+L3 Episodic Summary
+  what happened in previous tasks, decisions and verified outcomes
+        ↓
+L4 Historical Evidence
+  original messages, Task Events, Artifacts and Host receipts
+        ↓
+L5 Procedural Candidate
+  repeatable workflows that may later become trusted Skills
+```
+
+| Layer | Stores | Default loading |
 | --- | --- | --- |
-| Profile | preferred language, name, accessibility needs | durable |
-| Preference | “ask before modifying this folder” | durable, editable |
-| Project | repository conventions and active goals | scoped durable |
-| Episodic | what happened in a prior task | summarized, time-decayed |
-| Procedural | a successful repeatable workflow | promoted to Skill candidate |
+| L0 Working Context | Pi messages, task checkpoint, current plan, compaction summary | always for the active task |
+| L1 Standing Rules | safety rules, tool boundaries, confirmation policy | always; enforced by Host where applicable |
+| L2 Curated Memory | profile, preference, project and application facts | small relevant pack at turn start |
+| L3 Episodic Summary | prior task summaries and verified result references | loaded when the task resembles prior work |
+| L4 Historical Evidence | raw messages, events, artifacts and receipts | loaded only for investigation or reconciliation |
+| L5 Procedural Candidate | successful repeatable workflows and Skill candidates | candidate metadata first, full Skill on selection |
 
-### 9.2 Write path
+### 9.2 Personality is a separate context layer
 
-1. Task produces a memory proposal with source evidence.
-2. Deterministic rules remove secrets and transient noise.
-3. Deduplication checks existing scoped memories.
-4. High-impact personal facts/preferences ask for confirmation.
-5. Store canonical text, structured fields, provenance and confidence.
+Personality is not a replacement for memory and should not be stored as a
+single free-form paragraph mixed with user facts. Semi-OS models it as a
+versioned configuration with:
 
-### 9.3 Recall path
+- identity and role;
+- tone, verbosity, language and response style;
+- initiative and interaction preferences;
+- behavioral boundaries and tool policy;
+- voice/TTS preferences;
+- optional evolution metadata, kept separate from factual user memory.
 
-Recall is scoped by user, workspace, application and task. Hybrid retrieval
-combines metadata filters, full-text search and optional embeddings. The agent
-receives a small ranked memory pack with provenance, never the entire store.
+At runtime, the prompt is assembled in this order:
 
-MVP should prioritize correctness and user control over sophisticated autonomous
-memory creation. Detailed ranking and memory UX are a dedicated follow-up
-design topic.
+```text
+Host-enforced policy
+→ compact personality profile
+→ L1 standing rules
+→ L0 current task context
+→ progressively loaded L2-L5 memory pack
+```
+
+Personality controls how the Agent speaks and behaves. Retrieved memories
+provide user- or project-specific facts. A personality inference must never be
+treated as proof of a user fact, and a user preference must not silently mutate
+the personality definition.
+
+### 9.3 MVP compaction
+
+Compaction is only for preserving the active Pi session when its context
+reaches a configured token or character threshold. The MVP uses a simple,
+structured summary:
+
+```text
+recent turns + old context
+        ↓ threshold reached
+summarize objective, facts, completed steps, active plan,
+pending confirmations, uncertainties and receipt references
+        ↓
+retain summary + recent turns + latest user steering
+```
+
+The compaction summary must retain:
+
+- the user's current objective and constraints;
+- decisions already made;
+- completed actions and their receipt IDs;
+- pending actions and the next safe step;
+- unresolved or `unknown` outcomes;
+- active workspace, application and target;
+- the newest user instruction after an interruption.
+
+The MVP intentionally does not add dream cycles, graph consolidation,
+personality rewriting or multi-stage semantic compression. A compaction
+summary is L0 working context only; it does not become a durable memory unless
+the independent memory writer extracts a useful fact from it.
+
+### 9.4 Write path
+
+MVP memory writes are automatic and do not wait for user confirmation. This
+removes friction for the first release, while deterministic admission rules
+still apply:
+
+1. A conversation turn, task completion, correction or verified result produces
+   memory candidates.
+2. The writer classifies each candidate into L2, L3 or L5 and assigns scope,
+   confidence, importance, retention and source references.
+3. Deterministic filters remove secrets, raw credentials, transient noise and
+   unsupported identity guesses.
+4. Scoped deduplication merges equivalent records; contradictions remain
+   linked instead of silently overwriting the old record.
+5. The canonical record is written to SQLite and indexed for full-text search.
+6. Embedding generation is asynchronous and supplements, but does not replace,
+   scope and provenance checks.
+
+The automatic policy applies to normal low-risk memory. Sensitive content is
+still rejected or kept ephemeral by the memory firewall, and every write is
+visible in the client memory page for later editing or deletion.
+
+Each memory record carries an explicit author and mutability policy. User-
+authored personality settings and preferences are read-only to the Agent
+memory writer. The writer may append new Agent-authored memories and revise or
+consolidate only records whose ownership permits Agent mutation. A later
+correction is represented as a new record or link rather than silently
+rewriting a user-authored entry.
+
+### 9.5 Progressive recall and dynamic loading
+
+Recall is scoped by user, workspace, application, task and active Skill. The
+Agent never receives the entire memory store. Loading proceeds in small
+stages:
+
+1. **Base pack:** compact personality, L1 rules, active project identity and a
+   few high-confidence L2 memories.
+2. **Context pack:** when the request mentions a known project, app, person,
+   file or workflow, retrieve additional L2/L3 memories for that scope.
+3. **On-demand search:** expose `memory_search` for ambiguous or complex tasks;
+   return ranked summaries with provenance rather than raw history.
+4. **Deep evidence read:** open L4 messages, events, artifacts or receipts only
+   when the Agent needs to verify a claim, resolve a conflict or reconcile an
+   uncertain side effect.
+5. **Procedural expansion:** load the full L5 Skill only after candidate
+   matching and Agent selection.
+
+The retrieval pipeline is:
+
+```text
+scope and permission filters
+→ full-text candidate recall
+→ optional embedding recall
+→ confidence, recency, importance and conflict checks
+→ rerank under a token budget
+→ memory pack injection
+```
+
+This progressive strategy is a first-release priority. It keeps ordinary voice
+turns fast while allowing complex tasks to discover deeper context only when
+needed.
 
 ## 10. Data model
 
@@ -481,8 +723,9 @@ Core tables:
 | `tool_attempts` | invocation, policy, result and timing |
 | `approvals` | approval binding and decision |
 | `artifacts` | screenshots, diffs, downloads and evidence |
-| `memories` | canonical memory records |
+| `memories` | canonical memory records, including author, scope and mutability policy |
 | `memory_sources` | provenance linking memories to tasks/events |
+| `memory_links` | supersedes, contradicts, consolidates and associates relations |
 | `settings` | typed user policy and provider settings |
 | `capabilities` | observed platform/provider availability |
 
@@ -571,29 +814,38 @@ Exit criterion: app can start/restart the worker and replay a fake task stream.
 Exit criterion: a user can hold-to-talk, hear a quick acknowledgement, interrupt
 the response and continue the same session.
 
-### Milestone 2: browser and coding loop
+### Parallel MVP workstreams
 
-- four stable Playwright tools and profile onboarding;
-- coding-agent provider;
-- dynamic tool injection;
-- receipts, verification and user-facing task timeline.
+The following workstreams can proceed concurrently after Milestone 0:
 
-Exit criterion: one browser task and one repository task complete with evidence.
+- **Research:** four stable Playwright tools, source capture, synthesis and
+  voice briefing.
+- **Coding:** common PTY-like terminal adapter, first provider adapters,
+  steering, progress streaming and repository verification.
+- **Desktop/Lark:** macOS permission center, semantic observation, atomic
+  actions, generic application operations and stable Lark CLI commands.
+- **Shared runtime:** dynamic tools, TaskRun events, receipts, verification,
+  cloud STT/TTS/LLM adapters and client timeline.
 
-### Milestone 3: native desktop and safety
+Combined exit criterion: each workstream completes one representative task with
+evidence, and all three tasks use the same voice-to-Pi-to-TaskRun lifecycle.
 
-- macOS permission center;
-- semantic observation and atomic desktop actions;
+### Milestone 3: native desktop and recovery hardening
+
 - screenshot fallback;
-- confirmation binding, unknown outcome and reconciliation.
+- confirmation binding, unknown outcome and reconciliation;
+- process, network and stale-target recovery across all workstreams.
 
-Exit criterion: a desktop workflow crosses a confirmation gate and proves the
-result without duplicate side effects.
+Exit criterion: each workstream has a tested failure/recovery path and a
+generic application workflow crosses a confirmation gate without duplicate
+side effects.
 
 ### Milestone 4: useful memory
 
-- memory schema, scoped hybrid retrieval and proposal flow;
-- project/preferences memory;
+- six-layer memory schema, automatic low-risk writes and scoped hybrid retrieval;
+- threshold-based Pi compaction with resumable task summaries;
+- progressive memory loading for profile, preference, project and episodic context;
+- personality configuration and prompt assembly boundary;
 - client memory page and deletion/edit controls;
 - evaluation set for relevant vs distracting recall.
 
@@ -609,7 +861,9 @@ leaking unrelated context.
 | macOS UI semantics are incomplete | brittle desktop actions | accessibility first, screenshot fallback, fresh observation |
 | Browser login/profile theft | account compromise | dedicated profile, restrictive permissions, never commit state |
 | Child coding agent bypasses policy | uncontrolled side effect | route privileged/external actions through host policy |
-| Memory becomes noisy or invasive | trust loss and worse reasoning | scoped retrieval, provenance, user controls, conservative writes |
+| Memory becomes noisy or invasive | trust loss and worse reasoning | admission filters, scoped progressive loading, provenance, audit history and edit/delete controls |
+| Automatic writes capture a wrong inference | future tasks receive misleading context | confidence thresholds, source links, contradiction records, unsupported-identity filter and visible correction path |
+| Compaction loses an important task detail | resumed task repeats or takes the wrong action | structured summary fields, receipt references, recent-turn retention and recovery tests |
 | Retrying unknown requests duplicates actions | messages/orders sent twice | idempotency and reconciliation before retry |
 | Worker crash loses context | abandoned tasks | event log, checkpoints, supervised restart |
 
@@ -620,6 +874,8 @@ These do not block repository initialization:
 - final STT/TTS vendors and fallback order;
 - first supported local coding-agent provider;
 - memory embedding model and encryption implementation;
+- exact memory token budgets and threshold values;
+- whether later releases add background consolidation, decay and automatic Skill promotion;
 - exact desktop visual identity and product naming;
 - packaging/updater/signing strategy;
 - when to add wake word, MCP and third-party plugins.

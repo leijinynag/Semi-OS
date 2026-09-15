@@ -7,7 +7,7 @@ This file records confirmed product decisions separately from proposals.
 | Area | Decision |
 | --- | --- |
 | Product | Voice-controlled computer assistant, not a chat client with voice added |
-| MVP scenarios | General browser/desktop automation and coding-agent delegation |
+| MVP scenarios | Multi-site research and voice briefing; coding-agent delegation; generic application/Lark CLI operations |
 | Desktop shell | Tauri + React + TypeScript |
 | Native host | Rust owns windows, permissions, shortcuts, OS automation, secrets and SQLite |
 | Agent process | A supervised Node.js worker embeds Pi through an adapter |
@@ -29,9 +29,23 @@ This file records confirmed product decisions separately from proposals.
 | Skills | Candidate matching plus final Agent judgment; built-in only in MVP |
 | Skill contents | Skills may include scripts and multi-step workflows |
 | Plugins | Extension entry is reserved; MVP loads built-in trusted plugins only |
-| Memory | First release needs useful long-term memory, designed as a separate subsystem |
+| Memory | MVP uses a separate six-layer memory subsystem; normal low-risk memories are written automatically without user confirmation |
+| Memory compaction | MVP uses simple threshold-based Pi session compaction; compaction summary is working context, not long-term memory |
+| Progressive memory loading | Load a compact base pack first, then retrieve deeper memory and evidence on demand |
+| Agent personality | Personality is a versioned runtime context layer for identity, tone, behavior and voice; it is separate from user facts and memory evidence |
 | Permissions | First-run macOS permission center; missing permission degrades capabilities |
 | Client UI | Conversation, tasks, memory, skills and settings; simplified user-facing timeline |
+| Task complexity | Do not pre-classify turns with a separate complexity classifier; execution-tool use creates or continues a visible TaskRun, while memory recall alone does not |
+| User interruption | Let the Agent decide whether an interruption steers, pauses/cancels or starts a new task; preserve the same session and task evidence |
+| Research workflow | MVP supports multi-site collection, synthesis, source recording and voice briefing |
+| Application workflow | MVP supports generic app launch/focus and bounded desktop operations; Lark CLI is supported where an operation has a stable command path |
+| WeChat | Defer WeChat-specific automation; it is not an MVP acceptance blocker |
+| MVP implementation strategy | Research, Coding Agent delegation and generic application operation may be implemented in parallel; they share the same voice, Pi, TaskRun, tool and evidence foundations |
+| Coding Agent transport | Use a common PTY-like local terminal adapter first; provider-specific differences are isolated to launch, output parsing, steering, resume and result collection |
+| Initial providers | STT, TTS and LLM use cloud providers in the first release, behind replaceable provider interfaces |
+| Progress UI | Show a simple event-driven task timeline with current step, recent action, waiting reason and result |
+| Assistant visuals | Use expressive mouse-following, particle and speech-wave effects; animation is presentation-only and does not define task semantics |
+| Personality and preferences | User may manually edit personality and user preferences; the Agent may append or revise only Agent-created memories and cannot mutate user-authored entries |
 
 ## Explicitly deferred
 
@@ -41,7 +55,9 @@ This file records confirmed product decisions separately from proposals.
 - MCP server ecosystem.
 - Remote execution and multi-device control.
 - Full visual-computer-use as the primary locator.
-- Detailed memory ranking algorithm and user-facing memory editing UX.
+- Dream cycles, graph memory, complex decay and automatic Skill promotion.
+- Exact memory token budgets, compaction thresholds and embedding implementation.
+- WeChat-specific adapter and message workflow.
 
 ## Architecture invariants
 
@@ -52,3 +68,9 @@ This file records confirmed product decisions separately from proposals.
 5. Rust is the authority for privileged OS actions and durable local state.
 6. The Pi integration is replaceable through `AgentRuntimeAdapter`.
 7. The UI consumes domain events; it does not parse model prose into task state.
+8. Memory writes are automatic for normal low-risk content, but deterministic
+   secret/privacy/identity filters still apply.
+9. Compaction preserves active-task continuity; it does not silently promote
+   summaries into durable memory.
+10. Personality, user facts, task history and execution evidence remain separate
+    data and prompt layers.

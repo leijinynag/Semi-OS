@@ -16,6 +16,14 @@ reviewed.
 - [Client prototype](docs/assets/prototype/client.png)
 - [Feishu publishing source](docs/feishu/semi-os-design.xml)
 - [Published Feishu design document](https://fcnvj81na5nb.feishu.cn/docx/TwtBdi7Iioeyq3xBXEpcXa6lnpd)
+- [MVP task plan](tasks.md)
+- [Contributor and coding-agent instructions](AGENTS.md)
+
+## License
+
+Semi-OS is released under the [MIT License](LICENSE). The repository is an
+early architecture and implementation project; provider credentials, browser
+profiles and local task data must never be committed.
 
 ## MVP thesis
 

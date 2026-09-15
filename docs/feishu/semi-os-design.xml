@@ -1,14 +1,15 @@
 <title>Semi-OS 产品与技术设计方案 v0.1</title>
 <p align="center"><b>Voice-first · Local-first · Evidence-driven</b></p>
-<p align="center"><span text-color="gray">架构基线 · 2026-09-14</span></p>
+<p align="center"><span text-color="gray">架构基线 · 2026-09-15</span></p>
 
 <callout emoji="💡" background-color="light-blue" border-color="blue">
   <p><b>一句话定位：</b>Semi-OS 不是“加了语音的聊天客户端”，而是一个能理解口头意图、操作真实电脑、接受中途干预，并用环境证据证明结果的本地桌面 Agent。</p>
 </callout>
 
 <h1 seq="auto">执行摘要</h1>
-<p>Semi-OS 的初版目标，是打通一条完整且可信的语音操控闭环：用户按住快捷键说出任务，系统快速语音回应，由 Pi 统一完成推理与工具选择，随后操作浏览器、macOS 桌面或本地 Coding Agent；涉及外部副作用时请求确认，最后通过真实环境状态验证结果并用语音汇报。</p>
+<p>Semi-OS 的初版目标，是打通一条完整且可信的语音操控闭环：用户按住快捷键说出任务，系统快速语音回应，由 Pi 统一完成推理与工具选择，随后搜索资料、操作浏览器、macOS 桌面、Lark CLI 或本地 Coding Agent；涉及外部副作用时请求确认，最后通过真实环境状态验证结果并用语音汇报。</p>
 <p>推荐技术基线为 <b>Tauri + React + TypeScript + Rust Host + 受监督的 Node Agent Worker</b>。Pi 通过 <b>AgentRuntimeAdapter</b> 嵌入，作为唯一 Agent Loop。Rust 掌握系统权限、策略执行、SQLite、密钥引用和进程监督；Node Worker 负责 Pi 会话、动态工具、Skills、语音 Provider 与子任务编排。</p>
+<p>资料调研、Coding Agent 委托和通用应用操作不需要在技术上排队实现。三者共享语音管线、Pi Session、TaskRun、工具契约、事件流和证据模型，可以并行开发；差异主要放在浏览器、终端 Agent 和原生应用适配器中。</p>
 
 <whiteboard type="svg" path="@./docs/assets/architecture/01-system-overview.svg"></whiteboard>
 
@@ -17,18 +18,22 @@
 <ul>
   <li>按住全局快捷键说出任务，并立即看到监听状态。</li>
   <li>在模型开始长回答之前，先获得不夸大结果的快速语音确认。</li>
-  <li>通过同一个 Pi 会话完成浏览器、桌面与 Coding Agent 类型任务。</li>
+  <li>通过同一个 Pi 会话完成资料调研、浏览器、桌面、Lark CLI 与 Coding Agent 类型任务。</li>
+  <li>用户说出一个资料问题后，系统可以访问多个网站，汇总分析并语音汇报。</li>
+  <li>用户可以口头描述当前项目需求，系统可以通过类似 PTY 的方式驱动本地 Coding Agent 并展示后台进度。</li>
   <li>任务执行中可暂停、取消、追加指令，并延续原有上下文。</li>
   <li>发送消息、提交表单、发布等外部副作用在默认策略下必须确认。</li>
   <li>进程或网络出现普通故障后，系统能够恢复或明确进入待用户处理状态。</li>
   <li>最终结果必须由工具回执和环境证据支持，而不是由模型文字自我声明。</li>
   <li>第一版具备真正有用的偏好与项目记忆，而不是无限堆积聊天记录。</li>
+  <li>客户端允许用户手动配置 Agent 人格和用户偏好；Agent 不能修改用户手动创建或修改的内容。</li>
 </ul>
 
 <h2 seq="auto">明确不做</h2>
 <ul>
   <li>不在首版追求全天候自主运行和后台无限执行。</li>
   <li>不在首版开放第三方 Skill、插件市场和任意 MCP Server。</li>
+  <li>不把微信专用自动化作为首版验收阻塞项，先验证通用应用操作路径。</li>
   <li>不把截图坐标点击作为原生桌面控制的唯一方案。</li>
   <li>不把全部内部工具调用和推理细节暴露给普通用户。</li>
   <li>不在首版同时实现 Windows、Linux 与 macOS 的完整原生控制。</li>
@@ -49,6 +54,39 @@
 </grid>
 <img path="@./docs/assets/prototype/desktop-assistant.png" caption="桌面助手原型；图中的临时名称后续统一为 Semi-OS"/>
 <img path="@./docs/assets/prototype/client.png" caption="客户端原型；视觉细节在实现阶段继续迭代"/>
+
+<h2 seq="auto">交互与任务模型</h2>
+<p>首版不额外引入一个“简单任务/复杂任务”分类器。所有用户输入都进入同一个 Pi 会话；当 Agent 实际请求执行性工具时，系统才创建或继续可见的 TaskRun。记忆召回属于上下文检索，不算执行工具。用户中途插话后，由 Agent 判断它是对当前任务的引导、暂停或取消，还是一个新任务。</p>
+<p>桌面助手可以使用鼠标跟随、粒子、声波抖动等科技感动效。首版不要求动画精确映射每个任务状态，动画属于表现层；客户端仍通过简单的事件时间线展示当前步骤、最近动作、等待原因和最终结果。</p>
+
+<h2 seq="auto">MVP 核心场景与验收标准</h2>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray"><p>场景</p></th>
+      <th background-color="light-gray"><p>首版行为</p></th>
+      <th background-color="light-gray"><p>验收证据</p></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p><b>资料调研</b></p></td>
+      <td><p>搜索多个相关网站，提取资料，汇总分析，先播报首个完整句，再完成语音汇报。</p></td>
+      <td><p>来源 URL、提取内容、失败或受阻来源、综合结果和任务摘要可在客户端查看。</p></td>
+    </tr>
+    <tr>
+      <td><p><b>Coding Agent 委托</b></p></td>
+      <td><p>识别当前项目，通过统一的 PTY 类终端适配器驱动 Pi、Claude Code、Codex 等本地 Agent，流式展示里程碑和后台进度。</p></td>
+      <td><p>仓库身份、子 Agent 回执、变更文件、退出状态、诊断与测试结果可核验；重启不会重复已完成动作。</p></td>
+    </tr>
+    <tr>
+      <td><p><b>通用应用操作</b></p></td>
+      <td><p>打开或聚焦应用，观察状态，执行一个受约束的操作，再次观察并汇报结果；支持有稳定命令路径的 Lark CLI 操作。</p></td>
+      <td><p>任务时间线展示当前动作、等待原因和结果；遇到需要用户处理的情况能明确说明。</p></td>
+    </tr>
+  </tbody>
+</table>
+<p>共享验收规则：普通对话不因“看起来简单”而绕过 Pi；只有执行工具调用才进入可见执行态；每个执行场景都有语音确认和最终语音响应；记忆召回本身不算复杂任务；用户手动维护的人格和偏好对 Agent 只读，Agent 只能追加或修改自己创建的记忆。</p>
 
 <h1 seq="auto">架构原则</h1>
 <table>
@@ -112,7 +150,7 @@
   <li>根据平台、权限、策略、任务和运行健康度动态构建工具集合。</li>
   <li>选择内置 Skill，并只加载被选中的详细指导和资源。</li>
   <li>编排 STT/TTS、Playwright 和本地 Coding Agent。</li>
-  <li>管理 pause、abort、steer、follow-up、compaction 与 checkpoint。</li>
+  <li>管理 pause、abort、steer、follow-up、阈值式 compaction 与 checkpoint。</li>
 </ul>
 
 <h2 seq="auto">通信协议</h2>
@@ -167,7 +205,7 @@
   <li>浏览器：browser_open、browser_click、browser_type、browser_extract。</li>
   <li>桌面：desktop_observe、desktop_click、desktop_type、desktop_key、desktop_scroll、desktop_focus_window、desktop_launch_app。</li>
   <li>Coding Agent：启动、观察、引导、暂停或取消本地编码任务。</li>
-  <li>记忆：范围化 recall 与显式 memory proposal。</li>
+  <li>记忆：范围化 recall、自动写入和按策略保留的 memory proposal。</li>
   <li>确认：由 Host 策略控制的内部 approval request。</li>
 </ul>
 
@@ -212,7 +250,7 @@
     </tr>
   </tbody>
 </table>
-<p>延迟不能只归因于 Pi。必须分别测量音频采集、STT、模型首 Token、首个完整句、TTS 首包、工具排队、执行和验证时间。Provider 云端优先以加速 MVP，但 STT/TTS 均在可替换接口之后。</p>
+<p>首版 STT、TTS 和 LLM 直接采用云端 Provider，以减少模型运维工作；所有 Provider 事件仍通过接口归一化，后续可替换为本地模型。延迟不能只归因于 Pi，必须分别测量音频采集、STT、模型首 Token、首个完整句、TTS 首包、工具排队、执行和验证时间。</p>
 
 <h1 seq="auto">工具实现</h1>
 <h2 seq="auto">统一工具契约</h2>
@@ -314,7 +352,7 @@ any active state → failed</code></pre>
 </ul>
 
 <h1 seq="auto">长期记忆</h1>
-<p>记忆是独立子系统，不是无限增长的 Prompt Transcript。MVP 需要让重复任务明显减少重复说明，同时保持来源、范围和用户控制。</p>
+<p>记忆是独立子系统，不是无限增长的 Prompt Transcript。MVP 采用六层架构：当前任务上下文、常驻规则、整理后的长期记忆、任务情节摘要、历史证据和程序性记忆候选。记忆记录是从对话或任务证据中整理出的结论，原始消息、事件和回执仍作为证据保存。</p>
 <table>
   <thead>
     <tr>
@@ -325,34 +363,56 @@ any active state → failed</code></pre>
   </thead>
   <tbody>
     <tr>
+      <td><p>L0 Working Context</p></td>
+      <td><p>Pi Session、当前计划、最近消息与压缩摘要</p></td>
+      <td><p>当前任务始终加载</p></td>
+    </tr>
+    <tr>
+      <td><p>L1 Standing Rules</p></td>
+      <td><p>安全边界、确认策略、访问约束</p></td>
+      <td><p>始终加载；相关策略由 Host 强制执行</p></td>
+    </tr>
+    <tr>
       <td><p>Profile</p></td>
       <td><p>语言、称呼、无障碍需求</p></td>
-      <td><p>长期</p></td>
+      <td><p>L2，基础包按需加载</p></td>
     </tr>
     <tr>
       <td><p>Preference</p></td>
       <td><p>修改某目录前先询问</p></td>
-      <td><p>长期、可编辑</p></td>
+      <td><p>L2，长期、可编辑</p></td>
     </tr>
     <tr>
       <td><p>Project</p></td>
       <td><p>仓库约定与当前目标</p></td>
-      <td><p>项目范围长期</p></td>
+      <td><p>L2，按工作区加载</p></td>
     </tr>
     <tr>
       <td><p>Episodic</p></td>
       <td><p>上次任务发生了什么</p></td>
-      <td><p>摘要化、时间衰减</p></td>
+      <td><p>L3，按相似任务加载</p></td>
     </tr>
     <tr>
       <td><p>Procedural</p></td>
       <td><p>成功且可重复的工作流</p></td>
-      <td><p>可晋升为 Skill 候选</p></td>
+      <td><p>L5，候选元数据先加载，选中后展开 Skill</p></td>
+    </tr>
+    <tr>
+      <td><p>L4 Historical Evidence</p></td>
+      <td><p>原始消息、Task Events、Artifacts 和 Host receipts</p></td>
+      <td><p>核验、冲突处理或 reconcile 时读取</p></td>
     </tr>
   </tbody>
 </table>
-<p><b>写入：</b>任务生成带来源的记忆提案 → 规则移除密钥与短期噪音 → 去重 → 高影响个人信息请求确认 → 保存标准文本、结构字段、来源和置信度。</p>
-<p><b>召回：</b>先按用户、工作区、应用和任务做范围过滤，再组合全文检索与可选 Embedding，只把少量高相关记忆连同来源注入 Agent。</p>
+<h2 seq="auto">人格上下文</h2>
+<p>人格不是一条混合了事实的长 Prompt，而是独立的、可版本化的运行时上下文。它包含身份与角色、语气与详略、语言和语音偏好、主动程度、行为边界、工具策略以及可选的演化元数据。运行时顺序为：Host 策略 → 紧凑人格配置 → L1 常驻规则 → L0 当前任务 → 渐进加载的 L2-L5 记忆。人格影响 Agent 如何表达和行动，但人格推断不能作为用户事实证据。</p>
+<h2 seq="auto">MVP 压缩机制</h2>
+<p>当 Pi Session 达到配置的 Token 或字符阈值时，Worker 执行一次普通结构化摘要，保留用户目标与约束、已做决定、已完成动作及回执 ID、下一步计划、待确认动作、unknown 状态、当前工作区和最新 steering。摘要、最近消息和最新用户指令组成新的 L0 工作上下文。MVP 不引入复杂的多阶段语义压缩、Dream 或人格重写；压缩摘要也不会自动变成长期记忆。</p>
+<h2 seq="auto">写入</h2>
+<p>MVP 的普通低风险记忆自动写入，不要求用户逐条确认。对话轮次、任务结束、用户纠正和已验证结果会产生候选记忆；系统进行作用域分类、置信度和重要性评估、秘密与短期噪音过滤、去重和冲突关联，再保存标准文本、结构字段、来源和置信度。敏感内容仍由 Firewall 拒绝或限制为短期存储。所有自动写入都可在客户端查看、编辑和删除。每条记忆还记录 author 与 mutability policy：用户手动创建或修改的人格、偏好和记忆对 Agent 只读；Agent 只能追加或修改自己创建且允许变更的记录，纠正用户内容时通过新记录或关系链接表达，不静默覆盖。</p>
+<h2 seq="auto">渐进式召回</h2>
+<p>召回先按用户、工作区、应用、任务和 Skill 做硬范围过滤，再按阶段加载：第一阶段注入紧凑人格、L1 规则、当前项目和少量高置信度 L2；当请求涉及特定项目、应用、文件或流程时加载额外 L2/L3；复杂或不明确任务通过 memory_search 获取排序后的摘要；只有核验事实、解决冲突或对账 unknown 操作时才读取 L4 原始证据；Skill 先注入候选元数据，选中后才展开完整内容。</p>
+<p>检索组合全文检索与可选 Embedding，再结合置信度、时效性、重要性、冲突状态和 Token Budget 排序。Embedding 只负责发现候选，不能决定事实真实性。</p>
 
 <h1 seq="auto">数据模型与可观测性</h1>
 <h2 seq="auto">SQLite 核心表</h2>
@@ -370,7 +430,8 @@ any active state → failed</code></pre>
     <tr><td><p>tool_attempts</p></td><td><p>调用、策略、结果、验证和耗时</p></td></tr>
     <tr><td><p>approvals</p></td><td><p>确认绑定与用户决定</p></td></tr>
     <tr><td><p>artifacts</p></td><td><p>截图、Diff、下载与证据</p></td></tr>
-    <tr><td><p>memories / memory_sources</p></td><td><p>标准记忆与来源关系</p></td></tr>
+    <tr><td><p>memories / memory_sources</p></td><td><p>标准记忆、作者、作用域、可变更策略与来源关系</p></td></tr>
+    <tr><td><p>memory_links</p></td><td><p>记忆之间的 supersedes、contradicts、consolidates 和 associates 关系</p></td></tr>
     <tr><td><p>settings / capabilities</p></td><td><p>策略设置与当前能力可用性</p></td></tr>
   </tbody>
 </table>
@@ -422,18 +483,18 @@ any active state → failed</code></pre>
       <td><p>同一会话可语音发起、打断并继续</p></td>
     </tr>
     <tr>
-      <td><p><b>M2 浏览器与编码</b></p></td>
-      <td><p>四个 Playwright 工具、Coding Agent、动态工具、回执</p></td>
-      <td><p>一个浏览器任务和一个仓库任务带证据完成</p></td>
+      <td><p><b>M2 并行 MVP 工作流</b></p></td>
+      <td><p>资料调研、Coding Agent、通用桌面/Lark CLI 与共享运行时并行开发</p></td>
+      <td><p>三类任务都通过同一语音 → Pi → TaskRun 闭环并带证据完成</p></td>
     </tr>
     <tr>
-      <td><p><b>M3 桌面与安全</b></p></td>
-      <td><p>权限中心、原生观察与动作、确认绑定、unknown/reconcile</p></td>
-      <td><p>桌面工作流跨过确认门并证明无重复副作用</p></td>
+      <td><p><b>M3 恢复与安全加固</b></p></td>
+      <td><p>视觉回退、确认绑定、unknown/reconcile、进程和网络恢复</p></td>
+      <td><p>各工作流都有失败恢复测试，且不会重复外部副作用</p></td>
     </tr>
     <tr>
       <td><p><b>M4 有用记忆</b></p></td>
-      <td><p>记忆 Schema、范围召回、提案流、编辑与删除</p></td>
+      <td><p>六层记忆 Schema、自动低风险写入、范围召回、渐进加载、编辑与删除</p></td>
       <td><p>重复任务减少说明且不泄漏无关上下文</p></td>
     </tr>
   </tbody>
@@ -454,7 +515,9 @@ any active state → failed</code></pre>
     <tr><td><p>macOS 语义缺失</p></td><td><p>桌面操作脆弱</p></td><td><p>Accessibility 优先、视觉回退、每步重观察</p></td></tr>
     <tr><td><p>浏览器 Profile 泄漏</p></td><td><p>账号被冒用</p></td><td><p>独立目录、严格权限、永不提交状态</p></td></tr>
     <tr><td><p>子 Agent 绕过策略</p></td><td><p>失控外部副作用</p></td><td><p>特权与外部动作统一回到 Host Policy</p></td></tr>
-    <tr><td><p>记忆噪音或侵入</p></td><td><p>信任下降且推理变差</p></td><td><p>范围召回、来源、可编辑、保守写入</p></td></tr>
+    <tr><td><p>记忆噪音或侵入</p></td><td><p>信任下降且推理变差</p></td><td><p>准入过滤、范围召回、渐进加载、来源、可编辑和删除</p></td></tr>
+    <tr><td><p>自动写入错误推断</p></td><td><p>后续任务收到误导性上下文</p></td><td><p>置信度、来源、冲突关系、身份过滤和可见纠正入口</p></td></tr>
+    <tr><td><p>压缩丢失任务细节</p></td><td><p>恢复后重复动作或走错下一步</p></td><td><p>结构化摘要、回执引用、保留最近消息和恢复测试</p></td></tr>
     <tr><td><p>unknown 被盲目重试</p></td><td><p>消息或订单重复</p></td><td><p>幂等键和 reconcile 优先</p></td></tr>
   </tbody>
 </table>
