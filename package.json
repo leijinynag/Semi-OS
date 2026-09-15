@@ -4,12 +4,24 @@
   "version": "0.1.0",
   "description": "A local-first, voice-first desktop agent.",
   "packageManager": "pnpm@11.19.0",
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  },
   "scripts": {
     "dev": "pnpm --filter @semi-os/desktop dev",
-    "build": "pnpm -r --if-present run build",
-    "test": "pnpm -r --if-present run test",
-    "lint": "pnpm -r --if-present run lint",
-    "format": "pnpm -r --if-present run format",
+    "build": "pnpm run build:js && pnpm run build:rust",
+    "build:js": "pnpm -r --if-present run build",
+    "build:rust": "cargo build --workspace",
+    "test": "pnpm run test:js && pnpm run test:rust",
+    "test:js": "pnpm -r --if-present run test",
+    "test:rust": "cargo test --workspace",
+    "lint": "pnpm run lint:js && pnpm run lint:rust",
+    "lint:js": "pnpm -r --if-present run lint",
+    "lint:rust": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "format": "pnpm run format:js && pnpm run format:rust",
+    "format:js": "pnpm -r --if-present run format",
+    "format:rust": "cargo fmt --all -- --check",
     "typecheck": "pnpm -r --if-present run typecheck",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build"
   },
