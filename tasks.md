@@ -50,19 +50,31 @@
 
 依赖：无。
 
-- [ ] **P1.1 添加根目录 Workspace 配置**
+- [x] **P1.1 添加根目录 Workspace 配置**
   - 添加 `package.json`、`pnpm-workspace.yaml`、根 TypeScript 配置和 Workspace 脚本。
   - Commit 点：`chore(repo): bootstrap pnpm workspace`
-- [ ] **P1.2 添加 Cargo Workspace**
+  - 证据：`package.json`、`pnpm-workspace.yaml`、`tsconfig.json`、`pnpm-lock.yaml`。
+  - 验证：`pnpm install --lockfile-only`；workspace 可识别 6 个 JavaScript 项目。
+  - Commit：`3317908`。
+- [x] **P1.2 添加 Cargo Workspace**
   - 添加根目录 `Cargo.toml`、各 Rust Crate 清单和共享 Rust Profile 配置。
   - Commit 点：`chore(repo): bootstrap cargo workspace`
-- [ ] **P1.3 创建目标目录骨架**
+  - 证据：`Cargo.toml`、`Cargo.lock`、`crates/host`、`crates/storage`、`crates/desktop-macos`。
+  - 验证：`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo test --workspace`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo build --workspace` 均通过。
+  - Commit：`dfa249b`。
+- [x] **P1.3 创建目标目录骨架**
   - 创建 `apps/desktop`、`crates/host`、`crates/storage`、
     `crates/desktop-macos`、`packages` 和 `tests` 目录，并提供最小可构建入口。
   - Commit 点：`chore(repo): scaffold Semi-OS modules`
-- [ ] **P1.4 添加统一开发命令**
+  - 证据：桌面入口、Agent Worker、共享包、协议包、工具 SDK、Skills 包及 `tests/contract`、`tests/integration`、`tests/e2e`。
+  - 验证：`pnpm run typecheck`、`pnpm run lint:js`、`pnpm run test:js`、`pnpm run build:js` 均通过；`pnpm run dev` 输出 `Semi-OS desktop shell placeholder`。
+  - Commit：`baac72b`。
+- [x] **P1.4 添加统一开发命令**
   - 提供统一的 `dev`、`build`、`test`、`lint`、`format`、`typecheck` 和 `check` 命令。
   - Commit 点：`chore(repo): add development command surface`
+  - 证据：根目录 `package.json` 提供 JS/Rust 分层命令和统一 `check` 命令，锁定 TypeScript、Node 类型与 Rust 依赖状态。
+  - 验证：`pnpm run typecheck`、`pnpm run lint:js`、`pnpm run test:js`、`pnpm run build:js`、`cargo fmt --all -- --check`、`cargo check --workspace`、`cargo test --workspace`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo build --workspace` 均通过。
+  - Commit：`470c404`。
 
 ### 1B. 共享协议与类型
 
