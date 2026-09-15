@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/host",
+  "crates/protocol",
   "crates/storage",
   "crates/desktop-macos",
 ]
