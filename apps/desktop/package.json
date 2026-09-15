@@ -1,0 +1,14 @@
+{
+  "name": "@semi-os/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test",
+    "lint": "node --check src/index.ts",
+    "format": "node --check src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

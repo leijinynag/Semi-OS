@@ -1,0 +1,13 @@
+{
+  "name": "@semi-os/tool-sdk",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test",
+    "lint": "node --check src/index.ts",
+    "format": "node --check src/index.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
