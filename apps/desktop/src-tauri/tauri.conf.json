@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Semi-OS",
+  "version": "0.1.0",
+  "identifier": "dev.semios.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "client",
+        "title": "Semi-OS",
+        "url": "index.html?surface=client",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 560,
+        "center": true
+      },
+      {
+        "label": "assistant",
+        "title": "Semi-OS Assistant",
+        "url": "index.html?surface=assistant",
+        "width": 500,
+        "height": 132,
+        "minWidth": 420,
+        "minHeight": 120,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

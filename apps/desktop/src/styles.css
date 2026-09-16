@@ -1,0 +1,364 @@
+@import "tailwindcss";
+
+:root {
+  color: #e7f3ef;
+  background: #071012;
+  font-family:
+    Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button {
+  color: inherit;
+  font: inherit;
+}
+
+.client-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(rgba(65, 210, 175, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(65, 210, 175, 0.035) 1px, transparent 1px),
+    #071012;
+  background-size: 32px 32px;
+}
+
+.client-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding: 26px 18px 20px;
+  border-right: 1px solid #193033;
+  background: rgba(5, 13, 15, 0.94);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid #3c9e8d;
+  border-radius: 6px;
+  color: #72e1c6;
+  background: #0d2525;
+}
+
+.brand div,
+.brand strong,
+.brand span {
+  display: block;
+}
+
+.brand strong {
+  font-size: 16px;
+}
+
+.brand div > span {
+  margin-top: 3px;
+  color: #63847f;
+  font-size: 9px;
+}
+
+.client-sidebar nav {
+  display: grid;
+  gap: 4px;
+}
+
+.client-sidebar nav button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: #78918e;
+  background: transparent;
+  cursor: pointer;
+}
+
+.client-sidebar nav button:hover,
+.client-sidebar nav button.is-active {
+  color: #dffaf2;
+  background: #102426;
+}
+
+.client-sidebar nav button.is-active {
+  box-shadow: inset 2px 0 #54d8ba;
+}
+
+.runtime-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 0 8px;
+  color: #67817c;
+  font-size: 11px;
+}
+
+.runtime-indicator span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #52d6a7;
+  box-shadow: 0 0 10px #52d6a7;
+}
+
+.client-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 34px 42px 22px;
+}
+
+.client-content header,
+.client-content footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.eyebrow {
+  color: #5ca896;
+  font-size: 11px;
+}
+
+.client-content h1 {
+  margin: 7px 0 0;
+  font-size: 26px;
+  font-weight: 570;
+}
+
+.assistant-toggle {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #285b54;
+  border-radius: 6px;
+  color: #9dd9cb;
+  background: #0c2322;
+  cursor: pointer;
+}
+
+.conversation-stage {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 22px;
+  color: #718b87;
+  text-align: center;
+}
+
+.stage-core {
+  position: relative;
+  display: grid;
+  width: 160px;
+  height: 160px;
+  place-items: center;
+  border: 1px solid rgba(91, 220, 190, 0.28);
+  border-radius: 50%;
+  box-shadow:
+    0 0 42px rgba(40, 189, 157, 0.14),
+    inset 0 0 32px rgba(40, 189, 157, 0.08);
+}
+
+.stage-core::before,
+.stage-core::after {
+  position: absolute;
+  content: "";
+  border: 1px dashed rgba(108, 224, 199, 0.24);
+  border-radius: 50%;
+  animation: spin 18s linear infinite;
+}
+
+.stage-core::before {
+  inset: 14px;
+}
+
+.stage-core::after {
+  inset: 34px;
+  animation-direction: reverse;
+  animation-duration: 11s;
+}
+
+.stage-core span {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #83f3d5;
+  box-shadow: 0 0 28px #55d9ba;
+}
+
+.conversation-stage p,
+.conversation-stage small {
+  margin: 0;
+}
+
+.conversation-stage small {
+  color: #c8a86c;
+}
+
+.client-content footer {
+  padding-top: 16px;
+  border-top: 1px solid #183033;
+  color: #57706d;
+  font-size: 11px;
+}
+
+html[data-surface="assistant"] {
+  background: transparent;
+}
+
+.assistant-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  height: 100%;
+  padding: 16px 18px;
+  border: 1px solid rgba(92, 214, 187, 0.38);
+  border-radius: 8px;
+  background: rgba(5, 15, 17, 0.92);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(20px);
+}
+
+.assistant-aura {
+  position: relative;
+  display: grid;
+  width: 92px;
+  height: 92px;
+  place-items: center;
+}
+
+.assistant-ring,
+.assistant-core {
+  position: absolute;
+  border-radius: 50%;
+}
+
+.assistant-ring {
+  border: 1px solid rgba(94, 233, 201, 0.46);
+}
+
+.assistant-ring-outer {
+  inset: 2px;
+  border-style: dashed;
+  animation: spin 8s linear infinite;
+}
+
+.assistant-ring-inner {
+  inset: 20px;
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.assistant-core {
+  width: 18px;
+  height: 18px;
+  background: #83f3d5;
+  box-shadow: 0 0 22px #55d9ba;
+}
+
+.assistant-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-copy strong {
+  font-size: 18px;
+}
+
+.assistant-copy > span:last-child {
+  color: #708a86;
+  font-size: 12px;
+}
+
+.assistant-status {
+  color: #65cdb5;
+  font-size: 10px;
+}
+
+.assistant-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.assistant-actions button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #28544e;
+  border-radius: 6px;
+  color: #a9ded2;
+  background: #0e2524;
+}
+
+.assistant-actions button:disabled {
+  color: #435b58;
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  50% {
+    transform: scale(1.08);
+    opacity: 0.62;
+  }
+}
+
+@media (max-width: 760px) {
+  .client-shell {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+
+  .client-sidebar {
+    padding-inline: 10px;
+  }
+
+  .brand div,
+  .client-sidebar nav span,
+  .runtime-indicator {
+    display: none;
+  }
+
+  .client-sidebar nav button {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .client-content {
+    padding: 26px 22px 18px;
+  }
+}

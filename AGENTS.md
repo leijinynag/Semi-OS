@@ -98,8 +98,15 @@ Keep ownership explicit:
   small theme layer rather than scattering arbitrary values.
 - Prefer existing component primitives and the local design system before
   creating one-off UI patterns.
-- Use Lucide icons when an icon exists. Icon-only controls need accessible
-  labels and tooltips.
+- Use `@phosphor-icons/react` for standard interface icons. Import third-party
+  icons only through the local semantic icon adapter (for example,
+  `ui/icons.ts`); business components must not bind directly to library icon
+  names. This keeps future visual-system changes local to one mapping layer.
+- Choose Phosphor weights intentionally: use `regular` for normal navigation,
+  `bold` for compact controls, and reserve `fill` or `duotone` for active or
+  branded states. Icon-only controls need accessible labels and tooltips.
+- Core assistant visuals such as particles, waveforms and the central orb are
+  product-owned effects, not icon-library assets.
 - Keep the desktop assistant and client as separate surfaces with shared
   domain state, not duplicated business logic.
 - UI consumes structured events and snapshots. It must not parse assistant
@@ -208,11 +215,15 @@ integration described by the implementation.
    round-trip, provider stream, Playwright fixture, PTY fixture, or macOS
    permission/action fixture.
 7. Update `tasks.md` immediately after the slice is genuinely complete. Mark
-   only completed checkboxes, add a short evidence note and record the commit
-   hash after committing.
-8. Make one focused commit per commit point in `tasks.md`. Avoid mixing
+   only completed checkboxes and add a short evidence note. Add the commit hash
+   only after the reviewed change is committed.
+8. 每个阶段子块（例如 `1B`、`1C`）完成并验证后，必须先保留未提交改动供
+   用户 review。只有收到用户明确批准后，才能创建该子块的 commits 或 push；
+   不得把“继续下一部分”理解为自动批准提交。
+9. After review approval, make one focused commit per commit point in
+   `tasks.md`. Avoid mixing
    unrelated refactors, generated caches, credentials or browser auth state.
-9. Before opening a pull request or pushing, run the full applicable checks and
+10. Before opening a pull request or pushing, run the full applicable checks and
    review the diff for accidental secrets and unrelated files.
 
 ### Task status convention

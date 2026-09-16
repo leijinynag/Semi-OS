@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Semi-OS 客户端与桌面助手的最小窗口权限。",
+  "windows": ["client", "assistant"],
+  "permissions": ["core:default"]
+}

@@ -1,3 +1,7 @@
 packages:
   - apps/*
   - packages/*
+
+# Vite 依赖 esbuild 的平台二进制安装脚本；明确白名单可避免每台机器交互批准。
+allowBuilds:
+  esbuild: true

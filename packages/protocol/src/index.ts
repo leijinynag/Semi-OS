@@ -1,6 +1,6 @@
 export const protocolPackageName = "@semi-os/protocol";
 
-export * from "./envelope.js";
+export * from "./envelope.ts";
 export type {
   CapabilityStatus,
   ResultType,
