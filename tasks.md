@@ -116,18 +116,47 @@
 
 依赖：P1.3、P1.6。
 
-- [ ] **P1.9 搭建 Tauri 桌面壳**
+- [x] **P1.9 搭建 Tauri 桌面壳**
   - 添加客户端窗口、临时桌面助手窗口、托盘入口和开发期窗口控制能力。
   - Commit 点：`feat(desktop): scaffold tauri windows`
-- [ ] **P1.10 实现 Rust Host 生命周期**
+  - 证据：`apps/desktop` 已接入 React 19、Vite 7、Tailwind CSS 4 与
+    Tauri v2；提供 `client` 客户端窗口、透明置顶且默认隐藏的 `assistant`
+    窗口、系统托盘入口和 Host command 控窗。
+  - 验证：`pnpm --filter @semi-os/desktop run build` 通过；
+    `pnpm --filter @semi-os/desktop run tauri:dev` 可启动真实桌面壳，退出后
+    无桌面进程、Vite 或 Agent Worker 残留；窗口关闭转为隐藏，PTT 显示助手
+    时不主动获取焦点，客户端通过 Host 快照和事件同步助手显隐状态。
+  - Commit：`e0a871b`。
+- [x] **P1.10 实现 Rust Host 生命周期**
   - 添加应用启动、关闭、全局快捷键注册以及类型化的 Tauri Commands/Events。
   - Commit 点：`feat(host): add desktop lifecycle`
-- [ ] **P1.11 添加 Node Worker 监督器**
+  - 证据：`crates/host/src/lifecycle.rs` 将 Host 生命周期与任务/Worker 状态
+    分离；Tauri 注册 `CommandOrControl+Shift+Space`，发布按下/释放事件，
+    并提供 `get_host_lifecycle`、`get_assistant_visibility`、
+    `set_assistant_visible` 类型化 command。
+  - 验证：Host 生命周期单元测试、`cargo check --workspace` 和真实 Tauri
+    启动均通过；应用退出时同步停止 Worker 监督器。
+  - Commit：`e0a871b`。
+- [x] **P1.11 添加 Node Worker 监督器**
   - 启动 Worker，连接 JSONL stdio，发送健康事件，并使用有限退避策略重启。
   - Commit 点：`feat(host): supervise agent worker`
-- [ ] **P1.12 添加崩溃与协议诊断**
+  - 证据：`packages/agent-worker` 实现 stdin/stdout JSONL 健康握手；
+    `crates/host/src/supervisor.rs` 启动真实 Node Worker，只有收到合法
+    `health.ready` 才发布 Ready；就绪后持续消费、校验并分发 Worker 消息，
+    并采用最多 3 次、250ms 至 2s 的有限退避。
+  - 验证：Node Worker 健康握手测试 2 项通过；Host 测试覆盖握手后的事件
+    消费；真实 Tauri 启动期间 Worker 保持就绪，退出后子进程被回收。
+  - Commit：`e0a871b`。
+- [x] **P1.12 添加崩溃与协议诊断**
   - 持久化 Worker 退出原因、协议错误和重启次数，同时避免向 UI 暴露秘密。
   - Commit 点：`test(host): cover worker recovery`
+  - 证据：`crates/host/src/diagnostics.rs` 以脱敏 JSONL 追加记录退出、协议错误
+    和重启次数；UI 只接收结构化 `host://worker-event`。崩溃 Fixture 在合法
+    握手后以 code 23 退出，覆盖 Ready、Exited、RestartScheduled 和重启上限。
+  - 验证：`cargo test -p semi-os-host` 4 项通过；全仓库 TypeScript
+    typecheck、Lint、测试、构建，以及 Rust fmt、check、test、clippy、build
+    均通过。
+  - Commit：`e0a871b`。
 
 ## 阶段 2：持久化任务运行时
 
