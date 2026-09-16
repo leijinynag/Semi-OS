@@ -80,20 +80,37 @@
 
 依赖：P1.1、P1.2、P1.3。
 
-- [ ] **P1.5 定义领域枚举与 ID**
+- [x] **P1.5 定义领域枚举与 ID**
   - 定义 `TaskId`、`TaskRunId`、`TraceId`、`RequestId`、任务生命周期、
     语音状态、工具风险等级、结果类型和能力状态。
   - Commit 点：`feat(protocol): define core domain identifiers`
-- [ ] **P1.6 定义版本化 JSONL 信封**
+  - 证据：`schemas/protocol.schema.json`、`packages/shared/src/generated/domain.generated.ts`、
+    `crates/protocol/src/generated.rs`。
+  - 验证：`pnpm run typecheck`、`cargo check --workspace` 均通过。
+  - Commit：`0d17a19`。
+- [x] **P1.6 定义版本化 JSONL 信封**
   - 定义 Rust/TypeScript 共用的请求、响应、事件和错误信封，包含
     `protocolVersion`、`requestId`、`taskId`、`kind`、`payload` 和可选 `traceId`。
   - Commit 点：`feat(protocol): define host worker envelopes`
-- [ ] **P1.7 从单一 Schema 生成类型**
+  - 证据：`packages/protocol/src/envelope.ts`、`crates/protocol/src/lib.rs`。
+  - 验证：TypeScript 与 Rust 均可序列化和反序列化一致的 camelCase 信封。
+  - Commit：`195448f`。
+- [x] **P1.7 从单一 Schema 生成类型**
   - 选择唯一的 Schema 来源，生成 Rust 和 TypeScript 类型，并添加兼容性 Fixture。
   - Commit 点：`feat(protocol): generate cross-runtime types`
-- [ ] **P1.8 添加协议校验**
+  - 证据：`schemas/protocol.schema.json` 是单一事实来源，
+    `scripts/generate-protocol.mjs` 生成 TypeScript 与 Rust 类型。
+  - 验证：`pnpm run generate:protocol` 后生成文件稳定，TypeScript/Rust 构建通过。
+  - Commit：`c09cc24`。
+- [x] **P1.8 添加协议校验**
   - 拒绝未知协议版本和格式错误的 Payload，覆盖正常往返和典型错误响应。
   - Commit 点：`test(protocol): cover jsonl compatibility`
+  - 证据：`packages/protocol/src/envelope.test.ts` 与
+    `crates/protocol/src/lib.rs` 共用 `tests/contract/fixtures/request.json`。
+  - 验证：Node 协议测试 3 项、Rust 协议测试 2 项通过；全仓库
+    TypeScript 类型检查、Lint、测试、构建以及 Rust fmt、check、test、
+    clippy、build 均通过。
+  - Commit：`5c2cad1`。
 
 ### 1C. Tauri 与进程生命周期
 
