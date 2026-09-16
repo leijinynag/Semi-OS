@@ -19,7 +19,11 @@ importers:
 
   packages/agent-worker: {}
 
-  packages/protocol: {}
+  packages/protocol:
+    dependencies:
+      '@semi-os/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/shared: {}
 

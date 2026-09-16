@@ -132,6 +132,15 @@ Keep ownership explicit:
 
 - Default to ASCII in source files unless the file already uses another
   character set or user-facing Chinese text requires it.
+- 关键文件必须写清楚中文注释，重点解释架构边界、跨进程协议、状态机、
+  风险策略、并发/取消、恢复与验证等不易从代码直接看出的设计意图。
+- 注释应说明“为什么这样设计”和必须保持的约束，不要逐行复述代码。
+  公共类型、核心入口和关键校验函数优先使用对应语言的文档注释。
+- 自动生成文件不要手动补注释；应在生成器中维护中文文件头或说明。
+  标准 JSON（例如 `schemas/protocol.schema.json`）不支持注释，相关设计说明
+  应写在生成器、相邻源码或文档中，不能为了注释破坏文件格式。
+- 修改关键逻辑时同步维护相关中文注释；如果注释与实现冲突，以修正二者为
+  同一个交付要求。
 - Use stable dimensions for floating controls, waveform surfaces, timelines and
   tool rows so dynamic content cannot shift layout unexpectedly.
 - Keep diagrams and visual assets under `docs/assets/` or a feature-owned asset

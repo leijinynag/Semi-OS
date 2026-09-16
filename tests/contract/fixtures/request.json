@@ -1,0 +1,10 @@
+{
+  "direction": "request",
+  "protocolVersion": 1,
+  "requestId": "req_fixture_001",
+  "kind": "health.check",
+  "payload": {
+    "includeCapabilities": true
+  },
+  "traceId": "trace_fixture_001"
+}
