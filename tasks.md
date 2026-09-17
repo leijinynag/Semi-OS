@@ -164,16 +164,35 @@
 
 ### 2A. SQLite 与事件模型
 
-- [ ] **P2.1 添加 SQLite Migration**
+- [x] **P2.1 添加 SQLite Migration**
   - 创建 `tasks`、`task_events`、`agent_sessions`、`tool_attempts`、
     `approvals`、`artifacts`、`settings` 和 `capabilities` 表。
   - Commit 点：`feat(storage): add core sqlite schema`
-- [ ] **P2.2 实现当前快照与追加事件**
+  - 证据：`crates/storage/migrations/0001_core.sql` 创建八张核心表、
+    外键、JSON/枚举约束及恢复查询索引；`src/migrations.rs` 在独占事务中
+    维护 `schema_migrations`，`Storage` 初始化启用外键、WAL 与 busy timeout。
+  - 验证：真实临时文件数据库首次迁移和重复打开均通过，测试直接核对八张
+    核心表及迁移版本。
+  - Commit：`6a629d0`。
+- [x] **P2.2 实现当前快照与追加事件**
   - 在同一事务中保存当前任务投影并追加领域事件。
   - Commit 点：`feat(storage): persist task snapshots and events`
-- [ ] **P2.3 添加事件重放与恢复 Fixture**
+  - 证据：`crates/storage/src/repository.rs` 使用 `IMMEDIATE` 事务、
+    `last_event_sequence` 乐观并发版本和每任务连续事件序号，原子更新
+    `tasks` 快照并追加带投影的 `task_events`。
+  - 验证：测试覆盖连续事件、陈旧快照冲突和事件唯一约束失败时的完整回滚，
+    证明不会产生已推进快照或孤立事件。
+  - Commit：`6406b6f`。
+- [x] **P2.3 添加事件重放与恢复 Fixture**
   - 根据事件重建任务、恢复 Checkpoint，并证明已完成的工具回执不会重复执行。
   - Commit 点：`test(storage): cover task recovery`
+  - 证据：`crates/storage/tests/recovery.rs` 关闭并重新打开文件数据库后，按
+    事件序列重建任务投影、恢复 Pi Session Checkpoint，并通过幂等键复用成功
+    回执；`started`、`unknown`、`needs_user` 尝试要求先对账，明确失败或取消
+    的尝试允许进入下一次执行决策。
+  - 验证：Storage 恢复测试 5 项通过；全仓库 TypeScript typecheck、Lint、
+    测试、构建，以及 Rust fmt、check、test、clippy、build 均通过。
+  - Commit：`e3aac55`。
 
 ### 2B. 任务生命周期与执行回执
 
