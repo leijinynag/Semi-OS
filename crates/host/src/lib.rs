@@ -6,10 +6,14 @@
 mod diagnostics;
 mod lifecycle;
 mod supervisor;
+mod task;
 
 pub use diagnostics::{DiagnosticRecord, DiagnosticStore};
 pub use lifecycle::{HostLifecycle, HostLifecycleSnapshot, HostPhase};
 pub use supervisor::{
     RestartPolicy, WorkerCommand, WorkerEvent, WorkerEventHandler, WorkerMessageHandler,
     WorkerSupervisor, WorkerSupervisorHandle,
+};
+pub use task::{
+    DomainEventBus, DomainEventHandler, TaskRuntime, TaskRuntimeError, TaskStateMachine,
 };
