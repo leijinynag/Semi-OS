@@ -251,7 +251,7 @@ impl Storage {
                 attempt.tool_name,
                 attempt.idempotency_key,
                 attempt.attempt_number,
-                attempt.status.as_str(),
+                tool_attempt_status_as_str(attempt.status),
                 encode_enum(attempt.risk_level)?,
                 attempt.input_digest,
                 encode_optional_json(attempt.target.as_ref())?,
@@ -402,7 +402,7 @@ fn task_event_from_row(row: &Row<'_>) -> rusqlite::Result<TaskEvent> {
 
 fn tool_attempt_from_row(row: &Row<'_>) -> rusqlite::Result<ToolAttempt> {
     let status_value: String = row.get(5)?;
-    let status = ToolAttemptStatus::parse(status_value.clone()).ok_or_else(|| {
+    let status = parse_tool_attempt_status(&status_value).ok_or_else(|| {
         conversion_error(StorageError::InvalidEnum {
             kind: "ToolAttemptStatus",
             value: status_value,
@@ -425,6 +425,29 @@ fn tool_attempt_from_row(row: &Row<'_>) -> rusqlite::Result<ToolAttempt> {
         started_at_ms: row.get(13)?,
         finished_at_ms: row.get(14)?,
     })
+}
+
+fn tool_attempt_status_as_str(status: ToolAttemptStatus) -> &'static str {
+    match status {
+        ToolAttemptStatus::Started => "started",
+        ToolAttemptStatus::Succeeded => "succeeded",
+        ToolAttemptStatus::Failed => "failed",
+        ToolAttemptStatus::Unknown => "unknown",
+        ToolAttemptStatus::Cancelled => "cancelled",
+        ToolAttemptStatus::NeedsUser => "needs_user",
+    }
+}
+
+fn parse_tool_attempt_status(value: &str) -> Option<ToolAttemptStatus> {
+    match value {
+        "started" => Some(ToolAttemptStatus::Started),
+        "succeeded" => Some(ToolAttemptStatus::Succeeded),
+        "failed" => Some(ToolAttemptStatus::Failed),
+        "unknown" => Some(ToolAttemptStatus::Unknown),
+        "cancelled" => Some(ToolAttemptStatus::Cancelled),
+        "needs_user" => Some(ToolAttemptStatus::NeedsUser),
+        _ => None,
+    }
 }
 
 fn encode_enum<T: Serialize>(value: T) -> StorageResult<String> {

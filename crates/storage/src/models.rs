@@ -1,4 +1,4 @@
-use semi_os_protocol::{ResultType, TaskLifecycle, ToolRiskLevel};
+use semi_os_protocol::{ResultType, TaskLifecycle, ToolAttemptStatus, ToolRiskLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -51,41 +51,6 @@ pub struct AgentSessionCheckpoint {
     pub checkpoint_sequence: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolAttemptStatus {
-    Started,
-    Succeeded,
-    Failed,
-    Unknown,
-    Cancelled,
-    NeedsUser,
-}
-
-impl ToolAttemptStatus {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Started => "started",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Unknown => "unknown",
-            Self::Cancelled => "cancelled",
-            Self::NeedsUser => "needs_user",
-        }
-    }
-
-    pub(crate) fn parse(value: String) -> Option<Self> {
-        match value.as_str() {
-            "started" => Some(Self::Started),
-            "succeeded" => Some(Self::Succeeded),
-            "failed" => Some(Self::Failed),
-            "unknown" => Some(Self::Unknown),
-            "cancelled" => Some(Self::Cancelled),
-            "needs_user" => Some(Self::NeedsUser),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

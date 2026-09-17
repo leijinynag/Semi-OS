@@ -15,5 +15,13 @@ export type ToolRiskLevel = "read" | "local_write" | "external_side_effect" | "p
 
 export type ResultType = "success" | "failure" | "unknown" | "cancelled" | "needs_user";
 
+export type ToolAttemptStatus = "started" | "succeeded" | "failed" | "unknown" | "cancelled" | "needs_user";
+
+export type PolicyDecision = "auto" | "confirmation_required" | "approved" | "rejected";
+
+export type VerificationStatus = "passed" | "failed" | "inconclusive" | "not_run";
+
+export type WorkerState = "starting" | "ready" | "degraded" | "restarting" | "stopped";
+
 export type CapabilityStatus = "available" | "degraded" | "unavailable" | "unknown";
 

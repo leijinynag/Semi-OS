@@ -1,0 +1,11 @@
+{
+  "eventId": "evt_task_running",
+  "taskId": "task_research",
+  "taskRunId": "run_001",
+  "traceId": "trace_001",
+  "occurredAtMs": 2000,
+  "kind": "task.lifecycle_changed",
+  "from": "understanding",
+  "to": "running",
+  "reason": "agent_requested_execution"
+}

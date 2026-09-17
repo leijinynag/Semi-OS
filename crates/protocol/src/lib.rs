@@ -3,9 +3,13 @@
 //! 本模块位于进程信任边界：反序列化只负责恢复结构，业务代码在使用消息前
 //! 还必须调用 [`validate_envelope`] 检查协议版本和领域约束。
 
+mod domain;
 mod generated;
+mod receipt;
 
+pub use domain::*;
 pub use generated::*;
+pub use receipt::*;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

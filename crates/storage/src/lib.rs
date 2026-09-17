@@ -10,7 +10,7 @@ mod repository;
 
 pub use error::{StorageError, StorageResult};
 pub use models::{
-    AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolAttemptStatus,
-    ToolReplayDecision,
+    AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
 };
 pub use repository::Storage;
+pub use semi_os_protocol::ToolAttemptStatus;

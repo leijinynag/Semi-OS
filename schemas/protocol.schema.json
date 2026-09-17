@@ -92,6 +92,26 @@
       "enum": ["success", "failure", "unknown", "cancelled", "needs_user"],
       "x-semi-os-type": "ResultType"
     },
+    "toolAttemptStatus": {
+      "type": "string",
+      "enum": ["started", "succeeded", "failed", "unknown", "cancelled", "needs_user"],
+      "x-semi-os-type": "ToolAttemptStatus"
+    },
+    "policyDecision": {
+      "type": "string",
+      "enum": ["auto", "confirmation_required", "approved", "rejected"],
+      "x-semi-os-type": "PolicyDecision"
+    },
+    "verificationStatus": {
+      "type": "string",
+      "enum": ["passed", "failed", "inconclusive", "not_run"],
+      "x-semi-os-type": "VerificationStatus"
+    },
+    "workerState": {
+      "type": "string",
+      "enum": ["starting", "ready", "degraded", "restarting", "stopped"],
+      "x-semi-os-type": "WorkerState"
+    },
     "capabilityStatus": {
       "type": "string",
       "enum": ["available", "degraded", "unavailable", "unknown"],
