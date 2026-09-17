@@ -7,6 +7,7 @@ mod diagnostics;
 mod lifecycle;
 mod supervisor;
 mod task;
+mod tool_execution;
 
 pub use diagnostics::{DiagnosticRecord, DiagnosticStore};
 pub use lifecycle::{HostLifecycle, HostLifecycleSnapshot, HostPhase};
@@ -16,4 +17,7 @@ pub use supervisor::{
 };
 pub use task::{
     DomainEventBus, DomainEventHandler, TaskRuntime, TaskRuntimeError, TaskStateMachine,
+};
+pub use tool_execution::{
+    decide_execution, save_execution_receipt, ToolExecutionDecision, ToolExecutionError,
 };

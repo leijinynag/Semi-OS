@@ -3,9 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "dependencies": {
+    "@semi-os/shared": "workspace:*"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test",
+    "test": "node --experimental-strip-types --test src/**/*.test.ts",
     "lint": "node --check src/index.ts",
     "format": "node --check src/index.ts",
     "typecheck": "tsc -p tsconfig.json"

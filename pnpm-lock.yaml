@@ -68,7 +68,11 @@ importers:
 
   packages/skills: {}
 
-  packages/tool-sdk: {}
+  packages/tool-sdk:
+    dependencies:
+      '@semi-os/shared':
+        specifier: workspace:*
+        version: link:../shared
 
 packages:
 
