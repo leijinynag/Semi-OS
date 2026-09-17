@@ -196,21 +196,49 @@
 
 ### 2B. 任务生命周期与执行回执
 
-- [ ] **P2.4 实现 TaskRun 状态机**
+- [x] **P2.4 实现 TaskRun 状态机**
   - 实现 `created`、`listening`、`understanding`、`running`、`paused`、
     `waiting_confirmation`、`verifying`、`completed`、`failed`、`unknown`、
     `reconciling`、`needs_user` 和 `cancelled` 状态及其合法转换。
   - Commit 点：`feat(task): implement task lifecycle`
-- [ ] **P2.5 实现领域事件总线**
+  - 证据：`crates/host/src/task.rs` 定义纯 `TaskStateMachine` 和 Rust Host
+    权威入口 `TaskRuntime`；每次转换先校验合法性，再在 SQLite 事务中同步
+    更新快照并追加事件，成功提交后才向订阅者广播。
+  - 验证：测试覆盖合法转换、终态保护、暂停/恢复路径，以及 `unknown` 不能
+    直接回到 `running`、必须先进入 `reconciling`。
+  - Commit：`937fffe`。
+- [x] **P2.5 实现领域事件总线**
   - 为 Rust、Node 和 React 统一任务、语音、工具、确认、Worker 和验证事件。
   - Commit 点：`feat(task): add domain event stream`
-- [ ] **P2.6 实现工具尝试回执**
+  - 证据：`crates/protocol/src/domain.rs` 与
+    `packages/shared/src/domain-events.ts` 提供同构判别联合，覆盖任务生命周期/
+    进度、语音、工具、确认、Worker、验证和任务结果；Schema 统一生成相关枚举，
+    TypeScript 入口提供运行时校验。
+  - 验证：Rust 与 TypeScript 读取同一
+    `tests/contract/fixtures/domain-event.json`，锁定事件名称和字段结构；非法或
+    不完整事件会在 TypeScript 边界被拒绝。
+  - Commit：`f7256a9`。
+- [x] **P2.6 实现工具尝试回执**
   - 记录脱敏输入、目标、策略决定、确认摘要、耗时、结果类型、验证结果和
     Artifact 引用。
   - Commit 点：`feat(tool): add execution receipts`
-- [ ] **P2.7 实现验证与 `unknown` 结果**
+  - 证据：`ToolExecutionReceipt` 在 Rust 与 TypeScript 中记录脱敏输入摘要/
+    摘要值、目标、风险、策略决定、审批绑定、开始/结束时间、耗时、结构化结果、
+    验证证据、Artifact 和幂等键；Host 将完整领域回执映射到现有 SQLite 投影。
+  - 验证：测试覆盖完整成功回执持久化与重启后复用，存储查询字段和完整
+    `receipt_json` 保持分层。
+  - Commit：`165e0b5`。
+- [x] **P2.7 实现验证与 `unknown` 结果**
   - 只有明确验证通过才能标记成功；不确定的操作必须暂停并进入对账流程，不允许自动重试。
   - Commit 点：`feat(task): enforce verified completion`
+  - 证据：任务完成必须通过 `complete_verified` 并携带非模型、可复查证据；
+    工具成功回执必须同时满足 `succeeded`、`success` 和 `passed`。恢复入口对
+    `started`、`unknown`、`needs_user` 返回 `Reconcile`，不会返回执行许可。
+  - 验证：负向测试覆盖缺少验证、仅凭模型文字宣称成功、结果字段矛盾，以及
+    `unknown` 尝试重启后禁止直接重试；全仓库 Rust fmt/check/test/clippy/build
+    和 TypeScript typecheck/lint/test/build 均通过。
+  - Commit：`937fffe`、`165e0b5`。任务终态校验位于 TaskRuntime，工具结果
+    一致性与恢复决策位于执行回执边界，因此由两个可独立审阅的真实提交共同完成。
 
 ### 2C. 动态能力与 Pi 边界
 
