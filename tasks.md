@@ -242,23 +242,53 @@
 
 ### 2C. 动态能力与 Pi 边界
 
-- [ ] **P2.8 实现 Tool Registry**
+- [x] **P2.8 实现 Tool Registry**
   - 注册内置工具和自定义工具，支持风险等级、可用性、摘要、执行、验证和对账契约。
   - Commit 点：`feat(tool): add dynamic tool registry`
-- [ ] **P2.9 实现能力发现**
+  - 证据：`packages/tool-sdk/src/tool.ts` 定义与 Pi 解耦的执行、验证和对账契约；
+    `registry.ts` 分离工具注册与激活，并按平台、能力、策略、风险、工作区、
+    Runtime 健康和 Skill 要求筛选。
+  - 验证：Tool SDK typecheck 和 3 项单元测试通过；全仓库 TypeScript 与 Rust
+    检查通过。
+  - Commit：`4bbb828`。
+- [x] **P2.9 实现能力发现**
   - 跟踪 Provider 健康状态、系统权限、已安装 Coding Agent、浏览器就绪状态和可用 CLI 命令。
   - Commit 点：`feat(capability): add runtime capability discovery`
-- [ ] **P2.10 实现 `AgentRuntimeAdapter`**
+  - 证据：`packages/agent-worker/src/capabilities.ts` 探测平台、Playwright、Pi、
+    Claude Code、Codex 和 Lark CLI，并支持注入 Provider/Host 自定义探针；
+    特权权限明确由 Rust Host 提供，不由 Worker 自行推断。
+  - 验证：能力发现成功与探针失败隔离测试通过。
+  - Commit：`4bbb828`。
+- [x] **P2.10 实现 `AgentRuntimeAdapter`**
   - 封装 Pi Session 创建、Prompt、Steer、Follow-up、Abort、工具替换、
     Checkpoint 和事件订阅。
   - Commit 点：`feat(agent): add pi runtime adapter`
-- [ ] **P2.11 实现动态工具注入**
+  - 证据：`runtime.ts` 提供稳定产品接口；`pi-runtime.ts` 是唯一 Pi 适配层，
+    映射 Session 生命周期和事件，并将产品工具转换为 Pi 自定义工具。Pi 原生
+    `read/bash/edit/write` 保持为基线工具，但通过官方 Extension Hook 统一进入
+    Semi-OS 策略与回执边界；未分类 `bash` 保守按高风险处理。Checkpoint 保存并
+    恢复精确的 Pi JSONL Session 文件，不再只恢复产品序号。
+  - 验证：Pi SDK 真实导入成功；适配器方法、原生/自定义工具策略、异常回执、
+    持久化 Session 恢复及未注册工具拒绝测试通过。
+  - Commit：`4bbb828`。
+- [x] **P2.11 实现动态工具注入**
   - 根据工具目录、平台、权限、策略、工作区、运行健康状态和 Skill 要求构建当前有效工具集合。
   - Commit 点：`feat(agent): inject active tools dynamically`
-- [ ] **P2.12 添加 Fake Runtime 集成测试**
+  - 证据：`active-tools.ts` 用同一 Registry 快照构建并应用有效工具集合；Pi
+    会话仅切换启动时已注册的工具，新增工具定义必须重建会话，避免静默失效。
+  - 验证：集成测试证明无权限工具不会注入 Runtime。
+  - Commit：`4bbb828`。
+- [x] **P2.12 添加 Fake Runtime 集成测试**
   - 在不依赖外部 Provider 的情况下跑通确定性的 Prompt → Tool → Receipt 流程，
     作为第一个端到端运行时 Fixture。
   - Commit 点：`test(agent): add deterministic runtime fixture`
+  - 证据：`fake-runtime.ts` 与真实 Pi 共用 `AgentRuntimeAdapter`，并与 Pi
+    自定义工具共用 `tool-execution.ts` 的执行、验证和异常回执语义；集成测试
+    覆盖 Prompt → Tool → Verification → Receipt、已验证成功、异常后的
+    `failed/unknown` 回执和 Checkpoint 推进。
+  - 验证：Agent Worker 13 项测试全部通过；全仓库 TypeScript
+    typecheck/lint/test/build，以及 Rust fmt/check/test/clippy/build 均通过。
+  - Commit：待 review 后提交。
 
 ### 2D. 最小客户端壳
 
