@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@semi-os/protocol": "workspace:*"
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@semi-os/protocol": "workspace:*",
+    "@semi-os/shared": "workspace:*",
+    "@semi-os/tool-sdk": "workspace:*",
+    "typebox": "1.3.7"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

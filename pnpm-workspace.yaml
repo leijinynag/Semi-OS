@@ -4,4 +4,8 @@ packages:
 
 # Vite 依赖 esbuild 的平台二进制安装脚本；明确白名单可避免每台机器交互批准。
 allowBuilds:
+  # Pi 的可选 Provider 依赖会声明安装脚本；MVP 不使用其生成物，显式禁用，
+  # 避免安装过程要求交互审批。后续启用对应 Provider 时需重新验证并调整。
+  '@google/genai': false
   esbuild: true
+  protobufjs: false
