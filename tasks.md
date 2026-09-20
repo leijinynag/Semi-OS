@@ -288,7 +288,7 @@
     `failed/unknown` 回执和 Checkpoint 推进。
   - 验证：Agent Worker 13 项测试全部通过；全仓库 TypeScript
     typecheck/lint/test/build，以及 Rust fmt/check/test/clippy/build 均通过。
-  - Commit：待 review 后提交。
+  - Commit：`b2b8140 feat(ui): build client and assistant surfaces`
 
 ### 2D. 最小客户端壳
 
@@ -300,7 +300,7 @@
     向 Rust Host 提交助手窗口显隐意图。
   - 验证：Playwright 已验证档案与证据选择、待办勾选、写入确认及窄屏布局；
     客户端使用实时液态玻璃层和独立环境底图，而不是将原型截图作为界面。
-  - Commit：待 review 后提交。
+  - Commit：`b2b8140 feat(ui): build client and assistant surfaces`
 - [x] **P2.14 构建任务时间线**
   - 展示结构化里程碑、当前动作、等待原因、结果和证据链接，不解析助手文本。
   - Commit 点：`feat(client): add task timeline`
@@ -309,7 +309,7 @@
     里程碑和证据引用；页面不解析助手自然语言来推断任务状态。
   - 验证：Playwright 已验证任务切换、等待原因与窄屏时间线布局；
     TypeScript typecheck 和 Vite build 通过。
-  - Commit：待 review 后提交。
+  - Commit：`b2b8140 feat(ui): build client and assistant surfaces`
 - [x] **P2.15 构建桌面助手界面**
   - 添加临时助手窗口、麦克风入口、确认语句以及暂停、取消、确认操作。
   - Commit 点：`feat(assistant): add floating desktop surface`
