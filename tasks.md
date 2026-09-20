@@ -292,15 +292,45 @@
 
 ### 2D. 最小客户端壳
 
-- [ ] **P2.13 构建客户端导航**
+- [x] **P2.13 构建客户端导航**
   - 添加对话、任务、记忆、Skills 和设置页面，并使用类型化的占位数据。
   - Commit 点：`feat(client): add control center navigation`
-- [ ] **P2.14 构建任务时间线**
+  - 证据：`ClientSurface.tsx` 实现无导航的单一工作台，以档案时间轴、
+    会议文档、证据检查器和确认输入条组织当前任务；React 只维护预览交互并
+    向 Rust Host 提交助手窗口显隐意图。
+  - 验证：Playwright 已验证档案与证据选择、待办勾选、写入确认及窄屏布局；
+    客户端使用实时液态玻璃层和独立环境底图，而不是将原型截图作为界面。
+  - Commit：待 review 后提交。
+- [x] **P2.14 构建任务时间线**
   - 展示结构化里程碑、当前动作、等待原因、结果和证据链接，不解析助手文本。
   - Commit 点：`feat(client): add task timeline`
-- [ ] **P2.15 构建桌面助手界面**
+  - 证据：`TaskTimeline.tsx` 只消费 `TaskTimelineModel` 的结构化字段，
+    覆盖执行中、等待确认和已完成任务，以及当前动作、等待原因、结果、
+    里程碑和证据引用；页面不解析助手自然语言来推断任务状态。
+  - 验证：Playwright 已验证任务切换、等待原因与窄屏时间线布局；
+    TypeScript typecheck 和 Vite build 通过。
+  - Commit：待 review 后提交。
+- [x] **P2.15 构建桌面助手界面**
   - 添加临时助手窗口、麦克风入口、确认语句以及暂停、取消、确认操作。
   - Commit 点：`feat(assistant): add floating desktop surface`
+  - 证据：`AssistantSurface.tsx` 提供六种类型化预览状态；
+    `HaloScene.tsx` 使用 React Three Fiber 构建会响应指针与状态的粒子光环，
+    常态不显示麦克风或关闭按钮，仅在需要确认时出现操作层。
+  - 验证：助手窗口扩大为 720×520，Playwright 已确认 WebGL 画布可见、
+    聆听状态与确认状态可渲染，浏览器控制台无错误。
+  - 视觉迭代（2026-09-20）：`HaloScene.tsx` 与 `halo-shaders.ts` 改为共享
+    参数曲面的折叠光带、细丝和 9,200 个沿流线运动的粒子，替换独立旋转的
+    扁球；增加珠白、冰蓝、淡紫和香槟反射。指针在整个容器上连续采样，
+    有界阻尼跟随，移出/失焦归位；动画使用积分时间平滑改变速度，
+    支持减少动态效果与后台暂停。原有背景暂留，未接入真实语音振幅。
+  - 本轮验证：Playwright 在 720×520、390×650、1536×1024 下读取 WebGL
+    像素，确认非空、跨帧变化及主体未裁切；验证左右指针响应、移出归位、
+    减少动态效果下像素不变、六种预览状态，以及确认/暂不切换状态。
+    确认栏与字幕间隔 22px，无页面或 Shader 错误；保留 R3F 内部
+    `THREE.Clock` 弃用警告。typecheck、lint、build、diff 检查通过；
+    desktop test 脚本当前没有单元测试，不能据此声称单测覆盖。
+    仍需原生 WKWebView 的 GPU 性能与材质观感验收，未宣称与原型完全一致。
+  - Commit：待 review 后提交。
 
 ## 阶段 3：语音对话闭环
 
