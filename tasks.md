@@ -336,36 +336,64 @@
 
 依赖：P2.4、P2.5、P2.10、P2.13 至 P2.15。
 
-- [ ] **P3.1 定义 STT Provider 接口**
+- [x] **P3.1 定义 STT Provider 接口**
   - 统一中间转写、最终转写、静音、错误和取消事件。
   - Commit 点：`feat(voice): define stt provider contract`
-- [ ] **P3.2 添加云端 STT Adapter**
+- [x] **P3.2 添加云端 STT Adapter**
   - 实现流式语音转文字，并处理 Provider 配置、超时和取消。
   - Commit 点：`feat(voice): add cloud stt adapter`
-- [ ] **P3.3 定义 TTS Provider 接口**
+- [x] **P3.3 定义 TTS Provider 接口**
   - 统一句子音频分片、首段音频就绪、完成、错误和取消事件。
   - Commit 点：`feat(voice): define tts provider contract`
-- [ ] **P3.4 添加云端 TTS Adapter**
+- [x] **P3.4 添加云端 TTS Adapter**
   - 实现按句缓冲的流式音频播放和生成任务取消。
   - Commit 点：`feat(voice): add cloud tts adapter`
-- [ ] **P3.5 添加云端 LLM 配置**
+- [x] **P3.5 添加云端 LLM 配置**
   - 通过 Pi/Provider 配置使用云端 LLM，禁止 React 接触 Provider 凭证。
   - Commit 点：`feat(agent): configure cloud llm provider`
-- [ ] **P3.6 实现 Push-to-talk**
+- [x] **P3.6 实现 Push-to-talk**
   - 注册全局快捷键，按住时采集音频，并提交第一句完整语音。
   - Commit 点：`feat(voice): add push to talk`
-- [ ] **P3.7 实现确定性语音确认**
+- [x] **P3.7 实现确定性语音确认**
   - 在较长的模型处理开始前先播报快速确认，但不能声称任务已经完成。
   - Commit 点：`feat(voice): add immediate acknowledgement`
-- [ ] **P3.8 实现首句 TTS**
+- [x] **P3.8 实现首句 TTS**
   - 缓冲到第一句完整回复后立即播放，后续句子排队播放。
   - Commit 点：`feat(voice): stream first sentence`
-- [ ] **P3.9 实现暂停、取消、Steer 和 Follow-up**
+- [x] **P3.9 实现暂停、取消、Steer 和 Follow-up**
   - 先停止语音，保留 Pi 上下文，在正确的续接位置注入新指令，并发布完整生命周期事件。
   - Commit 点：`feat(voice): support interruption and steering`
-- [ ] **P3.10 语音闭环验收**
+- [x] **P3.10 语音闭环验收**
   - 使用录音或 Fake Audio Fixture 验证按住说话、快速确认、普通对话、中途打断和同一会话继续执行。
   - Commit 点：`test(voice): verify conversation loop`
+  - 实现证据（2026-09-20）：
+    - `packages/protocol/src/voice.ts` 定义并校验录音、提交、中断和语音事件协议；
+      `crates/host/src/supervisor.rs` 保持 Worker stdin 长连接，并在启动/重启期间
+      有序缓存请求。
+    - `packages/agent-worker/src/voice/` 提供 STT/TTS 稳定接口、DashScope AOQ
+      WebSocket Adapter、超时/取消、句子缓冲、确定性确认语和 generation gate；
+      `worker-service.ts` 把录音提交到同一个 `PiAgentRuntime` Session。
+    - `apps/desktop/src/voice/` 完成 16 kHz 单声道 PCM16 分片录音、有序发送、流式播放、
+      快速点按竞态处理和打断先停播；Rust Host 注册
+      `CommandOrControl+Shift+Space`，并通过 Tauri 事件驱动桌面助手。
+    - macOS `Info.plist` 已声明麦克风用途；云端 LLM 通过 Pi 官方模型目录选择，
+      DashScope Key 从根目录 `.env` 进入 Worker，不进入 React 或协议。
+  - 验证证据：
+    - Agent Worker 35 个测试通过，包含云端 Adapter 归一化/取消/脱敏、
+      Pi 模型注入、Worker 中断、初始化期间取消、迟到 Runtime 事件隔离，
+      以及贯穿 Worker → Fake STT → 同一 Runtime Session → 确认语 →
+      首句 TTS → 完成事件的闭环测试。
+    - Desktop 4 个测试通过，验证 PCM16 转换/重采样、按句排队、
+      上一句播放结束后切换，以及用户中断时清空待播队列。
+    - Protocol 6 个测试、Rust workspace 20 个测试通过；全 workspace
+      typecheck、lint、build、`cargo fmt`、Clippy `-D warnings` 和
+      `git diff --check` 通过。
+    - 使用 `SEMI_OS_VOICE_FIXTURE_TRANSCRIPT` 启动原生 Tauri 壳层，
+      `semi-os-desktop` 与 Node Agent Worker 均持续存活，随后已主动关闭。
+    - 尚未使用真实云端凭证验证供应商网络、计费、音色和延迟，也未把
+      macOS 麦克风权限弹窗及真实录音质量标记为已验证；这些需要 review 后
+      在本机 Provider 配置下补充端到端体验验收。
+  - Commit：`ca3d187`（阶段 3 作为一个可独立验收的完整语音闭环提交）。
 
 ## 阶段 4A：资料调研工作流
 
