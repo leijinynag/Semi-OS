@@ -4,10 +4,12 @@ import {
   PROTOCOL_VERSION,
   ProtocolValidationError,
   type Envelope,
+  type RequestEnvelope,
   type RequestId,
 } from "@semi-os/protocol";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import { WorkerService } from "./worker-service.ts";
 
 export const workerName = "semi-os-agent-worker";
 
@@ -45,7 +47,7 @@ export function handleWorkerLine(line: string, pid = process.pid): Envelope {
   };
 }
 
-function protocolError(error: unknown): Envelope {
+function protocolError(error: unknown, requestId?: RequestId): Envelope {
   const message =
     error instanceof ProtocolValidationError
       ? error.message
@@ -53,7 +55,7 @@ function protocolError(error: unknown): Envelope {
   return {
     direction: "error",
     protocolVersion: PROTOCOL_VERSION,
-    requestId: "req_worker_protocol_error" as RequestId,
+    requestId: requestId ?? ("req_worker_protocol_error" as RequestId),
     kind: "protocol.error",
     payload: {
       code:
@@ -67,19 +69,36 @@ function protocolError(error: unknown): Envelope {
 }
 
 export function runWorker(): void {
+  const write = (envelope: Envelope) => {
+    process.stdout.write(encodeJsonl(envelope));
+  };
+  const service = new WorkerService({ emit: write });
   const lines = createInterface({
     input: process.stdin,
     crlfDelay: Infinity,
   });
+  let requests = Promise.resolve();
 
   lines.on("line", (line) => {
-    try {
-      process.stdout.write(encodeJsonl(handleWorkerLine(line)));
-    } catch (error) {
-      process.stderr.write(`[agent-worker] ${String(error)}\n`);
-      process.stdout.write(encodeJsonl(protocolError(error)));
-    }
+    requests = requests.then(async () => {
+      let requestId: RequestId | undefined;
+      try {
+        const request = decodeJsonl(line);
+        requestId = request.requestId;
+        if (request.direction !== "request") {
+          throw new ProtocolValidationError(
+            "Worker only accepts request envelopes",
+            "invalid_request",
+          );
+        }
+        write(await service.handle(request as RequestEnvelope));
+      } catch (error) {
+        process.stderr.write(`[agent-worker] ${String(error)}\n`);
+        write(protocolError(error, requestId));
+      }
+    });
   });
+  lines.once("close", () => void service.dispose());
 }
 
 const entrypoint = process.argv[1]

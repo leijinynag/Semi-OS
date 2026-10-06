@@ -2749,6 +2749,7 @@ name = "semi-os-desktop"
 version = "0.1.0"
 dependencies = [
  "semi-os-host",
+ "semi-os-protocol",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",

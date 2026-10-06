@@ -12,6 +12,7 @@ import {
   type ResourceLoader,
   type ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai/compat";
 import type {
   PolicyDecision,
   ToolRiskLevel,
@@ -78,6 +79,7 @@ interface CreatePiResourceLoaderInput {
 export interface PiAgentRuntimeOptions {
   now?: () => number;
   createSession?: typeof createAgentSession;
+  model?: Model<any>;
   baseToolNames?: readonly string[];
   sessionDir?: string;
   createSessionManager?: (
@@ -318,6 +320,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
   // 以下依赖均保持为适配器私有成员，Pi 类型不会进入产品 Runtime 接口。
   readonly #now: () => number;
   readonly #createSession: typeof createAgentSession;
+  readonly #model?: Model<any>;
   readonly #baseToolNames: readonly string[];
   readonly #sessionDir?: string;
   readonly #createSessionManager: (
@@ -361,6 +364,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     super();
     this.#now = options.now ?? Date.now;
     this.#createSession = options.createSession ?? createAgentSession;
+    this.#model = options.model;
     this.#baseToolNames = options.baseToolNames ?? [
       "read",
       "bash",
@@ -420,6 +424,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     });
     const { session } = await this.#createSession({
       cwd: input.cwd,
+      model: this.#model,
       customTools,
       // tools 决定 Session 初始可见集合；自定义工具仍需先通过 customTools 注册。
       tools: [

@@ -13,6 +13,7 @@ import type {
   ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai/compat";
 import type {
   ToolDefinition,
   ToolExecutionReceipt,
@@ -246,6 +247,34 @@ test("maps Pi session events and product tools through the adapter boundary", as
     true,
   );
   assert.equal((await runtime.checkpoint()).sequence, 1);
+});
+
+test("passes the configured cloud model into the Pi session", async () => {
+  const fixture = createSessionFixture();
+  const model = {
+    provider: "fixture-provider",
+    id: "fixture-model",
+  } as Model<any>;
+  let receivedModel: Model<any> | undefined;
+  const runtime = new PiAgentRuntime({
+    model,
+    createSession: (async (
+      options: Parameters<typeof createAgentSession>[0],
+    ) => {
+      receivedModel = options?.model;
+      return { session: fixture.session, extensionsResult: { extensions: [] } };
+    }) as never,
+    createSessionManager: () => sessionManagerFixture(),
+    createResourceLoader: () => ({} as ResourceLoader),
+  });
+
+  await runtime.startSession({
+    sessionId: "session_product",
+    cwd: "/tmp/semi-os",
+    tools: [],
+  });
+
+  assert.equal(receivedModel, model);
 });
 
 test("rejects tools that were not registered when the Pi session started", async () => {

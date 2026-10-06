@@ -3,6 +3,7 @@ use semi_os_protocol::{validate_envelope, Envelope, EnvelopeContext, RequestId, 
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
+    collections::VecDeque,
     io::{self, BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
@@ -104,25 +105,26 @@ impl WorkerSupervisor {
 
     /// 在专用线程中启动监督循环，避免阻塞 Tauri 事件循环。
     pub fn start(self) -> WorkerSupervisorHandle {
-        let (stop_tx, stop_rx) = mpsc::channel();
-        let join_handle = thread::spawn(move || self.run(stop_rx));
+        let (command_tx, command_rx) = mpsc::channel();
+        let join_handle = thread::spawn(move || self.run(command_rx));
         WorkerSupervisorHandle {
-            stop_tx: Some(stop_tx),
+            command_tx: Some(command_tx),
             join_handle: Some(join_handle),
         }
     }
 
-    fn run(self, stop_rx: Receiver<()>) {
+    fn run(self, command_rx: Receiver<SupervisorCommand>) {
         let mut restart_count = 0;
+        let mut pending = VecDeque::new();
 
         loop {
-            if stop_requested(&stop_rx) {
+            if collect_commands(&command_rx, &mut pending) {
                 self.publish(WorkerEvent::Stopped);
                 return;
             }
 
             self.publish(WorkerEvent::Starting { restart_count });
-            let outcome = match self.spawn_and_monitor(&stop_rx, restart_count) {
+            let outcome = match self.spawn_and_monitor(&command_rx, &mut pending, restart_count) {
                 Ok(outcome) => outcome,
                 Err(error) => {
                     self.record(
@@ -183,7 +185,7 @@ impl WorkerSupervisor {
                 restart_count,
                 json!({ "delayMs": delay.as_millis() }),
             );
-            if wait_or_stop(&stop_rx, delay) {
+            if wait_or_stop(&command_rx, &mut pending, delay) {
                 self.publish(WorkerEvent::Stopped);
                 return;
             }
@@ -192,7 +194,8 @@ impl WorkerSupervisor {
 
     fn spawn_and_monitor(
         &self,
-        stop_rx: &Receiver<()>,
+        command_rx: &Receiver<SupervisorCommand>,
+        pending: &mut VecDeque<Envelope>,
         restart_count: u32,
     ) -> io::Result<MonitorOutcome> {
         let mut child = Command::new(&self.command.program)
@@ -215,9 +218,7 @@ impl WorkerSupervisor {
             .stdin
             .take()
             .ok_or_else(|| io::Error::other("worker stdin unavailable"))?;
-        serde_json::to_writer(&mut stdin, &health_request)?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()?;
+        write_envelope(&mut stdin, &health_request)?;
 
         let stdout = child
             .stdout
@@ -227,11 +228,19 @@ impl WorkerSupervisor {
         let stdout_thread = spawn_line_reader(stdout, line_tx);
         let stderr_thread = child.stderr.take().map(spawn_stderr_drain);
 
-        let handshake = self.wait_for_health(&mut child, stop_rx, &line_rx, &request_id);
+        let handshake =
+            self.wait_for_health(&mut child, command_rx, pending, &line_rx, &request_id);
         let outcome = match handshake {
             Ok(HandshakeOutcome::Ready(pid)) => {
                 self.publish(WorkerEvent::Ready { pid, restart_count });
-                monitor_ready_child(&mut child, stop_rx, &line_rx, self.message_handler.as_ref())?
+                monitor_ready_child(
+                    &mut child,
+                    &mut stdin,
+                    command_rx,
+                    pending,
+                    &line_rx,
+                    self.message_handler.as_ref(),
+                )?
             }
             Ok(HandshakeOutcome::Stopped) => MonitorOutcome::Stopped,
             Err(message) => {
@@ -251,13 +260,14 @@ impl WorkerSupervisor {
     fn wait_for_health(
         &self,
         child: &mut Child,
-        stop_rx: &Receiver<()>,
+        command_rx: &Receiver<SupervisorCommand>,
+        pending: &mut VecDeque<Envelope>,
         line_rx: &Receiver<String>,
         request_id: &RequestId,
     ) -> Result<HandshakeOutcome, String> {
         let deadline = Instant::now() + self.restart_policy.health_timeout;
         loop {
-            if stop_requested(stop_rx) {
+            if collect_commands(command_rx, pending) {
                 terminate_child(child);
                 return Ok(HandshakeOutcome::Stopped);
             }
@@ -301,15 +311,31 @@ impl WorkerSupervisor {
 }
 
 pub struct WorkerSupervisorHandle {
-    stop_tx: Option<Sender<()>>,
+    command_tx: Option<Sender<SupervisorCommand>>,
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl WorkerSupervisorHandle {
+    /// 把已校验的协议请求交给监督线程串行写入 Worker stdin。
+    ///
+    /// 调用方不直接持有 ChildStdin，避免 UI 命令与健康检查、重启恢复并发写坏
+    /// JSONL 边界。Worker 尚未 ready 或正在重启时，请求会按原顺序暂存。
+    pub fn send(&self, envelope: Envelope) -> Result<(), String> {
+        validate_envelope(&envelope).map_err(|error| error.message)?;
+        if !matches!(envelope, Envelope::Request { .. }) {
+            return Err("only request envelopes can be sent to the worker".to_owned());
+        }
+        self.command_tx
+            .as_ref()
+            .ok_or_else(|| "worker supervisor is stopped".to_owned())?
+            .send(SupervisorCommand::Send(Box::new(envelope)))
+            .map_err(|_| "worker supervisor command channel is closed".to_owned())
+    }
+
     /// 幂等停止：通知监督线程、终止当前子进程并等待清理完成。
     pub fn stop(&mut self) {
-        if let Some(stop_tx) = self.stop_tx.take() {
-            let _ = stop_tx.send(());
+        if let Some(command_tx) = self.command_tx.take() {
+            let _ = command_tx.send(SupervisorCommand::Stop);
         }
         if let Some(join_handle) = self.join_handle.take() {
             let _ = join_handle.join();
@@ -327,6 +353,12 @@ enum MonitorOutcome {
     Stopped,
     Exited(Option<i32>),
     ProtocolError(String),
+}
+
+enum SupervisorCommand {
+    Stop,
+    // Envelope 的协议联合体较大，装箱后控制命令在通道中保持紧凑。
+    Send(Box<Envelope>),
 }
 
 enum HandshakeOutcome {
@@ -372,14 +404,19 @@ fn parse_health_ready(
 /// 进入上层前都经过 JSON 反序列化与版本校验。
 fn monitor_ready_child(
     child: &mut Child,
-    stop_rx: &Receiver<()>,
+    stdin: &mut impl Write,
+    command_rx: &Receiver<SupervisorCommand>,
+    pending: &mut VecDeque<Envelope>,
     line_rx: &Receiver<String>,
     message_handler: &dyn Fn(Envelope),
 ) -> io::Result<MonitorOutcome> {
     loop {
-        if stop_requested(stop_rx) {
+        if collect_commands(command_rx, pending) {
             terminate_child(child);
             return Ok(MonitorOutcome::Stopped);
+        }
+        while let Some(envelope) = pending.pop_front() {
+            write_envelope(stdin, &envelope)?;
         }
         if let Some(status) = child.try_wait()? {
             return Ok(MonitorOutcome::Exited(status.code()));
@@ -463,18 +500,42 @@ fn terminate_child(child: &mut Child) {
     }
 }
 
-fn stop_requested(stop_rx: &Receiver<()>) -> bool {
-    match stop_rx.try_recv() {
-        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => true,
-        Err(mpsc::TryRecvError::Empty) => false,
+fn collect_commands(
+    command_rx: &Receiver<SupervisorCommand>,
+    pending: &mut VecDeque<Envelope>,
+) -> bool {
+    loop {
+        match command_rx.try_recv() {
+            Ok(SupervisorCommand::Stop) | Err(mpsc::TryRecvError::Disconnected) => return true,
+            Ok(SupervisorCommand::Send(envelope)) => pending.push_back(*envelope),
+            Err(mpsc::TryRecvError::Empty) => return false,
+        }
     }
 }
 
-fn wait_or_stop(stop_rx: &Receiver<()>, duration: Duration) -> bool {
-    match stop_rx.recv_timeout(duration) {
-        Ok(()) | Err(RecvTimeoutError::Disconnected) => true,
-        Err(RecvTimeoutError::Timeout) => false,
+fn wait_or_stop(
+    command_rx: &Receiver<SupervisorCommand>,
+    pending: &mut VecDeque<Envelope>,
+    duration: Duration,
+) -> bool {
+    let deadline = Instant::now() + duration;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match command_rx.recv_timeout(remaining) {
+            Ok(SupervisorCommand::Stop) | Err(RecvTimeoutError::Disconnected) => return true,
+            Ok(SupervisorCommand::Send(envelope)) => pending.push_back(*envelope),
+            Err(RecvTimeoutError::Timeout) => return false,
+        }
     }
+}
+
+fn write_envelope(writer: &mut impl Write, envelope: &Envelope) -> io::Result<()> {
+    serde_json::to_writer(&mut *writer, envelope)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
 }
 
 fn backoff_delay(policy: RestartPolicy, restart_count: u32) -> Duration {
@@ -642,6 +703,84 @@ mod tests {
             message,
             Envelope::Event { kind, .. } if kind == "worker.progress"
         )));
+        let _ = fs::remove_file(diagnostics_path);
+    }
+
+    #[test]
+    fn sends_requests_after_ready_and_receives_correlated_events() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/contract/fixtures/echo-worker.mjs");
+        let diagnostics_path = std::env::temp_dir().join(format!(
+            "semi-os-echo-worker-{}-{}.jsonl",
+            process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let captured_messages = Arc::clone(&messages);
+        let supervisor = WorkerSupervisor::new(
+            WorkerCommand {
+                program: "node".to_owned(),
+                args: vec![fixture.to_string_lossy().into_owned()],
+                current_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            },
+            RestartPolicy {
+                max_restarts: 0,
+                initial_backoff: Duration::from_millis(10),
+                max_backoff: Duration::from_millis(10),
+                health_timeout: Duration::from_secs(1),
+            },
+            Arc::new(DiagnosticStore::new(&diagnostics_path)),
+            Arc::new(|_| {}),
+            Arc::new(move |message| {
+                captured_messages
+                    .lock()
+                    .expect("message list lock should work")
+                    .push(message);
+            }),
+        );
+        let mut handle = supervisor.start();
+        handle
+            .send(Envelope::Request {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: RequestId("req_fixture_echo".to_owned()),
+                kind: "fixture.request".to_owned(),
+                payload: json!({ "value": 7 }),
+                context: empty_context(),
+            })
+            .expect("request should be queued");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if messages
+                .lock()
+                .expect("message list lock should work")
+                .iter()
+                .any(|message| {
+                    matches!(
+                        message,
+                        Envelope::Event { kind, payload, .. }
+                            if kind == "fixture.echo" && payload == &json!({ "value": 7 })
+                    )
+                })
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        handle.stop();
+
+        assert!(messages
+            .lock()
+            .expect("message list lock should work")
+            .iter()
+            .any(|message| matches!(
+                message,
+                Envelope::Event { request_id, kind, .. }
+                    if request_id.0 == "req_fixture_echo" && kind == "fixture.echo"
+            )));
         let _ = fs::remove_file(diagnostics_path);
     }
 }

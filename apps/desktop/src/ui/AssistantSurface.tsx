@@ -1,5 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
+import {
+  VoiceClient,
+  type VoiceClientSnapshot,
+} from "../voice/voice-client";
 import type { AssistantMode, AssistantViewState } from "./client-model";
 import { HaloScene } from "./HaloScene";
 
@@ -49,22 +53,60 @@ function resolveInitialMode(): AssistantMode {
 
 export function AssistantSurface() {
   const [mode, setMode] = useState<AssistantMode>(resolveInitialMode);
+  const [voice, setVoice] = useState<VoiceClientSnapshot>({
+    state: "idle",
+    transcript: "",
+    assistantText: "",
+  });
   const state = assistantStates[mode];
   const particleCount = useMemo(() => Array.from({ length: 18 }), []);
 
   useEffect(() => {
+    const client = new VoiceClient();
+    const unsubscribe = client.subscribe((snapshot) => {
+      setVoice(snapshot);
+      if (snapshot.state === "listening") {
+        setMode("listening");
+      } else if (
+        snapshot.state === "transcribing" ||
+        snapshot.state === "thinking" ||
+        snapshot.state === "speaking"
+      ) {
+        setMode("working");
+      } else if (snapshot.state === "interrupted") {
+        setMode("paused");
+      }
+    });
+    const connected = client.connect().catch((error: unknown) => {
+      setVoice((snapshot) => ({
+        ...snapshot,
+        state: "error",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    });
     const pressed = listen("host://push-to-talk-pressed", () => {
       setMode("listening");
+      void connected.then(() => client.start());
     }).catch(() => undefined);
     const released = listen("host://push-to-talk-released", () => {
       setMode("working");
+      void client.stop();
     }).catch(() => undefined);
 
     return () => {
+      unsubscribe();
+      client.dispose();
       void pressed.then((unlisten) => unlisten?.());
       void released.then((unlisten) => unlisten?.());
     };
   }, []);
+
+  const liveTitle =
+    voice.state === "listening"
+      ? "我在听"
+      : voice.assistantText || state.title;
+  const liveDetail =
+    voice.error || voice.transcript || state.detail;
 
   return (
     <main
@@ -95,9 +137,9 @@ export function AssistantSurface() {
       <section className="assistant-copy" aria-live="polite">
         <div className="assistant-core-copy">
           <span className="assistant-status">{state.status}</span>
-          <h1>{state.title}</h1>
+          <h1>{liveTitle}</h1>
         </div>
-        <p>{state.detail}</p>
+        <p>{liveDetail}</p>
       </section>
 
       {state.confirmation ? (

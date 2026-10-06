@@ -2,6 +2,7 @@ use semi_os_host::{
     DiagnosticStore, HostLifecycle, HostLifecycleSnapshot, RestartPolicy, WorkerCommand,
     WorkerEvent, WorkerSupervisor, WorkerSupervisorHandle,
 };
+use semi_os_protocol::{validate_envelope, Envelope};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -80,6 +81,25 @@ fn get_assistant_visibility(app: tauri::AppHandle) -> Result<bool, String> {
     assistant_visibility(&app)
 }
 
+/// React 只能提交版本化请求；Worker stdin 始终由 Supervisor 串行持有和写入。
+#[tauri::command]
+fn send_worker_request(
+    state: State<'_, Arc<DesktopState>>,
+    envelope: Envelope,
+) -> Result<(), String> {
+    validate_envelope(&envelope).map_err(|error| error.message)?;
+    if !matches!(envelope, Envelope::Request { .. }) {
+        return Err("only request envelopes can be sent to the worker".to_owned());
+    }
+    state
+        .worker
+        .lock()
+        .map_err(|_| "worker supervisor lock is unavailable".to_owned())?
+        .as_ref()
+        .ok_or_else(|| "worker supervisor is unavailable".to_owned())?
+        .send(envelope)
+}
+
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
@@ -95,11 +115,15 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
         .map_err(|error| error.to_string())?
         .join("diagnostics/worker.jsonl");
     let app_handle = app.clone();
+    let message_app_handle = app.clone();
     let supervisor = WorkerSupervisor::new(
         WorkerCommand {
             program: "node".to_owned(),
             args: vec![
                 "--experimental-strip-types".to_owned(),
+                // 密钥由 Node 原生 dotenv 加载，避免经过 React、Tauri IPC 或
+                // 命令行参数；.env 已被 Git 忽略，仅提交 .env.example。
+                "--env-file-if-exists=.env".to_owned(),
                 "packages/agent-worker/src/index.ts".to_owned(),
             ],
             current_dir: repository_root,
@@ -110,9 +134,10 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
             // UI 只接收 WorkerEvent 中经过约束的字段，不转发 stderr 或环境变量。
             let _ = app_handle.emit("host://worker-event", event);
         }),
-        Arc::new(|_message| {
-            // 1C 先保证长连接消息被持续消费和校验；后续 Task Runtime 会在这里
-            // 按 requestId 分发响应，并把领域事件写入持久化事件流。
+        Arc::new(move |message| {
+            // 所有消息已经在 Supervisor 中完成版本和 Envelope 校验；UI 仍需按
+            // kind 解析领域载荷，不能把任意 Worker JSON 当作可信 DOM 内容。
+            let _ = message_app_handle.emit("host://worker-message", message);
         }),
     );
     Ok(supervisor.start())
@@ -158,7 +183,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_host_lifecycle,
             get_assistant_visibility,
-            set_assistant_visible
+            set_assistant_visible,
+            send_worker_request
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

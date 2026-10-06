@@ -9,7 +9,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "build": "tsc -b && vite build",
-    "test": "node --test",
+    "test": "node --experimental-strip-types --test src/**/*.test.ts",
     "lint": "tsc -b --pretty false",
     "format": "tsc -b --pretty false",
     "typecheck": "tsc -b --pretty false"
