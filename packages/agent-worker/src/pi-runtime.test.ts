@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -23,6 +23,7 @@ import {
   type AgentCheckpoint,
 } from "./runtime.ts";
 import { PiAgentRuntime } from "./pi-runtime.ts";
+import { VOICE_SYSTEM_PROMPT } from "./voice/system-prompt.ts";
 
 interface SessionFixture {
   session: AgentSession;
@@ -59,7 +60,11 @@ interface ExtensionFixture {
 }
 
 function createExtensionFixture(): ExtensionFixture {
-  return { resourceLoader: {} as ResourceLoader };
+  return { resourceLoader: emptyResources() };
+}
+
+function emptyResources(): ResourceLoader {
+  return { async reload() {} } as ResourceLoader;
 }
 
 async function loadExtension(
@@ -181,7 +186,7 @@ test("maps Pi session events and product tools through the adapter boundary", as
       return { session: fixture.session, extensionsResult: { extensions: [] } };
     }) as never,
     createSessionManager: () => sessionManagerFixture(),
-    createResourceLoader: () => ({} as ResourceLoader),
+    createResourceLoader: emptyResources,
   });
   const events: unknown[] = [];
   runtime.subscribe((event) => events.push(event));
@@ -216,6 +221,16 @@ test("maps Pi session events and product tools through the adapter boundary", as
     {} as never,
   );
   fixture.emit({ type: "agent_end", messages: [], willRetry: false });
+  const terminalCount = events.length;
+  fixture.emit({ type: "agent_end", messages: [], willRetry: true });
+  assert.equal(events.length, terminalCount, "Pi retry must not complete the product turn");
+  for (const stopReason of ["aborted", "error"] as const) {
+    fixture.emit({
+      type: "agent_end", willRetry: false,
+      messages: [{ role: "assistant", stopReason, content: [] } as never],
+    });
+    assert.equal((events.at(-1) as { kind: string }).kind, "runtime.error");
+  }
 
   assert.equal(handle.runtimeSessionRef, "pi_session_fixture");
   assert.deepEqual(fixture.prompts, ["open example"]);
@@ -265,7 +280,7 @@ test("passes the configured cloud model into the Pi session", async () => {
       return { session: fixture.session, extensionsResult: { extensions: [] } };
     }) as never,
     createSessionManager: () => sessionManagerFixture(),
-    createResourceLoader: () => ({} as ResourceLoader),
+    createResourceLoader: emptyResources,
   });
 
   await runtime.startSession({
@@ -285,7 +300,7 @@ test("rejects tools that were not registered when the Pi session started", async
       extensionsResult: { extensions: [] },
     })) as never,
     createSessionManager: () => sessionManagerFixture(),
-    createResourceLoader: () => ({} as ResourceLoader),
+    createResourceLoader: emptyResources,
   });
   await runtime.startSession({
     sessionId: "session_product",
@@ -310,7 +325,7 @@ test("requires an explicit policy approval before a high-risk tool executes", as
       return { session: fixture.session, extensionsResult: { extensions: [] } };
     }) as never,
     createSessionManager: () => sessionManagerFixture(),
-    createResourceLoader: () => ({} as ResourceLoader),
+    createResourceLoader: emptyResources,
   });
   await runtime.startSession({
     sessionId: "session_product",
@@ -347,7 +362,7 @@ test("publishes terminal receipts when custom tool stages throw", async () => {
       return { session: fixture.session, extensionsResult: { extensions: [] } };
     }) as never,
     createSessionManager: () => sessionManagerFixture(),
-    createResourceLoader: () => ({} as ResourceLoader),
+    createResourceLoader: emptyResources,
   });
   const receipts: ToolExecutionReceipt[] = [];
   runtime.subscribe((event) => {
@@ -491,6 +506,49 @@ test("applies policy and emits receipts for Pi native tools", async () => {
   );
 });
 
+test("records native authorization failures and resumes paused sessions through prompt", async () => {
+  const fixture = createSessionFixture();
+  const extensionFixture = createExtensionFixture();
+  const receipts: ToolExecutionReceipt[] = [];
+  let deny = true;
+  const runtime = new PiAgentRuntime({
+    createSession: (async () => ({
+      session: fixture.session,
+      extensionsResult: { extensions: [] },
+    })) as never,
+    createSessionManager: () => sessionManagerFixture(),
+    createResourceLoader: ({ extension }) => {
+      const factory = typeof extension === "function" ? extension : extension.factory;
+      void loadExtension(extensionFixture, factory);
+      return extensionFixture.resourceLoader;
+    },
+    resolvePolicyDecision: async () => {
+      if (deny) throw new Error("Host unavailable");
+      return "auto";
+    },
+  });
+  runtime.subscribe((event) => {
+    if (event.kind === "tool.completed") receipts.push(event.receipt);
+  });
+  await runtime.startSession({ sessionId: "session_resume", cwd: "/tmp", tools: [] });
+  await runtime.prompt({ taskId: "task_resume", text: "first" });
+  const call = (id: string) => extensionFixture.toolCall?.({
+    type: "tool_call", toolCallId: id, toolName: "read", input: { path: "README.md" },
+  });
+  assert.equal((await call("denied"))?.block, true);
+  deny = false;
+  await runtime.pause("task_resume");
+  assert.equal((await call("cancelled"))?.block, true);
+  await runtime.steer({ taskId: "task_resume", text: "resume" });
+  assert.equal(await call("resumed"), undefined);
+  await runtime.followUp({ taskId: "task_resume", text: "next" });
+  assert.deepEqual(fixture.prompts, ["first", "resume", "next"]);
+  assert.deepEqual(receipts.map((receipt) => [receipt.status, receipt.policyDecision]), [
+    ["failed", "rejected"], ["failed", "rejected"],
+  ]);
+  await runtime.dispose();
+});
+
 test("verifies Pi native writes against the exact file postcondition", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "semi-os-pi-native-"));
   try {
@@ -559,7 +617,7 @@ test("restores the persisted Pi session referenced by a checkpoint", async () =>
         String(checkpoint?.data.runtimeSessionFile),
       );
     },
-    createResourceLoader: () => ({} as ResourceLoader),
+    createResourceLoader: emptyResources,
   });
   const checkpoint: AgentCheckpoint = {
     sessionId: "session_product",
@@ -583,4 +641,41 @@ test("restores the persisted Pi session referenced by a checkpoint", async () =>
     "/tmp/semi-os/restored.jsonl",
   );
   assert.equal((await runtime.checkpoint()).sequence, 7);
+});
+
+test("official ResourceLoader replaces product identity and loads only built-in resources", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "semi-os-product-context-"));
+  const fixture = createSessionFixture();
+  let loader!: ResourceLoader;
+  try {
+    await mkdir(join(cwd, ".pi", "extensions"), { recursive: true });
+    await mkdir(join(cwd, ".pi", "skills", "untrusted"), { recursive: true });
+    await writeFile(join(cwd, "AGENTS.md"), "DEVELOPMENT_CONTEXT_MUST_NOT_LOAD");
+    await writeFile(join(cwd, ".pi", "SYSTEM.md"), "DEVELOPMENT_SYSTEM_MUST_NOT_LOAD");
+    await writeFile(join(cwd, ".pi", "APPEND_SYSTEM.md"), "APPEND_MUST_NOT_LOAD");
+    await writeFile(join(cwd, ".pi", "extensions", "untrusted.ts"), 'throw new Error("must not execute");');
+    await writeFile(join(cwd, ".pi", "skills", "untrusted", "SKILL.md"), "---\nname: untrusted\ndescription: forbidden\n---\nForbidden");
+    const skills = new URL("../../skills/research", import.meta.url).pathname;
+    const runtime = new PiAgentRuntime({
+      systemPrompt: VOICE_SYSTEM_PROMPT,
+      isolatedResources: true,
+      additionalSkillPaths: [skills],
+      createSession: (async (options) => {
+        loader = options!.resourceLoader!;
+        assert.equal(loader.getSystemPrompt(), VOICE_SYSTEM_PROMPT, "must be loaded before creating the session");
+        return { session: fixture.session, extensionsResult: loader.getExtensions() };
+      }) as typeof createAgentSession,
+      createSessionManager: () => sessionManagerFixture(),
+    });
+    await runtime.startSession({ sessionId: "session_product", cwd, tools: [] });
+    assert.deepEqual(loader.getAgentsFiles().agentsFiles, []);
+    assert.deepEqual(loader.getAppendSystemPrompt(), []);
+    assert.deepEqual(loader.getPrompts().prompts, []);
+    assert.deepEqual(loader.getSkills().skills.map((skill) => skill.name), ["research"]);
+    assert.equal(loader.getExtensions().extensions.length, 1, "Host policy extension is retained");
+    assert.deepEqual(loader.getExtensions().errors, []);
+    await runtime.prompt({ taskId: "task_1", text: "你好" });
+    assert.deepEqual(fixture.prompts, ["你好"], "no system protocol appended to user messages");
+    await runtime.dispose();
+  } finally { await rm(cwd, { recursive: true, force: true }); }
 });

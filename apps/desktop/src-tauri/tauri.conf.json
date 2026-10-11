@@ -33,6 +33,8 @@
         "resizable": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
+        "focus": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "center": true,
@@ -40,7 +42,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; media-src 'self' blob:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; media-src 'self' blob:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {

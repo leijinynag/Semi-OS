@@ -1,11 +1,28 @@
 use crate::{StorageError, StorageResult};
 use rusqlite::{params, Connection, TransactionBehavior};
 
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    1,
-    "core task runtime",
-    include_str!("../migrations/0001_core.sql"),
-)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        1,
+        "core task runtime",
+        include_str!("../migrations/0001_core.sql"),
+    ),
+    (
+        2,
+        "research evidence",
+        include_str!("../migrations/0002_research.sql"),
+    ),
+    (
+        3,
+        "voice conversations",
+        include_str!("../migrations/0003_conversations.sql"),
+    ),
+    (
+        4,
+        "client sessions",
+        include_str!("../migrations/0004_client_sessions.sql"),
+    ),
+];
 
 /// 在单个排他事务中依次执行迁移。
 ///

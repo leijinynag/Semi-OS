@@ -5,6 +5,7 @@ export interface TtsSynthesisInput {
 }
 
 export type TtsEvent =
+  | { kind: "tts.timestamps"; sentenceId: string; words: WordTiming[] }
   | {
       kind: "tts.audio";
       sentenceId: string;
@@ -30,5 +31,12 @@ export type TtsEvent =
  * 而不需要根据字节数量猜测 Provider 是否已经开始响应。
  */
 export interface TtsProvider {
+  /** 可选连接预热，不提交文本、不生成音频；取消必须释放尚未领取的连接。 */
+  prepare?(signal: AbortSignal): void;
   synthesize(input: TtsSynthesisInput): AsyncIterable<TtsEvent>;
+}
+export interface WordTiming {
+  text: string;
+  startMs: number;
+  endMs: number;
 }

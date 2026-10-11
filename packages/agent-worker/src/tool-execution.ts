@@ -23,6 +23,9 @@ export interface ExecuteProductToolInput {
   policyDecision: PolicyDecision;
   now: () => number;
   inputSummary?: string;
+  resolvedRiskLevel?: import("@semi-os/shared").ToolRiskLevel;
+  approval?: ToolExecutionReceipt["approval"];
+  beforeExecute?: (signal: AbortSignal) => Promise<void>;
 }
 
 export interface ExecutedProductTool {
@@ -77,10 +80,11 @@ function terminalReceipt(
     ...input.identity,
     toolName: input.tool.name,
     status: fields.status,
-    riskLevel: input.tool.riskLevel,
+    riskLevel: input.resolvedRiskLevel ?? input.tool.riskLevel,
     inputSummary: input.inputSummary ?? `input for ${input.tool.name}`,
     inputDigest: digestToolInput(input.input),
     policyDecision: input.policyDecision,
+    approval: input.approval,
     startedAtMs: context.startedAtMs,
     finishedAtMs,
     durationMs: finishedAtMs - context.startedAtMs,
@@ -122,10 +126,21 @@ export async function executeProductTool(
   }
 
   let result: ToolExecutionResult;
+  // 提示语或排队取消发生在动作前，不能误记为“写入可能已生效”。
+  try {
+    input.signal.throwIfAborted();
+    await input.beforeExecute?.(input.signal);
+    input.signal.throwIfAborted();
+  } catch (error) {
+    throw new ToolExecutionError(errorMessage(error), terminalReceipt(input, context, input.now(), {
+      status: "failed", resultType: "failure", outputSummary: errorMessage(error),
+      verification: errorVerification("policy", error),
+    }), error);
+  }
   try {
     result = await input.tool.execute(input.input, context);
   } catch (error) {
-    const uncertain = input.tool.riskLevel !== "read";
+    const uncertain = (input.resolvedRiskLevel ?? input.tool.riskLevel) !== "read";
     const receipt = terminalReceipt(input, context, input.now(), {
       status: uncertain ? "unknown" : "failed",
       resultType: uncertain ? "unknown" : "failure",
@@ -140,8 +155,8 @@ export async function executeProductTool(
     const succeeded = verification.status === "passed";
     const receipt = {
       ...terminalReceipt(input, context, input.now(), {
-        status: succeeded ? "succeeded" : "unknown",
-        resultType: succeeded ? "success" : "unknown",
+        status: result.resultType === "failure" ? "failed" : result.resultType === "needs_user" ? "needs_user" : succeeded ? "succeeded" : "unknown",
+        resultType: result.resultType ?? (succeeded ? "success" : "unknown"),
         outputSummary: result.outputSummary,
         verification,
       }),

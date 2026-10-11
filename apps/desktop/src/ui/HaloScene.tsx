@@ -1,7 +1,7 @@
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import type { AssistantMode } from "./client-model";
+import type { AssistantMode } from "./assistant-model";
 import {
   coreFragmentShader,
   coreVertexShader,
@@ -13,6 +13,7 @@ import {
 
 interface HaloSceneProps {
   mode: AssistantMode;
+  audioLevel?: { current: number };
 }
 
 interface HaloMotion {
@@ -20,7 +21,7 @@ interface HaloMotion {
   reduced: boolean;
 }
 
-// 状态只影响能量与流速，不改变构图；这不是语音频谱，真实 TTS 接入后再提供振幅。
+// 动画能量叠加真实播放振幅，不反向推断业务状态；ref 避免逐帧触发 React 更新。
 const modeEnergy: Record<AssistantMode, readonly [number, number]> = {
   idle: [0.8, 0.65],
   listening: [1, 1],
@@ -97,6 +98,7 @@ function createUniforms() {
     uDpr: { value: 1 },
     uOpacity: { value: 1 },
     uFine: { value: 0 },
+    uSpeech: { value: 0 },
   };
 }
 
@@ -127,12 +129,14 @@ function createRibbon(
 function FlowSculpture({
   mode,
   motion,
+  audioLevel,
 }: {
   mode: AssistantMode;
   motion: HaloMotion;
+  audioLevel?: { current: number };
 }) {
   const root = useRef<THREE.Group>(null);
-  const animation = useRef({ time: 0, energy: 1, speed: 1 });
+  const animation = useRef({ time: 0, energy: 1, speed: 1, speech: 0 });
   const resources = useMemo(() => {
     const ribbons = [
       createRibbon(-0.22, 0.65, 0),
@@ -187,7 +191,10 @@ function FlowSculpture({
     if (!root.current) return;
     const dt = Math.min(delta, 1 / 20);
     const current = animation.current;
-    const [energy, speed] = modeEnergy[mode];
+    const [baseEnergy, speed] = modeEnergy[mode];
+    const speech = motion.reduced ? 0 : Math.min(1, audioLevel?.current ?? 0);
+    current.speech = THREE.MathUtils.damp(current.speech, speech, speech > current.speech ? 32 : 8, dt);
+    const energy = baseEnergy + current.speech * 0.16;
     current.energy = motion.reduced ? energy : THREE.MathUtils.damp(current.energy, energy, 3, dt);
     current.speed = THREE.MathUtils.damp(current.speed, speed, 2.5, dt);
     // 积分时间而非 elapsedTime * speed，状态切换和从后台恢复都不会突然跳相位。
@@ -203,6 +210,7 @@ function FlowSculpture({
     for (const { material } of resources.all) {
       material.uniforms.uTime.value = current.time;
       material.uniforms.uEnergy.value = current.energy;
+      material.uniforms.uSpeech.value = motion.reduced ? 0 : current.speech;
       material.uniforms.uDpr.value = state.gl.getPixelRatio();
     }
   });
@@ -227,7 +235,7 @@ function FlowSculpture({
   );
 }
 
-export function HaloScene({ mode }: HaloSceneProps) {
+export function HaloScene({ mode, audioLevel }: HaloSceneProps) {
   const pointer = useRef(new THREE.Vector2());
   const [reduced, setReduced] = useState(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -274,8 +282,9 @@ export function HaloScene({ mode }: HaloSceneProps) {
         dpr={[1, 1.75]}
         frameloop={!visible ? "never" : reduced ? "demand" : "always"}
         gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
+        onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
       >
-        <FlowSculpture mode={mode} motion={motion} />
+        <FlowSculpture mode={mode} motion={motion} audioLevel={audioLevel} />
       </Canvas>
     </div>
   );

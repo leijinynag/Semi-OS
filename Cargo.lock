@@ -2750,6 +2750,9 @@ version = "0.1.0"
 dependencies = [
  "semi-os-host",
  "semi-os-protocol",
+ "semi-os-storage",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
@@ -2763,11 +2766,14 @@ version = "0.1.0"
 name = "semi-os-host"
 version = "0.1.0"
 dependencies = [
+ "percent-encoding",
  "semi-os-protocol",
  "semi-os-storage",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]

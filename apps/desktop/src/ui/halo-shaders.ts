@@ -5,6 +5,7 @@
 const flowSurface = `
   uniform float uTime;
   uniform float uEnergy;
+  uniform float uSpeech;
   attribute float aSeed;
   const float TAU = 6.28318530718;
 
@@ -14,6 +15,8 @@ const flowSurface = `
       float radius = 0.64 + lane * 0.17;
       radius += sin(angle * 3.0 + lane * 5.0 - uTime * 0.38) * 0.025;
       radius += sin(angle * 5.0 - lane * 3.0 + seed) * 0.012;
+      // 内层类似声带的细颤；幅度有界，主体轮廓始终稳定。
+      radius += uSpeech * sin(angle * 18.0 - uTime * 26.0 + lane * 4.0) * 0.027;
       return vec3(
         cos(angle) * radius * (0.94 + breath),
         sin(angle) * radius * 1.12,
@@ -21,7 +24,7 @@ const flowSurface = `
       );
     }
     float ripple = sin(angle * 3.0 + seed + uTime * 0.24) * 0.035;
-    float radius = 1.0 + lane * 0.18 + ripple + breath;
+    float radius = 1.0 + lane * 0.18 + ripple + breath + uSpeech * 0.022;
     float twist = angle * 2.0 + seed * 0.3 + sin(uTime * 0.23) * 0.1;
     vec3 point = vec3(
       cos(angle) * 1.65 * radius,
@@ -110,6 +113,9 @@ export const particleVertexShader = `
     float speed = mix(0.022, 0.038, position.z);
     float angle = (position.x + uTime * speed) * TAU;
     vec3 point = flowPoint(angle, position.y, aSeed, position.z);
+    // 重音沿粒子流向外传播，不整团缩放或改变任务语义。
+    float wave = pow(max(0.0, sin(angle * 3.0 - uTime * 9.0 + aSeed)), 5.0);
+    point.xy *= 1.0 + uSpeech * wave * 0.065;
     point.z += sin(position.x * 671.0 + aSeed) * 0.045;
     vec4 view = modelViewMatrix * vec4(point, 1.0);
     gl_Position = projectionMatrix * view;
@@ -143,6 +149,7 @@ export const coreVertexShader = `
 export const coreFragmentShader = `
   uniform float uTime;
   uniform float uEnergy;
+  uniform float uSpeech;
   varying vec2 vUv;
   ${spectralColor}
   void main() {
@@ -151,6 +158,7 @@ export const coreFragmentShader = `
     float radius = length(p);
     float angle = atan(p.y, p.x);
     float ringRadius = 0.64 + sin(angle * 3.0 - uTime * 0.38) * 0.016;
+    ringRadius += uSpeech * sin(angle * 18.0 - uTime * 26.0) * 0.012;
     float rim = exp(-pow((radius - ringRadius) * 49.0, 2.0));
     float halo = exp(-pow((radius - ringRadius) * 10.5, 2.0));
     float heart = exp(-radius * radius * 15.0);

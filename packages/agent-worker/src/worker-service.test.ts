@@ -9,7 +9,7 @@ import type {
 import type { AgentRuntimeEvent } from "./runtime.ts";
 import { EventedAgentRuntime } from "./runtime.ts";
 import { FakeSttProvider, FakeTtsProvider } from "./voice/fake-providers.ts";
-import { VoiceLoop } from "./voice/voice-loop.ts";
+import { VoiceLoop, VoiceSessionMismatchError, type VoiceLoopEvent } from "./voice/voice-loop.ts";
 import { WorkerService, type VoiceLoopPort } from "./worker-service.ts";
 
 function request(
@@ -30,7 +30,9 @@ test("buffers ordered audio and commits one voice turn", async () => {
   const turns: Array<Parameters<VoiceLoopPort["run"]>[0]> = [];
   const loop: VoiceLoopPort = {
     async run(turn) {
+      if ("text" in turn) throw new Error("expected audio turn");
       turns.push(turn);
+      for await (const chunk of turn.audio!) turn.chunks.push(chunk);
     },
     async interrupt() {},
     async dispose() {},
@@ -62,7 +64,9 @@ test("buffers ordered audio and commits one voice turn", async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(turns.length, 1);
-  assert.deepEqual([...turns[0]!.chunks[0]!.data], [1, 2, 3]);
+  const turn = turns[0]!;
+  assert.ok("chunks" in turn);
+  assert.deepEqual([...turn.chunks[0]!.data], [1, 2, 3]);
   assert.equal(turns[0]!.action, "prompt");
   assert.ok(
     emitted.some(
@@ -251,7 +255,6 @@ test("runs the fake audio acceptance loop through the worker boundary", async ()
   assert.deepEqual(runtime.sessions, ["session_voice"]);
   assert.deepEqual(runtime.prompts, ["搜索并整理这份资料"]);
   assert.deepEqual(tts.spoken, [
-    "好的，我来处理。",
     "资料已经整理完成。",
     "这里是摘要。",
   ]);
@@ -271,6 +274,117 @@ test("runs the fake audio acceptance loop through the worker boundary", async ()
   );
 });
 
+test("reloaded-page turns reuse the Host session and keep the same runtime", async () => {
+  const emitted: Envelope[] = [];
+  const runtime = new ClosedLoopRuntimeFixture();
+  const service = new WorkerService({
+    emit: (envelope) => emitted.push(envelope),
+    createVoiceLoop: (emit) => new VoiceLoop({
+      runtime, stt: new FakeSttProvider("你好"), tts: new FakeTtsProvider(), emit,
+    }),
+  });
+  try {
+    for (const id of ["req_before_reload", "req_after_reload"] as RequestId[]) {
+      await service.handle({
+        ...request("voice.turn.start", {
+          sessionId: "session_host", taskId: `task_${id}`, cwd: "/tmp/semi-os",
+          mimeType: "audio/fake",
+        }),
+        requestId: id,
+      });
+      await service.handle({ ...request("voice.turn.commit", { lastSequence: -1 }), requestId: id });
+      await waitFor(() => emitted.some((event) =>
+        event.kind === "voice.turn.completed" && event.requestId === id));
+    }
+    assert.deepEqual(runtime.sessions, ["session_host"]);
+    assert.deepEqual(runtime.prompts, ["你好", "你好"]);
+    assert.ok(!emitted.some((event) => event.kind === "voice.error"));
+  } finally {
+    await service.dispose();
+  }
+});
+
+test("classifies session mismatch without exposing the internal exception", async () => {
+  const emitted: Envelope[] = [];
+  const service = new WorkerService({
+    emit: (envelope) => emitted.push(envelope),
+    createVoiceLoop: () => ({
+      async run() { throw new VoiceSessionMismatchError(); },
+      async interrupt() {},
+      async dispose() {},
+    }),
+  });
+  try {
+    await service.handle(request("voice.turn.start", {
+      sessionId: "session_original", taskId: "task_voice", cwd: "/tmp/semi-os",
+      mimeType: "audio/fake",
+    }));
+    await service.handle(request("voice.turn.commit", { lastSequence: -1 }));
+    await waitFor(() => emitted.some((event) => event.kind === "voice.error"));
+    const error = emitted.find((event) => event.kind === "voice.error")!;
+    assert.equal((error.payload as Record<string, unknown>).code, "voice_session_mismatch");
+    assert.equal((error.payload as Record<string, unknown>).retryable, false);
+    assert.ok(!JSON.stringify(error).includes("cannot switch"));
+  } finally {
+    await service.dispose();
+  }
+});
+
+test("manual sessions isolate Pi context and reuse it when switching back", async () => {
+  const emitted: Envelope[] = [];
+  const runtimes: ClosedLoopRuntimeFixture[] = [];
+  const service = new WorkerService({
+    emit: (event) => emitted.push(event),
+    createVoiceLoop: (emit) => {
+      const runtime = new ClosedLoopRuntimeFixture();
+      runtimes.push(runtime);
+      return new VoiceLoop({ runtime, emit, stt: new FakeSttProvider("你好"), tts: new FakeTtsProvider() });
+    },
+  });
+  try {
+    for (const [index, sessionId] of ["session_a", "session_b", "session_a"].entries()) {
+      const requestId = `req_session_${index}` as RequestId;
+      await service.handle({ ...request("voice.text.submit", {
+        sessionId, taskId: `task_${index}`, cwd: "/tmp", text: `消息${index}`,
+      }), requestId });
+      await waitFor(() => emitted.some((event) => event.kind === "voice.turn.completed" && event.requestId === requestId));
+    }
+    assert.equal(runtimes.length, 2);
+    assert.deepEqual(runtimes[0]!.sessions, ["session_a"]);
+    assert.deepEqual(runtimes[0]!.prompts, ["消息0", "消息2"]);
+    assert.deepEqual(runtimes[1]!.prompts, ["消息1"]);
+  } finally { await service.dispose(); }
+});
+
+test("inactive session events are ignored and all session loops are disposed once", async () => {
+  const emitted: Envelope[] = [];
+  const callbacks: Array<(event: VoiceLoopEvent) => void> = [];
+  const disposed: number[] = [];
+  const service = new WorkerService({
+    emit: (event) => emitted.push(event),
+    createVoiceLoop: (emit) => {
+      const index = callbacks.length;
+      callbacks.push(emit);
+      disposed.push(0);
+      return {
+        async run() {},
+        async interrupt() {},
+        async dispose() { disposed[index]!++; },
+      };
+    },
+  });
+  for (const sessionId of ["session_a", "session_b"]) {
+    await service.handle(request("voice.text.submit", { sessionId, taskId: `task_${sessionId}`, text: "你好", cwd: "/tmp" }));
+  }
+  callbacks[0]!({ kind: "voice.state", payload: { state: "speaking" } });
+  assert.equal(emitted.length, 0);
+  callbacks[1]!({ kind: "voice.state", payload: { state: "thinking" } });
+  assert.equal(emitted.length, 1);
+  assert.equal((emitted[0]!.payload as Record<string, unknown>).sessionId, "session_b");
+  await service.dispose();
+  assert.deepEqual(disposed, [1, 1]);
+});
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 1_000;
   while (!predicate()) {
@@ -280,3 +394,108 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("session disposal is idempotent, drops late events and preserves other contexts", async () => {
+  const emitted: Envelope[] = [];
+  const callbacks: Array<(event: VoiceLoopEvent) => void> = [];
+  const disposed: number[] = [];
+  const service = new WorkerService({
+    emit: (event) => emitted.push(event),
+    createVoiceLoop: (emit) => {
+      const index = callbacks.length;
+      callbacks.push(emit);
+      disposed.push(0);
+      return {
+        async run() {},
+        async interrupt() {},
+        async dispose() {
+          disposed[index]!++;
+          emit({ kind: "voice.state", payload: { state: "speaking" } });
+        },
+      };
+    },
+  });
+  const submit = (sessionId: string) => service.handle(request("voice.text.submit", {
+    sessionId, taskId: `task_${sessionId}`, text: "你好", cwd: "/tmp",
+  }));
+  try {
+    await submit("a");
+    await submit("b");
+    await service.handle(request("voice.session.dispose", { sessionId: "a" }));
+    await service.handle(request("voice.session.dispose", { sessionId: "a" }));
+    await service.handle(request("voice.session.dispose", { sessionId: "unused" }));
+    assert.deepEqual(disposed, [1, 0]);
+    await submit("a");
+    callbacks[0]!({ kind: "voice.state", payload: { state: "speaking" } });
+    assert.equal(emitted.length, 0);
+    assert.equal(callbacks.length, 3);
+    await service.handle(request("voice.session.dispose", { sessionId: "a" }));
+    assert.equal(emitted.length, 0);
+    await submit("b");
+    assert.equal(callbacks.length, 3);
+  } finally { await service.dispose(); }
+  assert.deepEqual(disposed, [1, 1, 1]);
+});
+
+test("text skips STT but shares runtime session, answer events and TTS with audio", async () => {
+  const emitted: Envelope[] = [];
+  const runtime = new ClosedLoopRuntimeFixture();
+  const tts = new FakeTtsProvider();
+  let transcriptions = 0;
+  const stt = new FakeSttProvider("语音后续问题");
+  const service = new WorkerService({
+    emit: (event) => emitted.push(event),
+    createVoiceLoop: (emit) => new VoiceLoop({
+      runtime, tts, emit, stt: {
+        async *transcribe(input) {
+          transcriptions++;
+          yield* stt.transcribe(input);
+        },
+      },
+    }),
+  });
+  try {
+    const response = await service.handle(request("voice.text.submit", {
+      sessionId: "session_voice", taskId: "task_text", cwd: "/tmp/semi-os", text: "  帮我查资料  ",
+    }));
+    assert.equal(response.kind, "voice.text.accepted");
+    await waitFor(() => emitted.some((event) => event.kind === "voice.turn.completed"));
+    assert.equal(transcriptions, 0);
+    assert.deepEqual(runtime.prompts, ["帮我查资料"]);
+    assert.deepEqual(tts.spoken, ["资料已经整理完成。", "这里是摘要。"]);
+    assert.ok(emitted.some((event) => event.kind === "voice.audio.chunk"));
+    assert.ok(!emitted.some((event) => event.kind === "voice.state" &&
+      ["listening", "transcribing"].includes(String((event.payload as Record<string, unknown>).state))));
+    const id = "req_voice_after_text" as RequestId;
+    await service.handle({ ...request("voice.turn.start", {
+      sessionId: "session_voice", taskId: "task_next", cwd: "/tmp/semi-os", mimeType: "audio/fake",
+    }), requestId: id });
+    await service.handle({ ...request("voice.turn.commit", { lastSequence: -1 }), requestId: id });
+    await waitFor(() => emitted.some((event) => event.kind === "voice.turn.completed" && event.requestId === id));
+    assert.equal(transcriptions, 1);
+    assert.deepEqual(runtime.sessions, ["session_voice"]);
+    assert.deepEqual(runtime.prompts, ["帮我查资料", "语音后续问题"]);
+  } finally { await service.dispose(); }
+});
+
+test("text interrupts an open recording before rebinding the active identity", async () => {
+  const order: string[] = [];
+  const service = new WorkerService({
+    emit: () => {},
+    createVoiceLoop: () => ({
+      async run(turn) { order.push("text" in turn ? `text:${turn.taskId}` : `audio:${turn.taskId}`); },
+      async interrupt(taskId) { order.push(`pause:${taskId}`); },
+      async dispose() {},
+    }),
+  });
+  try {
+    await service.handle(request("voice.turn.start", {
+      sessionId: "session_voice", taskId: "task_voice", cwd: "/tmp", mimeType: "audio/fake",
+    }));
+    await service.handle(request("voice.text.submit", {
+      sessionId: "session_voice", taskId: "task_text", cwd: "/tmp", text: "先停下",
+    }));
+    assert.equal(order.at(-1), "text:task_text");
+    await assert.rejects(service.handle(request("voice.audio.append", { sequence: 0, audioBase64: "AQID" })), /not open/);
+  } finally { await service.dispose(); }
+});

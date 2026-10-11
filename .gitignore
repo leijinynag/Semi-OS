@@ -8,6 +8,7 @@ target/
 playwright/.auth/
 .playwright-cli/
 output/
+tmp/
 *.log
 *.tsbuildinfo
 

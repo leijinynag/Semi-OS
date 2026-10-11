@@ -4,6 +4,8 @@
  */
 export {
   CaretRight as ArrowIcon,
+  CaretLeft as CollapseLeftIcon,
+  CaretRight as CollapseRightIcon,
   ArrowSquareOut as EvidenceIcon,
   Check as CheckIcon,
   CheckCircle as CheckCircleIcon,
@@ -12,6 +14,9 @@ export {
   Robot as AgentIcon,
   Brain as MemoryIcon,
   ChatText as ConversationIcon,
+  NotePencil as NewSessionIcon,
+  PencilSimple as RenameIcon,
+  Trash as DeleteIcon,
   X as DismissIcon,
   HourglassMedium as WaitingIcon,
   Image as ImageIcon,
@@ -19,6 +24,7 @@ export {
   LockSimple as LockIcon,
   Microphone as MicrophoneIcon,
   PaperPlaneTilt as SendIcon,
+  SidebarSimple as PanelIcon,
   Pause as PauseIcon,
   Play as ResumeIcon,
   MagnifyingGlass as SearchIcon,

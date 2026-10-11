@@ -1,0 +1,473 @@
+# 桌面助手与语音交互优化验收
+
+## 2026-10-10：PV.20 客户端文字对话
+
+文字只跳过音频采集/STT，最终文本进入同一 VoiceLoop/Pi，不新增旁路。
+React 输入框 → Rust 校验/定向事件 → 助手唯一 VoiceClient →
+`voice.text.submit` → Pi/工具/确认 → 原有 TTS/同步/Host 保存。
+回执表示请求已提交至 Worker 传输，不等于模型完成或工具成功。
+
+### 自动验证
+
+- 协议：非空、长度和 action 校验，文字无需音频元数据。
+- Worker：Fake STT 不被调用；文字与随后音频复用同一 Runtime Session，
+  产生原有回答/音频事件；文字替换录音时关闭旧输入，身份不串轮。
+- 控制器：语音关闭、麦克风拒绝/授权未决仍可发文字；迟到预热拒绝及
+  设置变更不覆盖文字状态；传输失败可显式重试；替换录音不额外 commit。
+- Host：助手就绪、关联回执、拒绝并发、失败反馈；中文和 Emoji 持久化
+  与输入协议统一按 UTF-16 上限，避免提交成功却保存失败。
+- `pnpm check` 通过：125 个 JS 测试（Desktop 42、Worker 70、Protocol 8、
+  Tool SDK 3、Shared 2），32 个 Rust 测试（Desktop 4、Host 19、
+  Protocol 3、Storage 6）；类型检查、当前 lint、Clippy 和 JS/Rust 构建通过。
+  既有 Vite 大 chunk 警告保留，没有为了本轮拆包重构。
+
+### 浏览器与待验收边界
+
+- 真实客户端页面存在多行输入及发送按钮，空白输入禁用发送。
+  无 Tauri IPC 的浏览器预览发送失败后保留草稿；390×844 检查无水平溢出，
+  输入框和 40px 发送按钮均在窗口内。工作台留底部空间避免遮挡正文。
+- Ego 页面 snapshot 成功，截图 CDP 超时，不列作成功证据；测试空间已关闭。
+  独立 Playwright 完成输入/失败和截图，不修改用户浏览器 Profile。
+- 图片位于 `/tmp/semi-os-text-desktop.png` 和 `/tmp/semi-os-text-mobile.png`，
+  仅作临时布局证据，不提交截图或生产 Fixture。
+- 本轮未重启原生 Tauri，也未调用真实云端文字轮次。新 Rust 命令需要重启
+  原生开发客户端后测试；浏览器预览不能证明跨窗口 IPC 或实际扬声器出声。
+
+待人工验证：文字闲聊与语音交替的上下文连续性、真实工具确认/来源、播放
+期间文字打断、TTS 故障回退，以及隐藏助手时实际声音与光环包络。
+保留既有改动，未提交或 push。
+
+## 2026-10-08：常驻采集、通用身份与声音包络
+
+状态：四个实现块与自动验证完成，以下人工/云端项目尚未验收。
+保留既有 4A 和语音改动，未提交或 push；对应 `tasks.md` 的 PV.16–PV.19。
+下方旧条目是历史证据，涉及共享上下文、网络排队采集或无音量输入的
+描述不再代表当前实现。
+
+### 当前实现与回归
+
+| 实现块 | 本轮证据 | 边界 |
+| --- | --- | --- |
+| 常驻设备与门控 | 执行真实 Worklet 源码验证闲置丢弃、begin/end token、尾部确认；VoiceClient 回归覆盖慢握手、旧提交未完成时三轮连续采集、关闭/退出和迟到请求 | 不保存闲置声音；权限/真人首字完整性尚未原生实测 |
+| 设备恢复与错误 | 模拟权限拒绝、无采样、静音、设备切换、上下文挂起和释放；记录实际轨道采样率/声道、降噪/AGC 与输入质量数值 | 不将模拟设备事件称为 macOS 休眠验收 |
+| Fun 词表与评测 | 独立 `vocabulary_id` 参数、拒绝反馈、WAV 解析、CER/实体/分位数测试；两个脚本独立严格 TypeScript 检查 | 尚无兼容词表 ID 和 30 条真人录音，不宣称准确率提升 |
+| Pi 通用身份 | 真实官方 ResourceLoader 在带 AGENTS/SYSTEM/APPEND、第三方扩展/Skill 的临时目录测试隔离；显式内置 Skill 与 Host 扩展保留 | 保留官方模型认证；不禁用文件工具；未跑干净原生会话的真实模型对照 |
+| 可选报告 | speech-only、无标记回答与调研归一化回归 | 简单回答报告为空，不复制摘要；客户端已有 truthy 条件隐藏空详情 |
+| 音量与声振 | PCM 静音/强弱、奇数字节、平滑包络测试；假的媒体元素/rAF 验证 currentTime、缓冲、暂停、恢复与取消 | 保留 PCM→WAV→HTMLAudioElement，不重接曾无声的 WebAudio 出口 |
+| 延迟观测 | Host 阶段白名单/数值校验，JSONL 按请求首次阶段聚合 P50/P95 | 没有真人统计样本，不提供端到端提速百分比 |
+
+最终全仓 `pnpm check` 通过：JS 117 项（Desktop 37、Worker 68、Protocol 7、
+Tool SDK 3、Shared 2），Rust 29 项（Desktop 2、Host 18、Protocol 3、
+Storage 6）；包括类型检查、当前仓库 lint、Clippy `-D warnings` 与构建。
+独立基准/延迟脚本严格类型检查、Rust 格式检查、`git diff --check` 通过。
+既有约 1.37 MB 主 chunk 警告和 Three.js Clock 废弃提示保留，不扩大重构。
+
+### 浏览器视觉证据
+
+浏览器预览使用独立端口 1421；没有重启原生客户端。Playwright 检查 WebGL
+输出 PNG 的 alpha 与实际像素，不以绘制缓冲已清空的 canvas 读回判断空白。
+动态强音量来自测试过程临时注入本地 ref，不在产品中加入调试入口。
+
+| 画面 | 尺寸 | alpha 非零像素 | 角落 alpha | 结果 |
+| --- | --- | ---: | ---: | --- |
+| 稳定桌面待机 | 720×520 | 114933 | 0 | 边界 (61,43)–(652,423)，没有裁切 |
+| 强音量合成输入 | 720×520 | 116930 | 0 | 内层/外层形变，周边透明 |
+| 窄屏 | 390×844 | 35962 | 0 | 光环非空、正常居中 |
+| 减少动态效果，待机/强音量 | 390×844 | 35259 | 0 | 两张图逐像素一致，无明显声振 |
+
+两次连续动画截图存在像素变化；助手页面没有文字和按钮，控制台没有
+应用错误。Ego 页面检查成功，但额外客户端截图的 CDP captureScreenshot
+超时，该截图不列作成功证据，不改变生产实现。
+
+临时图像：
+
+- `/tmp/semi-os-voice-halo-framed.png`
+- `/tmp/semi-os-voice-halo-speaking.png`
+- `/tmp/semi-os-voice-halo-mobile.png`
+- `/tmp/semi-os-voice-halo-reduced-idle.png`
+- `/tmp/semi-os-voice-halo-reduced-level.png`
+
+### 尚待完成
+
+- 首次授权、立即说话首字、快速松键/连续录音、播报中插话、实际设备
+  切换与系统休眠恢复；人工听完整输入，再评判 ASR 错误来源。
+- 创建兼容 Fun-ASR 词表并验证当前网关是否支持；参数被拒绝应明确反馈，
+  请求成功也不代表热词一定提高实体准确率。
+- 按 `docs/VOICE-HUMAN-CORPUS.md` 准备至少 30 条真人同录音比较；当前
+  Fun 默认保持不变，不新增 LLM 纠错，不偷偷录制诊断音频。
+- 使用干净会话测试闲聊不读仓库、时效资料查网络、明确项目可读文件。
+- 原生实测扬声器、透明桌面、真实声振与风险确认；录屏验证播放同步，
+  浏览器合成振幅和静态截图不替代听音/录屏。
+- 收集多轮真实松键→final / 首段 / TTS 就绪 / 实际播放数据后运行
+  `scripts/voice-latency.ts`，报告样本数与 P50/P95。
+
+官方参数依据：
+
+- [Fun-ASR 客户端事件](https://help.aliyun.com/zh/model-studio/fun-asr-client-events)
+- [定制热词 HTTP API](https://help.aliyun.com/zh/model-studio/vocabulary-http-api)
+
+## 2026-10-08：长摘要自然停顿提前合成
+
+- 仅显式 speech 摘要在至少 18 个汉字后的中文逗号/分号处软切分，
+  不强制按长度截断，不在冒号、引号或括号内部切分。
+  URL、代码和结构标记阻止当前片段软切分；默认完整句末规则不变。
+- 保持 STT、Pi 和已确认有声的直接 WAV 出口。较长摘要可在模型尚未
+  生成句号时开始合成较短的第一段；这不是原生 PCM 首包即播。
+- `speech.first_sentence_ready` 名称保持兼容，当前表示首个可播报分段，
+  自然停顿不保证该分段是独立完整结论。真实出声仍等待该段合成完成。
+- 新增 6 项回归，18 项定向测试通过；全仓 `pnpm check`、
+  `cargo fmt --all -- --check`、`git diff --check` 通过，Worker 共 64 项。
+  既有 Vite chunk 警告保留，未提交或 push。
+- 未进行真人松键到首音的对照测量，不给出端到端提速数值。
+
+## 2026-10-08：参考本地 LumiCore 的首句路径
+
+- 用户已确认直接媒体出口有声音。当前限制是按句封装 WAV，
+  不能拿原 WebAudio 排程的首包即播效果描述当前原生行为。
+- 本地参考仓库 remote 为 `5pyj29s7cm-tech/LumiCore`，
+  `server/socket/voice.ts` 的 `maybeStartSpeculativeSpeech` 从完整首句
+  启动合成，`flushSentence` 复用结果后发送完整音频；
+  不将本地定制代码描述为其他 Lumi 上游版本的实现。
+- Semi-OS 已在第一句完整时合成。本轮新增录音期间的 WebSocket 连接
+  预热，不提交 run-task，不提前生成回答，15 秒过期或取消即释放。
+  暂不回切原先无声的 WebAudio 出口、不更换 STT 或 Pi 模型。
+- 真实云端相同句子“连接正常，现在可以开始工作。”，PCM 均为
+  127890 bytes：冷连接首音频 964 ms、整句完成 1630 ms；
+  预连接 700 ms 后首音频 519 ms、整句完成 1402 ms。
+  这是一次顺序对照，存在网络/服务波动，不是统计结论或端到端保证；
+  700 ms 是探测的预热间隔，产品路径没有固定 sleep。
+- 原生历史日志两轮首包到 playing 为 1626 / 1608 ms，
+  说明直接媒体出口等待整句完成的成本仍需单独优化。
+  补齐 `tts.*.completed` 指标；未以该局部日志推算用户松键到首音总耗时。
+- 验证：`pnpm check` 全部通过（Worker 58、Desktop 26 项测试），
+  `cargo fmt --all -- --check` 与 `git diff --check` 通过。保留既有构建
+  chunk 大小警告，未进行无关分包重构。原生客户端及受管 Worker 已重启，
+  优化后的真人端到端延迟待复测；未提交或 push。
+
+## 2026-10-07：仅文字无声的排查
+
+- 系统输出音量 38，未静音；当前 CosyVoice 配置直接探测返回非静音 PCM。
+- 使用合成输入跑真实 STT → Pi → TTS Worker：收到 270878 bytes 回复 PCM，
+  语音事件身份及协议校验全部通过。该探测不等同于原生 WebView 听音验收。
+- 确认代码缺口：播放器仅按键时 resume，后续暂停没有恢复路径。
+  这能造成永久暂停，但尚未采集用户出问题时的原生上下文状态，
+  不将 WebKit 双上下文冲突描述为已证实根因。
+- 修复：录音借用播放器上下文；暂停或 PCM 到达时恢复原有排程，
+  3 秒恢复失败显示错误；取消清除恢复计时器，禁止旧句子恢复。
+- 回归覆盖暂停恢复、恢复超时、取消后迟到回调及借用上下文的关闭权限。
+  原生真人连续多轮听音仍待用户确认。
+- 验证：Desktop 16 个测试通过；Desktop/Worker typecheck、Desktop build
+  和 `git diff --check` 通过。原生客户端与其受管 Worker 已重新启动，
+  STT 配置未改。构建仍有既有的大 chunk 警告，未扩大到代码分包改造。
+
+日期：2026-10-07。状态：实现及自动验证完成，原生真人体验待验收。
+本轮未 commit / push；现有 4A 改动保留。
+
+## 实现边界
+
+```text
+助手 WebView：透明光环 + 唯一采集/播放控制器
+      │ PCM / 实际播放快照
+      ▼
+Rust Host：轮次校验、窗口、授权、快照广播、最终消息 SQLite
+      ↕ JSONL
+Node Worker：流式 STT → Pi → 摘要/Markdown → 句子级 TTS/时间戳
+      │
+      ▼
+客户端：转写 + 播放同步摘要 + 可展开报告 + 真实确认
+```
+
+- Pi 仍是唯一 Agent Loop；未扩展长期记忆或重做客户端视觉。
+- 删除助手文字不删除授权。Host 仍确认外部副作用，客户端承接确认按钮。
+- 生成完成不等于播放完成。无时间戳时在真实播放开始揭示整句，
+  暂停/缓冲不推进，插话清空旧队列；失败显示完整文字并保留失败状态。
+- 客户端重开恢复最终文字，不恢复旧进程音频。
+
+## 自动与浏览器验证
+
+| 项目 | 证据 | 结果 |
+| --- | --- | --- |
+| 类型、配置 lint、Clippy、测试、构建 | `pnpm check` | JS 72、Rust 26 个测试通过 |
+| 录音数据 | 44.1 kHz 跨分片/整块一致，PCM16 边界、尾部 flush | 通过 |
+| 实时识别 | 输入未结束收到 partial，取消释放生产者，final 才进入 Pi | 通过 |
+| 回复边界 | 无固定回应，标记跨 token，JSON 不朗读，缺标记保留最终文字 | 通过 |
+| 时间戳/播放 | 无效时间戳退化、实际位置揭示、队列、停止及失败 | 通过 |
+| 持久化 | SQLite upsert/reopen，错误保留，恢复文字不恢复播放 | 通过 |
+| 页面身份/非空/覆盖 | Semi-OS 客户端与助手正常，无框架错误覆盖 | 通过 |
+| 透明光环 | 720×520 和 390×844；根节点透明、无可见文字 | 通过 |
+| WebGL 动画 | 两次采样可见 114943/114968、透明 259457/259432，RGB 总和变化 | 非空、透明、运动 |
+| Markdown 交互 | 展开表格/代码/来源；脚本未执行，危险 URL 被清理 | 通过 |
+| 旧快照 | revision=3 失败后发送 revision=2，失败状态保留 | 通过 |
+| 窄屏布局 | 390×844 摘要、失败、报告无横向溢出 | 通过 |
+| 生产 Worklet | 独立 JS 输出，同源 CSP 下 addModule/实例化 | 通过（浏览器） |
+| 持续发送及尾音 | 合成 MediaStream 录音 350 ms，松键前已发送 3 个分片；共 4 个连续序号，尾片 1664 bytes | 通过（浏览器） |
+| 快速按键 | 延迟 100 ms 返回采集流，立即松键仍提交并停止所有轨道 | 通过（浏览器） |
+| 首次授权拒绝 | 拒绝前建立 Host 对话；错误快照实际发送到客户端，不悬空录音 | 通过（浏览器、模拟权限拒绝） |
+
+使用 Playwright CLI；当前会话没有 Build Web Apps Browser 插件。
+原生 CUA 清单未识别未打包的开发应用，未以浏览器检查代替原生验收。
+客户端 QA 仅在浏览器运行时注入合成快照，产品代码不添加 Fixture。
+采集检查使用 WebAudio 合成流与 Tauri IPC mock，验证真实 Worklet 和调用顺序，
+不替代真人麦克风、macOS 授权或 Rust IPC 端到端验收。
+另通过 `cargo fmt --all -- --check`、`git diff --check`，以及基准脚本的独立
+TypeScript 检查（ES2022 / ESNext / Bundler）。
+
+截图位于临时目录：
+
+- `/tmp/semi-os-assistant-desktop.png`
+- `/tmp/semi-os-assistant-mobile.png`
+- `/tmp/semi-os-client-collapsed.png`
+- `/tmp/semi-os-client-markdown.png`
+- `/tmp/semi-os-client-mobile.png`
+
+助手截图查看器的黑色区域不是产品底色，WebGL alpha 为透明。
+未观察到应用控制台错误；Three.js Clock 有废弃提示。
+构建约 1.36 MB 主包大小警告，本轮不做无关打包重构。
+
+## 云端同录音比较
+
+```sh
+node --experimental-strip-types --env-file=.env scripts/voice-benchmark.ts
+```
+
+CosyVoice 合成三条固定指令，转换为相同 16 kHz 单声道 PCM16，
+按 100 ms 分片实时发送给 Qwen / Fun-ASR。CER 用编辑距离计算，
+忽略标点、空格和大小写，不将“三”和“3”自动等同。
+最终延迟指音频生产结束至最终转写事件，不是请求总耗时。
+这是三条合成录音，非真人采集准确率或统计显著结论。
+
+| 样本 | 时长 | Qwen CER | Fun CER | Qwen 最终延迟 | Fun 最终延迟 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 中文调研 | 6896 ms | 0.0294 | 0 | 340 ms | 186 ms |
+| Semi-OS / Pi / Codex / Claude Code / 飞书 | 7288 ms | 0 | 0.1163 | 373 ms | 255 ms |
+| 长指令 | 16535 ms | 0 | 0 | 704 ms | 226 ms |
+
+- Qwen 第一条将“三个”写成“3个”，CER 非零但语义一致。
+- Fun 第二条将 Semi-OS / Pi 转写为“私密 OS”/“Py”；Qwen 此条正确。
+- Fun 第三条总耗时约 22.19 s，Qwen 约 17.81 s。
+  松键后延迟短不能等同于端到端更快。
+- TTS 首段音频约 2669/530/708 ms，三条均收到时间戳。
+  另一次 12 字中文也收到覆盖全文时间戳，存在先部分后完整返回。
+- 保留 Qwen 默认；`SEMI_OS_STT_PROVIDER=fun` 可切换，供应商参数留在 Adapter。
+  真实 `.env` 未修改，API Key 不写入文档或日志。
+- 临时音频在脚本结束时删除，不提交原始声音。
+
+## 首句延迟优化与 Lumi 参考
+
+本轮参考本机 LumiCore 源码，而非仅依赖 README：
+
+- `server/tts/speculative_sentence.ts`：从模型流中取第一句完整句子，
+  不等待全部回答生成；Semi-OS 保留相同边界，不用固定应答填充等待。
+- `src/hooks/useVoiceCall.ts`：复用 TTS `AudioContext`，维护下一分片
+  排程尾点，播放回执与合成完成分开。该文件的压缩分片采用 50ms
+  cross-fade，Semi-OS 连续 PCM 样本不重叠，不复制这一参数。
+- `server/monitor/voice_latency_store.ts`：区分语音结束、ASR final、
+  pipeline、模型首 token、TTS ready 和实际播放；Semi-OS 复用分段
+  观测思路，不另造 Agent Loop 或完整监控平台。
+
+“首字变慢”的可确认行为变化是：移除了固定“好的，我来处理”，且摘要
+现在等实际播放才揭示，不再把模型 delta 提前显示。另一个代码路径上的
+等待点是 MP3 的 MediaSource 不可用时，播放器等整句合成完成才创建 Blob。
+尚未对用户此次原生录音做完整 trace，因此不宣称 Pi、STT 或某个云模型
+已经被证明是端到端瓶颈。
+
+### 当前改动
+
+- Worker 默认 `SEMI_OS_TTS_FORMAT=pcm`，可显式设为 `mp3` 回退；
+  当前本机 `.env` 没有该项覆盖，实际使用默认 PCM，未修改凭证。
+- PCM16 首个分片到达即可排程，20ms 提前量，复用唯一 AudioContext；
+  保留跨 WebSocket 帧的单字节尾部，连续分片不 cross-fade。
+- 模型仍通过 Pi；输出提示要求首句简短、完整、直接，尽量不超过
+  30 汉字。不会为低延迟绕过 Host 授权、首句完整性或真实播放同步。
+- 阶段日志只输出 requestId、阶段名和耗时，不记录音频、转写或凭证。
+
+| 指标 | 口径 |
+| --- | --- |
+| `stt.total` | STT 调用到 final，包含说话时间 |
+| `stt.final` | Provider 正常消费完输入到 final，不冒充精确松键时间 |
+| `session.ready` | 等待 Session 可用，复用时接近零 |
+| `model.first_delta` | 模型调用到首个正文 delta |
+| `speech.first_sentence_ready` | 模型调用到真实回答首句准备，不包含阶段提示 |
+| `tts.answer.first_audio` | 每句 TTS 调用到 Provider 首音频，不代表已经播放 |
+| `client.release_to_first_answer_playback` | 松键到回答开始在 AudioContext 时钟上播放 |
+| `client.release_to_first_text_ready` | 松键到助手准备好同步文字，不代表客户端已绘制 |
+
+上述值来自各进程内单调时钟，不跨进程直接相减，也不能把重叠阶段相加。
+未新增 SQLite 高频写入或完整 Telemetry，`P6.3` 仍保持未完成。
+
+### 当前云端 TTS 对比
+
+2026-10-07，当前 `.env` 网关、模型和音色，同一句
+“我可以帮你查资料，也可以操作电脑。”，三组串行交错 MP3/PCM 请求，
+均成功，均有时间戳，各有 20 个分片；音频只在内存计数，未保存。
+
+| 组 | MP3 首音频 / 合成完成 | PCM 首音频 / 合成完成 |
+| --- | ---: | ---: |
+| 1 | 839 / 1646 ms | 914 / 1653 ms |
+| 2 | 585 / 1336 ms | 670 / 1593 ms |
+| 3 | 907 / 1759 ms | 857 / 1745 ms |
+
+PCM 并未稳定降低 Provider 首音频。收益来自不支持 MP3 MediaSource 时，
+无需等到“合成完成”才播放；表中 MP3 两个里程碑之间差 751–852ms。
+这不是 PCM 实际省下的端到端时间，不能替代原生真人播放测量。
+PCM 每次 129654 bytes，MP3 每次 48156 bytes，流式收益有带宽代价。
+此前单次短句探测约 955ms（MP3）/740ms（PCM），也仅是 Provider
+首音频数据，不能用它宣布整体提升。
+
+### 本轮自动验证
+
+- `pnpm check`：76 个 JS、26 个 Rust 测试通过，类型检查、现有 lint、
+  Clippy、JS/Rust 构建通过。主包约 1.36MB 警告仍在，未做无关打包重构。
+- PCM 测试覆盖首片无需 complete、连续排程、欠载时媒体时间不前进、
+  AudioContext 暂停、奇数字节、失败、队列和插话清理。
+- VoiceLoop 确定性计时测试覆盖识别尾部、Session、模型首 delta、
+  首句完整边界、重复 ready、仅 audio Provider 回退和阶段提示隔离。
+- `cargo fmt --all -- --check`、`git diff --check` 通过。
+- 原生松键到首音频、客户端实际首字绘制、真人尾音和多轮插话仍待体验，
+  不以 Mock WebAudio 的成功宣称扬声器或 WebKit 实际播放已经验收。
+
+## 2026-10-07：松键后失败排查
+
+- 本地持久化快照显示三次失败都有最终转写，STT 已完成；失败轮次使用了
+  页面更新后的新 session ID，早先成功轮次使用另一个 ID。
+- 按“同一 Worker、第一轮成功、页面新 ID 发起第二轮”通过真实 Pi 和 Fake
+  语音复现：`VoiceLoop cannot switch product sessions` 被通用 catch 转成
+  “语音处理失败，请重试”。单独 Pi Session/prompt 正常。
+- 修复：Host 返回并保持当前 session ID，控制器采用返回值再发送录音请求；
+  页面刷新不会新建 Pi Session。录音轮次、错误及旧播放内容仍分别重置。
+- 不符合握手的会话冲突单独归类为 `voice_session_mismatch`，不能标记为
+  普通可重试故障；日志/用户事件不包含异常原文、堆栈或凭证。
+- 回归：Host 保留身份并清除旧错误；Worker 两轮只创建一次 Runtime；
+  人为会话冲突不进入第二次 prompt、错误分类且不泄漏内部异常。
+- 使用当前云端配置、合成中文录音跑真实 Worker 边界：录音期间按 100ms
+  PCM 分片发送，同一会话的两轮都收到 `voice.turn.completed`，无
+  `voice.error`。该检查验证云端协议和多轮复用，不证明真人识别准确率、
+  原生页面刷新握手或实际扬声器播放。
+
+  | 阶段 | 第一轮 | 第二轮 |
+  | --- | ---: | ---: |
+  | STT 输入结束至最终转写 | 591ms | 486ms |
+  | Pi 会话就绪 | 34ms | 0ms |
+  | 模型调用至首 delta | 906ms | 728ms |
+  | 模型调用至首句准备 | 914ms | 732ms |
+  | TTS 请求至首音频 | 710ms | 650ms |
+
+- `pnpm check` 通过：78 个 JS、27 个 Rust 测试，类型检查、现有 lint、
+  Clippy 与 JS/Rust 构建通过；`cargo fmt --all -- --check`、
+  `git diff --check` 通过。现有约 1.36MB 构建包警告不属于本次故障修复。
+- 已停止旧客户端及 Worker，复用 1421 端口的前端服务重新启动 Tauri；
+  新客户端及其 Worker 子进程已运行。
+- 原生真人按键与扬声器体验仍保留在 PV.6，不以合成输入代替。
+
+## 2026-10-07：按用户反馈切换 Fun-ASR
+
+- 用户要求暂不处理偶发卡住，本轮仅切换 STT，不改 Pi、TTS 或取消逻辑。
+- Worker 应用默认、本机 `.env`、`.env.example` 均采用
+  `SEMI_OS_STT_PROVIDER=fun` / `SEMI_OS_FUN_STT_MODEL=fun-asr-realtime`。
+  设置 `SEMI_OS_STT_PROVIDER=qwen` 可切回原模型，不修改或暴露 API Key。
+- Fun 独立使用 AOQ 参数；当前 Qwen 的即时热词、近场和语言参数不用于 Fun。
+- `pnpm --filter @semi-os/agent-worker typecheck` 与适配器/Worker 13 项测试通过。
+- 再次运行 `scripts/voice-benchmark.ts`，当前真实网关三条同 PCM 合成录音：
+
+  | 样本 | Qwen CER | Fun CER | Qwen 最终延迟 | Fun 最终延迟 |
+  | --- | ---: | ---: | ---: | ---: |
+  | 中文调研 | 0.0294 | 0 | 347ms | 198ms |
+  | 项目与工具名称 | 0 | 0.1163 | 398ms | 336ms |
+  | 长指令 | 0 | 0 | 451ms | 120ms |
+
+- Fun 的普通中文/长指令已通，但工具名称样本仍将 Semi-OS / Pi 识别为
+  “私密OS”/“Py”。因此这次是可回退的体验切换，并非宣称已验证更高真人准确率。
+  临时合成音频由脚本清理，原生真人测试仍未完成。
+
+## 2026-10-07：采集启动、空转写与无标记回复
+
+- 保留 Fun-ASR；不切换供应商，不扩展偶发卡住问题的排查范围。
+- Worklet 在连接时预加载，AudioContext 跨轮次复用；按键立即申请采集，
+  与播放器解锁、旧轮次暂停和 Host 握手并行，握手期间 PCM 在内存按序缓冲。
+- 松键先停止采集并 flush，再等待握手/发送链提交；零 PCM 不发送空提交，
+  空转写返回明确的可重试错误，不再静默回 idle。
+- Pi 漏写 speech 标记时，从最终 post-tool 回答清除内部标签、代码和引用标识，
+  取一句或最多 160 字的前缀播报，不重新调用模型、不朗读整份报告。
+- Ego 页面使用 Mock WebAudio/IPC 检查生命周期：Host 人为延迟 600ms，
+  采集启动约 1ms，松键停止约 59ms，握手约 601ms；实际发送顺序为
+  start → append(sequence=0) → commit。第二轮复用 Worklet，
+  权限拒绝后 error 且不 commit。这不是原生设备延迟或真人准确率测量。
+- 真人首字、短句、偶发空输入仍未验收，不能宣称全部原因已消除。
+- `pnpm check` 通过：81 个 JS 测试、27 个 Rust 测试，类型检查、lint、
+  Clippy 和构建通过；`cargo fmt --all -- --check`、`git diff --check` 通过。
+  已重启原生客户端及其 Worker，保留 Vite 1421；全部改动未提交。
+
+## 2026-10-08：连续录音的轮次竞争与迟到分片
+
+- 截图包含 `commit does not match the last accepted audio sequence` 与空转写。
+  本机 Worker 诊断仅包含退出/重启记录，不足以还原截图每次失败的实际时序。
+- 新增持久化 `voice-client.test.ts`，使用 Tauri 官方 Mock IPC 和 Mock WebAudio，
+  实际执行控制器、录音器与重采样器。延迟 append / commit 后再次按键，
+  修复前两条用例均复现“旧轮次收尾停止新麦克风”；代码同时存在待发送
+  分片读取新 request ID、旧 commit 读取新 sequence 的竞争。
+- Worklet 超时用例在修复前复现旧节点音频进入新重采样器。停止后现在解绑
+  消息并关闭端口，回调校验节点身份，迟到 flush 也不能结束下一轮录音。
+- 修复：新轮次等待旧轮次完整提交与清理；重复松键共享停止操作；
+  排队期间已松键则不启动录音并提示重试；发送分片捕获其所属 request ID。
+  普通按键仍与 Host 握手并行采集，不改变 STT 模型或 Worker 的序号校验。
+- 7 条新增回归覆盖慢 append、慢 commit、重复松键、慢握手尾部、
+  排队期间松键、权限拒绝/空录音、IPC 失败后下一轮恢复，以及迟到 Worklet。
+- `pnpm check` 通过：90 个 JS 测试（桌面 23 项）、27 个 Rust 测试，
+  类型检查、现有 lint、Clippy、JS/Rust 构建通过；Rust 格式检查与
+  `git diff --check` 通过。现有大包警告仍在。
+- 此证据确认客户端竞争条件已修复，不证明截图所有空转写均由同一原因造成；
+  真人连续按键、首字/尾音和实际扬声器仍待原生体验，不以 Mock 代替。
+
+## 原生人工验收
+
+10 月 8 日无声复查：系统输出未静音，默认输出为内置扬声器；最近两轮
+有最终文字，无已保存播放错误，但旧记录不含播放证据，不能据此定位根因。
+新增 `diagnostics/playback.jsonl`，仅记录轮次、首包字节数、状态转换、
+播放位置、上下文时钟及数值音量；不保存对话或音频。补充 running 状态下
+时钟停滞超过 3 秒时报错，避免无限 buffering。桌面 24 项测试和类型检查
+通过；原生应用已自动重建，仍需复现无声以取得诊断，不宣称已恢复声音。
+
+客户端已启动。浏览器预览：`http://127.0.0.1:1421/`。
+麦克风、桌面透明和快捷键必须用原生客户端验证。
+
+- [ ] 托盘唤起后桌面透出，点击穿过光环落在底层应用。
+- [ ] 原应用保持键盘焦点，按住/松开正常，无边框或阴影。
+- [ ] 麦克风授权与拒绝路径；拒绝后有错误，无悬空录音。
+- [ ] 快速点按不在松键后持续录音，多次连续录音正常。
+- [ ] 末尾音节完整，长指令无丢失/重复分片。
+- [ ] 中间转写持续出现，最终文本才开始 Pi，无固定回应。
+- [ ] 真实音量驱动光环，隐藏窗口不关闭唯一播放器。
+- [ ] 实际播放同步，无/晚到时间戳整句退化，不匀速打字。
+- [ ] 缓冲、播放/TTS 失败及插话：旧播报停止、文字保留、不恢复旧操作。
+- [ ] 关闭重开恢复文字，风险操作仍需真实确认。
+- [ ] 真人同录音比较 CER / 延迟后再选默认 ASR。
+
+未完成项保留在 `tasks.md` PV.6，未经用户体验不标记通过。
+# 2026-10-08：空回复与无声复查
+
+## 第二次原生复测
+
+- 用户确认独立 AudioContext 后仍无声；最新日志时钟推进，分析信号
+  level 达到 0.5127，不能继续把“播放图正在运行”当作实际出声。
+- 客户端临时选择媒体兼容出口：每句 PCM 完成后封装标准
+  22050 Hz / 单声道 / PCM16 WAV，用 HTMLAudioElement 直接输出。
+  不调用 createMediaElementSource，不把声音接回 WebAudio；
+  原 PCM 流式路径保留，待实际出口问题确认后评估恢复。
+- 播放同步仍依赖 playing/timeupdate/ended；不是收到 completed 就显示
+  已播完。该路径暂时失去真实音量分析，首音需等待本句合成完成。
+- 桌面 26 项测试通过，包括 WAV 字段、跨分片样本、媒体出口隔离、
+  实际开始事件、句子排队与取消。实际扬声器听音仍待复测。
+
+- 实际 Pi Session 中“星期几啊”调用 `date` 后的最终消息为
+  `stopReason: aborted`。旧 Adapter 无条件转换 `agent_end` 为正常完成。
+  现在跳过 `willRetry` 的中间结束，失败/中止输出显式错误；VoiceLoop
+  对没有摘要、报告或有效调研结果的完成也输出错误。
+- 添加回归覆盖：Pi 自动重试不提前完成、错误/中止映射、空回答不静默成功、
+  Runtime 错误后迟到完成无效、采集与播放使用两个可复用 AudioContext。
+- 添加产品身份提示：回答经 TTS 播报，不能自称纯文字助手，也不能
+  凭模型猜测断言扬声器正常。
+- 系统默认输出为 MacBook Pro 扬声器，音量 56，未静音。
+  原生播放日志有持续时钟和非零分析信号；真实 TTS 测试返回
+  115542 bytes / 2620 ms，RMS 0.0871，峰值 0.6355。
+- 隔离录音与播放上下文作为播放出口排查改动，不把它宣称为已确认根因。
+  自动测试、云端合成和分析器信号不能替代扬声器听音验收。

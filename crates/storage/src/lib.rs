@@ -12,5 +12,5 @@ pub use error::{StorageError, StorageResult};
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
 };
-pub use repository::Storage;
+pub use repository::{validate_session_title, ClientSession, Storage};
 pub use semi_os_protocol::ToolAttemptStatus;

@@ -99,6 +99,9 @@ export function runWorker(): void {
     });
   });
   lines.once("close", () => void service.dispose());
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => { lines.close(); void service.dispose().finally(() => process.exit(0)); });
+  }
 }
 
 const entrypoint = process.argv[1]

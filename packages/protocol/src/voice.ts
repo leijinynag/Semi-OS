@@ -11,7 +11,9 @@ export const VOICE_REQUEST_KINDS = [
   "voice.turn.start",
   "voice.audio.append",
   "voice.turn.commit",
+  "voice.text.submit",
   "voice.interrupt",
+  "voice.session.dispose",
 ] as const;
 
 export const VOICE_EVENT_KINDS = [
@@ -19,16 +21,37 @@ export const VOICE_EVENT_KINDS = [
   "voice.transcript.partial",
   "voice.transcript.final",
   "voice.assistant.text_delta",
+  "voice.answer",
+  "voice.sentence",
+  "voice.timestamps",
   "voice.audio.chunk",
   "voice.audio.completed",
   "voice.audio.stop",
   "voice.turn.completed",
   "voice.error",
+  "research.progress",
+  "research.receipt",
+  "research.report",
+  "research.timing",
+  "research.interrupted",
 ] as const;
 
 export type VoiceRequestKind = (typeof VOICE_REQUEST_KINDS)[number];
 export type VoiceEventKind = (typeof VOICE_EVENT_KINDS)[number];
 export type VoiceTurnAction = "prompt" | "steer" | "follow_up";
+export const TEXT_INPUT_MAX_LENGTH = 64_000;
+
+/** 文字输入仅替代最终转写，不携带音频，也不创建另一套 Agent Loop。 */
+export interface VoiceTextSubmitPayload {
+  sessionId: string;
+  taskId: string;
+  cwd: string;
+  text: string;
+  action?: VoiceTurnAction;
+}
+
+/** 固定 PCM 契约：有符号 16 位小端、单声道；禁止播放器猜测采样率。 */
+export const VOICE_PCM_MIME = "audio/pcm;rate=22050;channels=1;format=s16le";
 
 export interface VoiceTurnStartPayload {
   sessionId: string;
@@ -58,7 +81,9 @@ export type VoiceRequestPayloadByKind = {
   "voice.turn.start": VoiceTurnStartPayload;
   "voice.audio.append": VoiceAudioAppendPayload;
   "voice.turn.commit": VoiceTurnCommitPayload;
+  "voice.text.submit": VoiceTextSubmitPayload;
   "voice.interrupt": VoiceInterruptPayload;
+  "voice.session.dispose": { sessionId: string };
 };
 
 export type VoiceRequestEnvelope = {
@@ -85,6 +110,21 @@ export interface VoiceAudioChunkPayload {
   mimeType: string;
   audioBase64: string;
   first: boolean;
+}
+
+export interface VoiceWordTiming {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+/** requestId 标识轮次；载荷同时绑定会话和任务，防止跨窗口迟到事件串线。 */
+export interface VoiceSentencePayload {
+  sessionId: string;
+  taskId: string;
+  sentenceId: string;
+  text: string;
+  purpose: "answer" | "stage" | "confirmation";
 }
 
 export type VoiceEventEnvelope = EventEnvelope & { kind: VoiceEventKind };
@@ -146,11 +186,20 @@ export function parseVoiceRequest(
   }
 
   switch (envelope.kind as VoiceRequestKind) {
+    case "voice.session.dispose":
+      requireString(envelope.payload, "sessionId");
+      break;
+    case "voice.text.submit":
     case "voice.turn.start": {
       requireString(envelope.payload, "sessionId");
       requireString(envelope.payload, "taskId");
       requireString(envelope.payload, "cwd");
-      requireString(envelope.payload, "mimeType");
+      if (envelope.kind === "voice.text.submit") {
+        const text = requireString(envelope.payload, "text");
+        if (!text.trim() || text.length > TEXT_INPUT_MAX_LENGTH) {
+          throw new ProtocolValidationError("text is empty or too long", "invalid_payload");
+        }
+      } else requireString(envelope.payload, "mimeType");
       const action = envelope.payload.action;
       if (
         action !== undefined &&
@@ -210,4 +259,54 @@ export function createVoiceEvent(
     kind,
     payload,
   };
+}
+
+/** 播放前校验 Worker 边界，畸形元数据不能创建音频队列或进入文字报告。 */
+export function parseVoiceEvent(envelope: EventEnvelope): VoiceEventEnvelope {
+  if (!VOICE_EVENT_KINDS.includes(envelope.kind as VoiceEventKind) || !isRecord(envelope.payload)) {
+    throw new ProtocolValidationError("invalid voice event", "invalid_payload");
+  }
+  const payload = envelope.payload;
+  const boundedString = (field: string, maximum: number, empty = false) => {
+    const value = payload[field];
+    if (typeof value !== "string" || (!empty && !value) || value.length > maximum) {
+      throw new ProtocolValidationError(`invalid ${field}`, "invalid_payload");
+    }
+  };
+  if (["voice.sentence", "voice.timestamps", "voice.audio.chunk", "voice.audio.completed", "voice.answer"].includes(envelope.kind)) {
+    boundedString("sessionId", 160);
+    boundedString("taskId", 160);
+  }
+  if (["voice.sentence", "voice.timestamps", "voice.audio.chunk", "voice.audio.completed"].includes(envelope.kind)) boundedString("sentenceId", 160);
+  switch (envelope.kind) {
+    case "voice.sentence":
+      boundedString("text", 8192);
+      if (!["answer", "stage", "confirmation"].includes(String(payload.purpose))) throw new ProtocolValidationError("invalid sentence purpose", "invalid_payload");
+      break;
+    case "voice.timestamps":
+      if (!Array.isArray(payload.words) || payload.words.length > 4096 || !payload.words.every((word) =>
+        isRecord(word) && typeof word.text === "string" && word.text.length <= 8192 &&
+        Number.isSafeInteger(word.startMs) && Number.isSafeInteger(word.endMs) &&
+        Number(word.startMs) >= 0 && Number(word.endMs) >= Number(word.startMs) && Number(word.endMs) <= 600_000)) {
+        throw new ProtocolValidationError("invalid word timestamps", "invalid_payload");
+      }
+      break;
+    case "voice.answer":
+      boundedString("summary", 128_000, true);
+      boundedString("report", 512_000, true);
+      break;
+    case "voice.audio.chunk":
+      boundedString("audioBase64", 2_000_000);
+      requireInteger(payload, "sequence");
+      if (!["audio/mpeg", VOICE_PCM_MIME].includes(String(payload.mimeType)) || typeof payload.first !== "boolean" ||
+        String(payload.audioBase64).length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(String(payload.audioBase64))) {
+        throw new ProtocolValidationError("invalid audio chunk", "invalid_payload");
+      }
+      break;
+    case "voice.transcript.partial":
+    case "voice.transcript.final":
+      boundedString("text", 64_000, true);
+      break;
+  }
+  return envelope as VoiceEventEnvelope;
 }

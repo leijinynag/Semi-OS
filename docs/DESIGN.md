@@ -44,7 +44,7 @@ sessions and native application/Lark operations.
 
 The first release succeeds when a user can:
 
-- hold a shortcut, speak a task and hear an acknowledgement quickly;
+- hold a shortcut, speak a task and hear the first useful response quickly;
 - see a minimal floating assistant while the task is active;
 - ask for a multi-site research report and hear a sourced synthesis;
 - describe a requirement in the current project and have a local coding agent
@@ -71,7 +71,9 @@ The first release succeeds when a user can:
 The experience intentionally has two surfaces:
 
 - **Desktop assistant:** transient, ambient and voice-first. It appears while
-  listening, working or waiting for confirmation.
+  listening, working or waiting for confirmation. Its native window is
+  transparent, shadowless, nonfocusing and mouse-passthrough. Only the halo
+  and particles are visible; confirmations and text live in the client.
 - **Client:** persistent control center for conversation, task history, memory,
   skills, permissions and settings.
 
@@ -112,7 +114,7 @@ Input: the user asks Semi-OS to research a topic or question.
 
 Expected behavior:
 
-1. acknowledge the request by voice;
+1. begin with a meaningful stage prompt when execution starts, without a fixed acknowledgement;
 2. search multiple relevant websites using the browser tool set;
 3. record source URLs, extracted facts and failed or blocked sources;
 4. synthesize the findings, distinguish facts from uncertainty and cite the
@@ -175,7 +177,7 @@ proven reliable.
 - memory retrieval alone does not count as task complexity;
 - task progress is derived from domain events and receipts, not parsed from
   assistant prose;
-- every execution scenario has a voice acknowledgement and a final voice
+- every execution scenario has meaningful spoken progress and a final voice
   response;
 - the client allows manual personality editing and manual user-preference
   entry;
@@ -373,7 +375,6 @@ push-to-talk
 → capture/denoise
 → streaming STT
 → final utterance
-→ immediate acknowledgement
 → Pi prompt
 → first complete answer sentence
 → streaming TTS
@@ -391,14 +392,113 @@ Latency is not dominated by Pi alone. Measure separate budgets:
 | Segment | Target experience |
 | --- | --- |
 | Hotkey to listening indicator | effectively immediate |
-| Speech end to acknowledgement | under about 500 ms when provider permits |
-| Acknowledgement to visible plan/progress | stream as soon as available |
+| Speech end to final transcription | measure provider finalization separately |
+| Plan/progress | meaningful stage events, no universal acknowledgement |
 | First complete assistant sentence to audio | begin TTS immediately |
 | Tool progress | emit structured milestones, not silent waiting |
 
-The acknowledgement is deterministic and must not claim task completion. TTS
-uses sentence buffering so the user hears coherent speech without waiting for
-the entire answer.
+No fixed acknowledgement is generated for every input. TTS uses sentence
+buffering for a short spoken summary; the full Markdown report remains separate.
+The assistant WebView owns one capture/player controller. Rust relays current
+conversation snapshots and stores final messages, not per-frame playback events.
+Validated word timestamps advance text using actual playback position; without
+timestamps, reveal the sentence only when playback starts. Buffering, failures
+and interruption must not pretend that audio has played.
+
+客户端提供多行文字输入，Enter 发送、Shift+Enter 换行；输入法选词不发送。
+文字只跳过采集和 STT，经 Rust `submit_text_message` 定向转发到助手 WebView
+的唯一控制器，再以 `voice.text.submit` 进入已有 VoiceLoop。最终文本之后
+与语音共用 Pi Session、工具策略/确认、句子 TTS、Markdown 同步和持久化。
+客户端不创建第二个 VoiceClient/播放器；麦克风关闭、授权拒绝或未处理
+均不阻塞文字请求。后台预热失败不得覆盖正在运行的文字轮次。
+发送新文字立即停止旧播报并关闭录音门控，不额外提交被替换的录音。
+Host 回执确认请求已交给 Worker 传输后才清空未编辑的草稿；模型完成
+不是发送成功的前提。失败保留草稿，接收结果未知时提示核对、不自动重发。
+消息上限跨 JS/Rust 按 64000 UTF-16 单元统一校验；历史按时间正序展示，
+靠近底部时跟随新内容，向上阅读时不强行滚动。
+
+客户端 Session 不等同于单轮输入或 TaskRun。Host 的 SQLite 保存会话列表、
+空会话及唯一 active 选择；普通文字/语音只追加轮次，手动新建才增加会话。
+新建前弹窗命名；右键已有条目可重命名或确认删除。名称经 Host 校验并保存，
+不会被消息改写。删除当前会话经过同一停止/切换握手，后继选择与聊天归档删除
+原子提交；删除最后一个会话留下新的空白会话。Worker 接收有界的
+`voice.session.dispose` 清理该会话 Pi 上下文，独立任务证据及浏览器 Profile 保留。
+迁移将旧归档归属统一映射到默认会话，保留原始运行身份，不恢复旧 Pi 上下文。
+切换意图经过助手唯一控制器：停止本地录音/播放、排队暂停旧任务，
+Host 校验仍有效的切换回执后事务更新 active，客户端随后允许新输入。
+Node Worker 按 sessionId 懒加载并复用独立 VoiceLoop/Pi Adapter；
+只发送当前会话事件，不自建 Agent Loop。独立上下文限于同一 Worker 生命周期，
+跨重启只恢复列表、选择与文字归档，Pi Checkpoint 恢复仍待后续实现。
+
+Capture uses mono AudioWorklet frames, continuous cross-frame resampling to
+16 kHz PCM16, and a stop/flush handshake before committing input. STT receives
+frames during capture; interim text only updates the client. Only the final
+transcript reaches Pi. Numeric diagnostics report actual sample rate, RMS,
+peak, silence and clipping without storing microphone audio.
+语音启用且授权后，默认预热麦克风轨道、独立采集 AudioContext 与 Worklet。
+设备生命周期与录音轮次分离；空闲门控关闭，采样在 Worklet 内立即丢弃，
+无按键前缓存、不保存、不上传。客户端可关闭预热；系统麦克风指示持续
+出现是常驻设备的预期行为。关闭语音、退出或设备失效时释放设备。
+按键同步打开就绪设备的门控，松键关闭并冲刷尾部；网络/Host 握手不阻塞
+本地采集。每轮独立 token、PCM 缓冲与序号，上一轮云端提交未完成时
+下一轮仍可采集。仅本地尾音冲刷串行；Worker start/append/commit 保序。
+重复松键共用停止操作。回调同时校验节点及 token，旧采样和旧 flush
+不能进入新轮次。设备切换重建，页面恢复时恢复音频时钟；尚未就绪时
+松键不会在释放后补录。无采样、全静音、服务失败分别反馈。
+权限弹窗不阻塞快捷键监听安装；首次授权期间不承诺即时首字采集。
+
+The current application default is `fun-asr-realtime`, selected for user
+evaluation after recognition-quality feedback. Set `SEMI_OS_STT_PROVIDER=qwen`
+to restore Qwen. Each mode retains provider-specific parameters; Qwen inline
+hotwords are not passed to Fun-ASR. This is not a claim of measured superiority
+on real microphone input.
+
+TTS transports PCM16 chunks. The current native compatibility output collects
+one completed sentence, wraps it in WAV and plays through HTMLAudioElement
+without WebAudio routing; the user confirmed this output is audible.
+PCM16 预计算 20 ms RMS 包络，按媒体 currentTime 在本地 rAF 读取。
+快速响应、缓慢回落；缓冲、暂停、失败和取消归零。Three.js 每帧读取 ref，
+驱动内层细颤、外环小幅呼吸、粒子重音传播，不逐帧更新 React、写数据库
+或跨窗口传递振幅。减少动态效果时关闭声振；无包络仅保留待机运动。
+The optional provider transport preparation overlaps the WebSocket handshake
+with recording, sends no synthesis request and expires after 15 seconds.
+Cancellation releases an unclaimed connection. The first sentence claims it
+once; later sentences use independent connections. The Worker records model
+first delta, first complete spoken sentence, TTS first audio, synthesis
+completion and client first playback separately. Preparation does not remove
+the sentence-completion wait or bypass the Pi loop.
+
+Explicit spoken summaries may split at a Chinese comma or semicolon after
+at least 18 Han characters, outside quotes and parentheses. URLs, code and
+structural markers disable this early split for the current segment.
+Short replies, unmarked fallback speech and Markdown reports retain their
+existing boundaries. This natural pause is not proof of a standalone complete
+conclusion. The compatible `speech.first_sentence_ready` metric now measures
+the first speakable segment when this mode is enabled; actual playback remains
+a separate measurement.
+
+Pi 官方 DefaultResourceLoader.systemPrompt 设置通用助手身份，替换编码定位；
+提供给 createAgentSession 之前显式 reload，不能仅构建未加载的 Loader。
+不再每轮向用户消息附加身份/协议。通用 cwd 为 Host 应用数据目录下
+agent-workspace；禁止自动发现开发 AGENTS、个人/项目扩展、Skill、模板和
+附加系统提示。Loader 使用隔离的内存配置避免加载个人 packages；
+Pi 模型认证沿用原入口，原生工具与内置 Research Skill/Host 扩展保留。
+明确项目任务按需读取用户指定目录，不禁用文件工具掩盖上下文污染。
+普通交流直接回答，时效问题才搜索网络，不默认读取源码。
+口头回答必需，Markdown 详情可选；简单回复不复制摘要生成报告，客户端
+不渲染空折叠区。调研仍保留结构化来源/引用。标记缺失时仅最终 post-tool
+文字作为保守兜底，过滤推理/代码/内部引用。新会话采用新提示，旧记录不删除；
+验收使用干净会话以排除历史仓库上下文。
+
+Snapshots carry session, turn, task and sentence identities. Rust rejects stale
+turns and broadcasts coalesced playback updates without per-frame writes.
+The Host retains the voice session identity across assistant WebView reloads.
+Capture uses the session ID returned by `start_voice_conversation` before
+sending any Worker request; only request/task IDs change for a new turn.
+This handshake does not implement Pi session restoration across Host restarts.
+Final messages and failure states are persisted. The client uses
+`react-markdown` and `remark-gfm` with raw HTML disabled. Restored conversations
+expose full saved text and never resume old audio positions.
 
 ### 5.3 Provider interfaces
 
@@ -408,6 +508,19 @@ normalized behind interfaces. Local Whisper-family STT, local TTS and local
 LLMs can be added later without changing task orchestration. Secrets remain in
 Keychain; the worker receives short-lived credentials or opaque provider handles
 where practical.
+
+Qwen and Fun-ASR use separately configured DashScope adapter parameters.
+Nearfield mode, recognition languages and instant vocabulary are configurable
+for Qwen; Fun-ASR is not a blind model-name replacement. 当前默认 Fun-ASR 不变，
+新增 SEMI_OS_FUN_STT_VOCABULARY_ID 独立入口；词表须在兼容服务中创建，
+失败明确提示热词未确认生效，不剥掉参数偷偷重试。
+当前网关是否支持词表仍待实测，不能凭请求成功认定热词有效。
+真人准确率必须用至少 30 条同录音评估 CER、关键实体准确率及最终延迟
+P50/P95；未采集真人语料前不切换模型。录音仅由用户主动准备的诊断语料
+送入比较脚本，默认只输出数值，显式 --include-text 才输出文字。
+CosyVoice requests timestamps opportunistically
+and streams audio regardless of timestamp availability.
+See `VOICE-OPTIMIZATION-VALIDATION.md` for results and native acceptance gaps.
 
 ## 6. Tool architecture
 
@@ -811,7 +924,7 @@ Exit criterion: app can start/restart the worker and replay a fake task stream.
 - floating assistant states;
 - pause, cancel and steer without tools.
 
-Exit criterion: a user can hold-to-talk, hear a quick acknowledgement, interrupt
+Exit criterion: a user can hold-to-talk, hear the first useful response, interrupt
 the response and continue the same session.
 
 ### Parallel MVP workstreams
@@ -856,7 +969,7 @@ leaking unrelated context.
 
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
-| Voice latency feels slow | product feels inferior before tools matter | deterministic acknowledgement, streaming STT/TTS, per-stage budgets |
+| Voice latency feels slow | product feels inferior before tools matter | meaningful stage prompts, streaming STT/TTS, per-stage budgets |
 | Pi API changes | worker churn | adapter, pinned dependency, contract tests |
 | macOS UI semantics are incomplete | brittle desktop actions | accessibility first, screenshot fallback, fresh observation |
 | Browser login/profile theft | account compromise | dedicated profile, restrictive permissions, never commit state |

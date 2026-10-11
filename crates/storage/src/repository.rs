@@ -11,7 +11,286 @@ pub struct Storage {
     connection: Connection,
 }
 
+/// 客户端 Session 独立于单轮 request/task；空会话也必须可在重启后恢复。
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientSession {
+    pub session_id: String,
+    pub title: String,
+    pub created_at_ms: i64,
+    pub active: bool,
+}
+
+/// 与前端按 UTF-16 单元统一限制；存储边界校验，不能信任 WebView 的输入框。
+pub fn validate_session_title(title: &str) -> StorageResult<String> {
+    let title = title.trim();
+    if title.is_empty() || title.encode_utf16().count() > 80 || title.chars().any(char::is_control)
+    {
+        return Err(StorageError::InvalidSessionTitle);
+    }
+    Ok(title.to_owned())
+}
+
 impl Storage {
+    pub fn load_client_sessions(&self) -> StorageResult<Vec<ClientSession>> {
+        let mut statement = self.connection.prepare(
+            "SELECT session_id,title,created_at_ms,active FROM client_sessions ORDER BY created_at_ms DESC, rowid DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ClientSession {
+                session_id: row.get(0)?,
+                title: row.get(1)?,
+                created_at_ms: row.get(2)?,
+                active: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn create_client_session(&mut self, id: &str, title: &str, now: i64) -> StorageResult<()> {
+        let title = validate_session_title(title)?;
+        self.connection.execute(
+            "INSERT INTO client_sessions(session_id,title,created_at_ms) VALUES(?1,?2,?3)",
+            params![id, title, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn rename_client_session(&mut self, id: &str, title: &str) -> StorageResult<()> {
+        let title = validate_session_title(title)?;
+        if self.connection.execute(
+            "UPDATE client_sessions SET title=?1 WHERE session_id=?2",
+            params![title, id],
+        )? == 0
+        {
+            return Err(StorageError::SessionNotFound(id.into()));
+        }
+        Ok(())
+    }
+
+    /// 仅删除聊天归档；独立任务回执/证据仍保留，不将会话管理变成证据清理接口。
+    pub fn delete_client_session(&mut self, id: &str) -> StorageResult<()> {
+        let transaction = self.connection.transaction()?;
+        let active: bool = transaction
+            .query_row(
+                "SELECT active FROM client_sessions WHERE session_id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::SessionNotFound(id.into()))?;
+        if active {
+            return Err(StorageError::ActiveSessionDeletion);
+        }
+        transaction.execute("DELETE FROM conversation_turns WHERE session_id=?1", [id])?;
+        transaction.execute("DELETE FROM client_sessions WHERE session_id=?1", [id])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 切换与唯一 active 标记在一个事务内完成；不存在的会话不得清掉当前选择。
+    pub fn activate_client_session(&mut self, id: &str) -> StorageResult<()> {
+        self.activate_and_delete_client_session(id, None)
+    }
+
+    /// 当前会话删除和后继选择必须原子提交，失败时不能留下零个 active。
+    pub fn activate_and_delete_client_session(
+        &mut self,
+        id: &str,
+        deleting: Option<&str>,
+    ) -> StorageResult<()> {
+        let transaction = self.connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM client_sessions WHERE session_id=?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StorageError::SessionNotFound(id.into()));
+        }
+        if let Some(deleting) = deleting {
+            if deleting == id {
+                return Err(StorageError::ActiveSessionDeletion);
+            }
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM client_sessions WHERE session_id=?1)",
+                [deleting],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(StorageError::SessionNotFound(deleting.into()));
+            }
+        }
+        transaction.execute("UPDATE client_sessions SET active=0 WHERE active=1", [])?;
+        transaction.execute(
+            "UPDATE client_sessions SET active=1 WHERE session_id=?1",
+            [id],
+        )?;
+        if let Some(deleting) = deleting {
+            transaction.execute(
+                "DELETE FROM conversation_turns WHERE session_id=?1",
+                [deleting],
+            )?;
+            transaction.execute(
+                "DELETE FROM client_sessions WHERE session_id=?1",
+                [deleting],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 只保存最终转写/回答及终态；播放位置和音量不写数据库。
+    pub fn save_conversation(
+        &mut self,
+        request_id: &str,
+        value: &Value,
+        now: i64,
+    ) -> StorageResult<()> {
+        // 新记录使用 Host 当前身份；兼容旧调用方时归入默认会话，不影响历史迁移映射。
+        let session_id = value["sessionId"].as_str().unwrap_or("session_default");
+        self.connection.execute(
+            "INSERT INTO conversation_turns(request_id,conversation_json,updated_at_ms,session_id) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(request_id) DO UPDATE SET conversation_json=excluded.conversation_json,updated_at_ms=excluded.updated_at_ms",
+            params![request_id, serde_json::to_string(value)?, now, session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_conversations(&self) -> StorageResult<Vec<Value>> {
+        let mut statement = self.connection.prepare(
+            "SELECT conversation_json,session_id FROM conversation_turns ORDER BY updated_at_ms DESC LIMIT 200",
+        )?;
+        // UI 使用归档所属 Session，不因旧进程的运行 sessionId 拆分默认历史。
+        let rows = statement.query_map([], |row| {
+            let mut value: Value = decode_json(row.get(0)?)?;
+            value["sessionId"] = Value::String(row.get(1)?);
+            Ok(value)
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 重开客户端时从持久化证据恢复档案，不依赖本次窗口收到的内存事件。
+    pub fn load_research_archive(&self) -> StorageResult<Vec<Value>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT DISTINCT task_id FROM research_sources ORDER BY task_id")?;
+        let tasks = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        tasks
+            .into_iter()
+            .map(|task| {
+                let steps: Vec<String> = self.load_task_events(&task)?.into_iter()
+                    .filter(|event| event.event_kind == "research.progress")
+                    .filter_map(|event| event.payload["label"].as_str().map(str::to_owned))
+                    .collect();
+                Ok(serde_json::json!({
+                    "id":task, "label":steps.last().map(String::as_str).unwrap_or("资料调研"), "steps":steps,
+                    "sources":self.load_research_sources(&task)?,
+                    "report":self.load_research_report(&task)?
+                }))
+            })
+            .collect()
+    }
+    pub fn save_research_approval(
+        &mut self,
+        id: &str,
+        task: &str,
+        tool: &str,
+        digest: &str,
+        approved: bool,
+        time: i64,
+    ) -> StorageResult<()> {
+        self.connection.execute("INSERT INTO approvals(approval_id,task_id,action,target_json,payload_digest,decision,requested_at_ms,decided_at_ms) VALUES(?1,?2,?3,'{}',?4,?5,?6,?6)",
+            params![id, task, tool, digest, if approved { "approved" } else { "rejected" }, time])?;
+        Ok(())
+    }
+    pub fn validates_research_approval(
+        &self,
+        id: &str,
+        task: &str,
+        tool: &str,
+        digest: &str,
+    ) -> StorageResult<bool> {
+        self.connection.query_row("SELECT EXISTS(SELECT 1 FROM approvals WHERE approval_id=?1 AND task_id=?2 AND action=?3 AND payload_digest=?4 AND decision='approved' AND attempt_id IS NULL)",
+            params![id,task,tool,digest], |row| row.get(0)).map_err(Into::into)
+    }
+    pub fn consume_research_approval(&mut self, id: &str, attempt: &str) -> StorageResult<()> {
+        self.connection.execute(
+            "UPDATE approvals SET attempt_id=?2 WHERE approval_id=?1 AND attempt_id IS NULL",
+            params![id, attempt],
+        )?;
+        Ok(())
+    }
+    /// 来源与正文 Artifact 同事务保存；正文不重复塞进来源 JSON。
+    pub fn save_research_source(&mut self, source: &Value) -> StorageResult<()> {
+        let transaction = self.connection.transaction()?;
+        let field = |name: &str| source.get(name).and_then(Value::as_str).unwrap_or("");
+        let mut metadata = source.clone();
+        metadata
+            .as_object_mut()
+            .expect("validated source object")
+            .remove("text");
+        if let Some(text) = source.get("text").and_then(Value::as_str) {
+            transaction.execute(
+                "INSERT INTO artifacts(artifact_id,task_id,kind,uri,media_type,digest,created_at_ms,content_text)
+                 VALUES(?1,?2,'research_body',?3,'text/plain',?4,?5,?6)",
+                params![field("artifactId"),field("taskId"),format!("artifact:{}",field("artifactId")),
+                    field("digest"),source["collectedAtMs"].as_i64().unwrap_or(0),text],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO research_sources(source_id,task_id,artifact_id,source_json,collected_at_ms) VALUES(?1,?2,?3,?4,?5)",
+            params![field("sourceId"),field("taskId"),source.get("artifactId").and_then(Value::as_str),
+                serde_json::to_string(&metadata)?,source["collectedAtMs"].as_i64().unwrap_or(0)],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn load_research_sources(&self, task_id: &str) -> StorageResult<Vec<Value>> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_json FROM research_sources WHERE task_id=?1 ORDER BY collected_at_ms,source_id",
+        )?;
+        let rows = statement.query_map([task_id], |row| decode_json(row.get(0)?))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn load_artifact_text(
+        &self,
+        task_id: &str,
+        artifact_id: &str,
+    ) -> StorageResult<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT content_text FROM artifacts WHERE task_id=?1 AND artifact_id=?2",
+                params![task_id, artifact_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn save_research_report(&mut self, task_id: &str, report: &Value) -> StorageResult<()> {
+        self.connection.execute(
+            "INSERT INTO research_reports(task_id,report_json) VALUES(?1,?2)
+             ON CONFLICT(task_id) DO UPDATE SET report_json=excluded.report_json",
+            params![task_id, serde_json::to_string(report)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_research_report(&self, task_id: &str) -> StorageResult<Option<Value>> {
+        self.connection
+            .query_row(
+                "SELECT report_json FROM research_reports WHERE task_id=?1",
+                [task_id],
+                |row| decode_json(row.get(0)?),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
     /// 打开 Rust Host 独占的数据库连接并执行迁移。
     ///
     /// WAL 允许未来 UI 只读查询与 Host 写入并行；busy timeout 用于吸收本地短事务

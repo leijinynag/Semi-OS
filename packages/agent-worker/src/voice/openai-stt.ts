@@ -116,7 +116,7 @@ export class OpenAiSttProvider implements SttProvider {
       form.set("response_format", "json");
       form.set(
         "file",
-        new Blob([bytes], { type: mimeType }),
+        new Blob([new Uint8Array(bytes)], { type: mimeType }),
         mimeType.includes("wav") ? "speech.wav" : "speech.webm",
       );
       const response = await this.#options.fetch(

@@ -2,6 +2,7 @@ export const protocolPackageName = "@semi-os/protocol";
 
 export * from "./envelope.ts";
 export * from "./voice.ts";
+export * from "./research.ts";
 export type {
   CapabilityStatus,
   ResultType,

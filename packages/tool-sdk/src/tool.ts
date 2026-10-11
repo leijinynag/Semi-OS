@@ -16,6 +16,7 @@ export interface ToolExecutionContext {
 export interface ToolExecutionResult {
   output: JsonObject;
   outputSummary: string;
+  resultType?: "needs_user" | "failure";
   artifacts?: ToolExecutionReceipt["artifacts"];
 }
 
@@ -42,6 +43,8 @@ export interface ToolDefinition {
   name: string;
   description: string;
   riskLevel: ToolRiskLevel;
+  /** 基于可信目标观察解析风险；模型提供的 purpose 不能作为降级依据。 */
+  resolveRisk?(input: JsonObject, signal?: AbortSignal): Promise<ToolRiskLevel>;
   inputSchema: JsonObject;
   requiredCapabilities: readonly string[];
   supportedPlatforms?: readonly NodeJS.Platform[];

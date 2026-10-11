@@ -27,7 +27,7 @@ fn migrates_all_core_tables_on_reopen() {
     let database_path = directory.path().join("semi-os.sqlite3");
 
     let storage = Storage::open(&database_path).expect("database should migrate");
-    assert_eq!(storage.schema_version().expect("version should load"), 1);
+    assert_eq!(storage.schema_version().expect("version should load"), 4);
     drop(storage);
 
     let connection = rusqlite::Connection::open(&database_path).expect("database should open");
@@ -50,6 +50,10 @@ fn migrates_all_core_tables_on_reopen() {
             "approvals",
             "artifacts",
             "capabilities",
+            "client_sessions",
+            "conversation_turns",
+            "research_reports",
+            "research_sources",
             "schema_migrations",
             "settings",
             "task_events",
@@ -61,7 +65,207 @@ fn migrates_all_core_tables_on_reopen() {
     drop(connection);
 
     let reopened = Storage::open(&database_path).expect("migration should be idempotent");
-    assert_eq!(reopened.schema_version().expect("version should load"), 1);
+    assert_eq!(reopened.schema_version().expect("version should load"), 4);
+}
+
+#[test]
+fn sessions_persist_empty_entries_selection_and_separate_turns() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("sessions.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    storage
+        .save_conversation("req_old", &json!({"transcript":"历史"}), 1)
+        .unwrap();
+    storage
+        .create_client_session("session_new", "工作", 2)
+        .unwrap();
+    storage.activate_client_session("session_new").unwrap();
+    assert!(matches!(
+        storage.activate_client_session("missing"),
+        Err(StorageError::SessionNotFound(_))
+    ));
+    drop(storage);
+    let mut reopened = Storage::open(&path).unwrap();
+    let sessions = reopened.load_client_sessions().unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "session_new" && session.active));
+    reopened
+        .save_conversation(
+            "req_new",
+            &json!({"sessionId":"session_new","transcript":"新的话题"}),
+            3,
+        )
+        .unwrap();
+    let turns = reopened.load_conversations().unwrap();
+    assert_eq!(turns[0]["sessionId"], "session_new");
+    assert_eq!(turns[1]["sessionId"], "session_default");
+    assert_eq!(
+        reopened
+            .load_client_sessions()
+            .unwrap()
+            .iter()
+            .find(|session| session.session_id == "session_new")
+            .unwrap()
+            .title,
+        "工作"
+    );
+    reopened.activate_client_session("session_default").unwrap();
+    reopened
+        .rename_client_session("session_new", "已重命名")
+        .unwrap();
+    assert_eq!(
+        reopened
+            .load_client_sessions()
+            .unwrap()
+            .iter()
+            .filter(|session| session.active)
+            .count(),
+        1
+    );
+    drop(reopened);
+    assert!(Storage::open(&path)
+        .unwrap()
+        .load_client_sessions()
+        .unwrap()
+        .iter()
+        .any(|session| session.session_id == "session_new" && session.title == "已重命名"));
+}
+
+#[test]
+fn session_names_validate_and_survive_rename_and_new_messages() {
+    let mut storage = Storage::open_in_memory().unwrap();
+    for invalid in [
+        " ".to_owned(),
+        "a".repeat(81),
+        "😀".repeat(41),
+        "a\nb".into(),
+    ] {
+        assert!(storage
+            .create_client_session("invalid", &invalid, 1)
+            .is_err());
+        assert!(storage
+            .rename_client_session("session_default", &invalid)
+            .is_err());
+    }
+    storage
+        .rename_client_session("session_default", "  项目讨论  ")
+        .unwrap();
+    storage
+        .save_conversation("req_named", &json!({"transcript":"不要覆盖名称"}), 1)
+        .unwrap();
+    assert_eq!(storage.load_client_sessions().unwrap()[0].title, "项目讨论");
+    assert!(matches!(
+        storage.rename_client_session("missing", "名字"),
+        Err(StorageError::SessionNotFound(_))
+    ));
+}
+
+#[test]
+fn session_deletion_is_atomic_and_only_removes_its_chat_archive() {
+    let mut storage = Storage::open_in_memory().unwrap();
+    storage
+        .save_conversation("req_default", &json!({"transcript":"保留"}), 1)
+        .unwrap();
+    storage.create_client_session("a", "会话 A", 2).unwrap();
+    storage
+        .save_conversation("req_a", &json!({"sessionId":"a","transcript":"删除"}), 3)
+        .unwrap();
+    assert!(storage.delete_client_session("session_default").is_err());
+    assert!(storage
+        .activate_and_delete_client_session("a", Some("missing"))
+        .is_err());
+    assert!(storage
+        .load_client_sessions()
+        .unwrap()
+        .iter()
+        .any(|s| s.session_id == "session_default" && s.active));
+    storage.delete_client_session("a").unwrap();
+    assert_eq!(storage.load_conversations().unwrap().len(), 1);
+    storage
+        .create_client_session("replacement", "新会话", 4)
+        .unwrap();
+    storage
+        .activate_and_delete_client_session("replacement", Some("session_default"))
+        .unwrap();
+    let sessions = storage.load_client_sessions().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].active);
+    assert!(storage.load_conversations().unwrap().is_empty());
+    assert!(storage
+        .activate_and_delete_client_session("replacement", Some("replacement"))
+        .is_err());
+}
+
+#[test]
+fn legacy_runtime_ids_are_archived_under_default_without_rewriting_raw_json() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("legacy.sqlite3");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0001_core.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0002_research.sql"))
+        .unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/0003_conversations.sql"))
+        .unwrap();
+    connection.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,name TEXT,applied_at_ms INTEGER);
+        INSERT INTO schema_migrations VALUES(1,'core',0),(2,'research',0),(3,'conversations',0);
+        INSERT INTO conversation_turns VALUES('req_old','{\"sessionId\":\"session_original\"}',1);").unwrap();
+    drop(connection);
+    let storage = Storage::open(&path).unwrap();
+    assert_eq!(
+        storage.load_conversations().unwrap()[0]["sessionId"],
+        "session_default"
+    );
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let raw: String = connection
+        .query_row(
+            "SELECT conversation_json FROM conversation_turns",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(raw.contains("session_original"));
+}
+#[test]
+fn restores_final_conversations_and_upserts_a_turn() {
+    let directory = tempdir().unwrap();
+    let database_path = directory.path().join("conversation.sqlite3");
+    let mut storage = Storage::open(&database_path).unwrap();
+    storage
+        .save_conversation(
+            "req_one",
+            &json!({"requestId":"req_one","summary":"初稿"}),
+            1,
+        )
+        .unwrap();
+    storage
+        .save_conversation(
+            "req_one",
+            &json!({"requestId":"req_one","summary":"最终回答","report":"## 来源"}),
+            2,
+        )
+        .unwrap();
+    storage
+        .save_conversation(
+            "req_two",
+            &json!({"requestId":"req_two","error":"播放失败"}),
+            3,
+        )
+        .unwrap();
+    drop(storage);
+    let restored = Storage::open(&database_path)
+        .unwrap()
+        .load_conversations()
+        .unwrap();
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored[0]["requestId"], "req_two");
+    assert_eq!(restored[1]["summary"], "最终回答");
+    assert_eq!(restored[1]["report"], "## 来源");
 }
 
 #[test]

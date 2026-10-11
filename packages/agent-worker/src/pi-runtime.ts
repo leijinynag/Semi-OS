@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve, sep } from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionAPI,
@@ -77,6 +78,12 @@ interface CreatePiResourceLoaderInput {
  * 策略解析器，在不启动真实模型或读写用户会话的情况下验证适配器行为。
  */
 export interface PiAgentRuntimeOptions {
+  beforeToolExecution?: (signal: AbortSignal) => Promise<void>;
+  systemPrompt?: string;
+  /** 产品会话只加载显式内置资源，不继承开发或个人 Pi 扩展。 */
+  isolatedResources?: boolean;
+  approvalBinding?: (taskId: string, input: JsonObject) => ToolExecutionReceipt["approval"];
+  additionalSkillPaths?: readonly string[];
   now?: () => number;
   createSession?: typeof createAgentSession;
   model?: Model<any>;
@@ -92,6 +99,7 @@ export interface PiAgentRuntimeOptions {
     tool: ToolPolicySubject,
     input: JsonObject,
     taskId: string,
+    signal?: AbortSignal,
   ) => Promise<PolicyDecision>;
 }
 
@@ -317,6 +325,7 @@ function checkpointSessionFile(checkpoint?: AgentCheckpoint): string | undefined
  * 以便后续升级 Pi 或替换 Runtime 时保持任务模型稳定。
  */
 export class PiAgentRuntime extends EventedAgentRuntime {
+  readonly #approvalBinding?: PiAgentRuntimeOptions["approvalBinding"];
   // 以下依赖均保持为适配器私有成员，Pi 类型不会进入产品 Runtime 接口。
   readonly #now: () => number;
   readonly #createSession: typeof createAgentSession;
@@ -342,6 +351,10 @@ export class PiAgentRuntime extends EventedAgentRuntime {
   #sequence = 0;
   // Pi 只允许在 Session 创建时注册工具，运行中只能切换已注册工具的活跃状态。
   #registeredToolNames = new Set<string>();
+  // 不确定的变更结果禁止后续变更；只读观察仍可用于人工对账。
+  #uncertainTasks = new Set<string>();
+  #operation = new AbortController();
+  readonly #beforeToolExecution?: PiAgentRuntimeOptions["beforeToolExecution"];
   /**
    * Pi 原生工具由 SDK 自己执行，不能复用自定义工具的 execute 包装器。
    * 因此在 tool_call 前置钩子记录尝试上下文，在 tool_execution_end 后置钩子
@@ -362,6 +375,8 @@ export class PiAgentRuntime extends EventedAgentRuntime {
 
   constructor(options: PiAgentRuntimeOptions = {}) {
     super();
+    this.#beforeToolExecution = options.beforeToolExecution;
+    this.#approvalBinding = options.approvalBinding;
     this.#now = options.now ?? Date.now;
     this.#createSession = options.createSession ?? createAgentSession;
     this.#model = options.model;
@@ -389,6 +404,26 @@ export class PiAgentRuntime extends EventedAgentRuntime {
           agentDir: getAgentDir(),
           // 使用 Pi 官方扩展入口治理原生工具，避免复制 read/bash/edit/write。
           extensionFactories: [input.extension],
+          additionalSkillPaths: [...(options.additionalSkillPaths ?? [])],
+          systemPrompt: options.systemPrompt,
+          ...(options.isolatedResources ? {
+            // 资源发现不读取个人 packages 配置；模型认证由官方模型运行时独立读取。
+            settingsManager: SettingsManager.inMemory(),
+            noContextFiles: true,
+            noExtensions: true,
+            noSkills: true,
+            noPromptTemplates: true,
+            noThemes: true,
+            // 显式空数组阻止 SDK 自动发现 APPEND_SYSTEM.md。
+            appendSystemPrompt: [],
+            // 包资源也可能带 skills/prompts，最后按显式内置路径收口。
+            skillsOverride: (result) => ({ ...result, skills: result.skills.filter((skill) =>
+              (options.additionalSkillPaths ?? []).some((path) => {
+                const root = resolve(path);
+                return skill.filePath === root || skill.filePath.startsWith(root + sep);
+              })) }),
+            promptsOverride: () => ({ prompts: [], diagnostics: [] }),
+          } : {}),
         }));
     this.#resolvePolicyDecision =
       options.resolvePolicyDecision ??
@@ -422,6 +457,8 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       cwd: input.cwd,
       extension: this.#nativeToolExtension(),
     });
+    // SDK 只自动 reload 它自己创建的 Loader；显式传入时由调用方负责。
+    await resourceLoader.reload();
     const { session } = await this.#createSession({
       cwd: input.cwd,
       model: this.#model,
@@ -453,6 +490,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     const session = this.#requireSession();
     // Pi 工具事件本身不携带 Semi-OS TaskRun ID，调用前需保存当前任务归属。
     this.#taskId = input.taskId;
+    this.#operation = new AbortController();
     try {
       await session.prompt(input.text);
     } catch (error) {
@@ -466,17 +504,27 @@ export class PiAgentRuntime extends EventedAgentRuntime {
 
   async steer(input: AgentSteering): Promise<void> {
     // steer 是对当前执行中的插话，仍应把后续工具尝试归属到这次 TaskRun。
+    // Pi 的 steer 仅入队；暂停后的空闲 Session 必须用 prompt 启动下一轮。
+    if (!this.#requireSession().isStreaming) {
+      await this.prompt(input);
+      return;
+    }
     this.#taskId = input.taskId;
     await this.#requireSession().steer(input.text);
   }
 
   async followUp(input: AgentFollowUp): Promise<void> {
     // follow-up 开启同一 Session 中的后续轮次，但不创建隐藏的第二条 Agent Loop。
+    if (!this.#requireSession().isStreaming) {
+      await this.prompt(input);
+      return;
+    }
     this.#taskId = input.taskId;
     await this.#requireSession().followUp(input.text);
   }
 
   async pause(_taskId: string): Promise<PauseResult> {
+    this.#operation.abort();
     const session = this.#requireSession();
     const interrupted = session.isStreaming;
     if (interrupted) {
@@ -487,6 +535,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
   }
 
   async abort(_taskId: string): Promise<void> {
+    this.#operation.abort();
     await this.#requireSession().abort();
   }
 
@@ -535,9 +584,11 @@ export class PiAgentRuntime extends EventedAgentRuntime {
   }
 
   async dispose(): Promise<void> {
+    this.#operation.abort();
     // 解除订阅后再销毁 Session，防止清理阶段的 Pi 事件继续进入产品事件流。
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
+    await this.#session?.abort?.();
     this.#session?.dispose();
     this.#session = undefined;
     this.#sessionManager = undefined;
@@ -567,11 +618,25 @@ export class PiAgentRuntime extends EventedAgentRuntime {
         if (!taskId) {
           throw new AgentRuntimeStateError("tool executed without an active task");
         }
-        const policyDecision = await this.#resolvePolicyDecision(
-          tool,
+        const effectiveSignal = signal ? AbortSignal.any([signal, this.#operation.signal]) : this.#operation.signal;
+        let riskLevel = tool.riskLevel;
+        // 观察失败时不能降级；仍进入执行器生成可审计的拒绝/失败回执。
+        try { riskLevel = await tool.resolveRisk?.(input, effectiveSignal) ?? tool.riskLevel; }
+        catch { /* 保守保留静态风险，取消由统一执行器生成动作前回执。 */ }
+        let policyDecision: PolicyDecision;
+        try {
+          policyDecision = this.#uncertainTasks.has(taskId) && riskLevel !== "read"
+          ? "confirmation_required"
+          : await this.#resolvePolicyDecision(
+          { ...tool, riskLevel },
           input,
           taskId,
+          effectiveSignal,
         );
+        } catch {
+          // Host 不可用或确认被取消时不能进入动作，仍需审计此次尝试。
+          policyDecision = "rejected";
+        }
         // 在执行前分配 attempt，确保策略拒绝或 execute 抛错同样拥有终态回执。
         const identity = this.#allocateAttempt(taskId, toolCallId);
         try {
@@ -580,21 +645,26 @@ export class PiAgentRuntime extends EventedAgentRuntime {
             tool,
             input,
             identity,
-            signal: signal ?? new AbortController().signal,
+            signal: effectiveSignal,
             policyDecision,
             now: this.#now,
+            resolvedRiskLevel: riskLevel,
+            approval: this.#approvalBinding?.(taskId, input),
+            beforeExecute: this.#beforeToolExecution,
           });
           this.publish({ kind: "tool.completed", receipt: executed.receipt });
+          if (executed.receipt.status === "unknown") this.#uncertainTasks.add(taskId);
           return {
             // 返回给 Pi 的 content 只供 Agent 继续推理；details 中的 receipt
             // 是结构化证据，不能被模型文本替代。
             content: [
-              { type: "text", text: executed.result.outputSummary },
+              { type: "text", text: JSON.stringify(executed.result.output) },
             ],
             details: { receipt: executed.receipt },
           };
         } catch (error) {
           if (error instanceof ToolExecutionError) {
+            if (error.receipt.status === "unknown") this.#uncertainTasks.add(taskId);
             // 先发布失败/unknown 回执，再将异常交还 Pi 结束本次工具调用。
             this.publish({ kind: "tool.completed", receipt: error.receipt });
           }
@@ -650,11 +720,23 @@ export class PiAgentRuntime extends EventedAgentRuntime {
         description: `Pi native ${event.toolName} tool`,
         riskLevel,
       };
-      const policyDecision = await this.#resolvePolicyDecision(
-        subject,
-        input,
-        taskId,
-      );
+      // 授权失败或取消尚未执行的调用时，也必须留下确定的拒绝回执。
+      let policyDecision: PolicyDecision = "rejected";
+      try {
+        if (!this.#operation.signal.aborted) {
+          policyDecision = this.#uncertainTasks.has(taskId) && riskLevel !== "read"
+            ? "confirmation_required"
+            : await this.#resolvePolicyDecision(
+                subject,
+                input,
+                taskId,
+                this.#operation.signal,
+              );
+        }
+      } catch {
+        policyDecision = "rejected";
+      }
+      if (this.#operation.signal.aborted) policyDecision = "rejected";
       const identity = this.#allocateAttempt(taskId, event.toolCallId);
       const startedAtMs = this.#now();
       const expectedFileContent = await expectedNativeFileContent(
@@ -728,6 +810,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
             attempt.expectedFileContent,
           );
       const succeeded = verification.status === "passed";
+      if (!succeeded && uncertain) this.#uncertainTasks.add(attempt.identity.taskId);
       this.publish({
         kind: "tool.completed",
         receipt: this.#nativeReceipt(event.toolCallId, {
@@ -769,6 +852,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       inputSummary: `input for Pi native ${attempt.toolName}`,
       inputDigest: digestToolInput(attempt.input),
       policyDecision: attempt.policyDecision,
+      approval: this.#approvalBinding?.(attempt.identity.taskId, attempt.input),
       startedAtMs: attempt.startedAtMs,
       finishedAtMs,
       durationMs: finishedAtMs - attempt.startedAtMs,
@@ -799,6 +883,18 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       return;
     }
     if (event.type === "agent_end" && this.#taskId) {
+      // Pi 会在自动重试之前发 agent_end；不能提前关闭语音事件入口。
+      if (event.willRetry) return;
+      const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
+      if (lastAssistant?.role === "assistant" &&
+          (lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted")) {
+        // 主动暂停由 VoiceLoop 的代际门过滤；非预期中止必须显式报错，
+        // 不能把空响应保存成成功。原始供应商错误不进入用户界面。
+        this.publish({ kind: "runtime.error", message: lastAssistant.stopReason === "aborted"
+          ? "模型回复被中止，请重试。"
+          : "模型请求失败，请重试。" });
+        return;
+      }
       // turn.completed 只表示 Pi 本轮结束，不代表所有工具均已验证成功。
       this.publish({ kind: "turn.completed", taskId: this.#taskId });
     }

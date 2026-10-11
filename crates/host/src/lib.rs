@@ -3,8 +3,10 @@
 //! Tauri 只负责把本模块接到桌面窗口和系统事件；生命周期、Worker 监督和
 //! 诊断持久化不能依赖 WebView，这样崩溃恢复逻辑可以在无界面的测试中验证。
 
+pub mod conversation;
 mod diagnostics;
 mod lifecycle;
+pub mod research;
 mod supervisor;
 mod task;
 mod tool_execution;

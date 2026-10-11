@@ -8,6 +8,12 @@ pub enum StorageError {
     Sqlite(#[from] SqliteError),
     #[error("json serialization failed: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("session not found: {0}")]
+    SessionNotFound(String),
+    #[error("会话名称不能为空，不能超过 80 字符或包含控制字符")]
+    InvalidSessionTitle,
+    #[error("必须先切换会话再删除当前会话")]
+    ActiveSessionDeletion,
     #[error("task not found: {0}")]
     TaskNotFound(String),
     #[error("task event sequence conflict for {task_id}: expected {expected}, current {actual}")]

@@ -18,6 +18,12 @@ export interface DashScopeSttOptions {
   model?: string;
   timeoutMs?: number;
   createWebSocket?: ProviderWebSocketFactory;
+  mode?: "qwen" | "fun";
+  nearfield?: boolean;
+  languageHints?: string[];
+  vocabulary?: string[];
+  /** Fun-ASR 专用定制词表；须由同一服务、兼容 target_model 创建。 */
+  vocabularyId?: string;
 }
 
 type SocketEvent =
@@ -28,6 +34,7 @@ type SocketEvent =
 function sentenceFrom(value: unknown): {
   text?: string;
   sentenceEnd?: boolean;
+  id?: string;
 } {
   if (
     !isRecord(value) ||
@@ -44,6 +51,9 @@ function sentenceFrom(value: unknown): {
       typeof sentence.sentence_end === "boolean"
         ? sentence.sentence_end
         : undefined,
+    id: typeof sentence.sentence_id === "number" || typeof sentence.sentence_id === "string"
+      ? String(sentence.sentence_id)
+      : typeof sentence.begin_time === "number" ? String(sentence.begin_time) : undefined,
   };
 }
 
@@ -69,6 +79,7 @@ export class DashScopeSttProvider implements SttProvider {
       "apiKey" | "websocketUrl" | "model" | "timeoutMs" | "createWebSocket"
     >
   >;
+  readonly #parameters: Record<string, unknown>;
 
   constructor(options: DashScopeSttOptions) {
     this.#options = {
@@ -76,17 +87,31 @@ export class DashScopeSttProvider implements SttProvider {
       websocketUrl:
         options.websocketUrl ??
         "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
-      model: options.model ?? "qwen-audio-3.1-asr-flash-streaming",
-      timeoutMs: options.timeoutMs ?? 30_000,
+      model: options.model ?? (options.mode === "fun" ? "fun-asr-realtime" : "qwen-audio-3.1-asr-flash-streaming"),
+      timeoutMs: options.timeoutMs ?? 180_000,
       createWebSocket: options.createWebSocket ?? createProviderWebSocket,
     };
+    // 两种模型共用 AOQ 传输，但参数不是互换的，不能仅替换模型字符串。
+    this.#parameters = { sample_rate: 16_000, format: "pcm" };
+    if (options.mode === "fun") {
+      this.#parameters.max_sentence_silence = 800;
+      if (options.vocabularyId) {
+        if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.vocabularyId)) throw new Error("invalid Fun-ASR vocabulary_id");
+        this.#parameters.vocabulary_id = options.vocabularyId;
+      }
+    } else {
+      if (options.nearfield && this.#options.model.includes("3.1")) this.#parameters.vad_model = "near_meeting_16k";
+      if (options.languageHints?.length) this.#parameters.language_hints = options.languageHints.slice(0, 4);
+      if (options.vocabulary?.length) this.#parameters.vocabulary = Object.fromEntries(options.vocabulary.slice(0, 100).map((word) => [word, 3]));
+    }
   }
 
   async *transcribe({
     audio,
     signal: callerSignal,
   }: Parameters<SttProvider["transcribe"]>[0]): AsyncIterable<SttEvent> {
-    const request = combineAbortSignals(callerSignal, this.#options.timeoutMs);
+    const cleanup = new AbortController();
+    const request = combineAbortSignals(AbortSignal.any([callerSignal, cleanup.signal]), this.#options.timeoutMs);
     const queue = new AsyncEventQueue<SocketEvent>();
     const taskId = createTaskId();
     let socket: ProviderWebSocket | undefined;
@@ -94,8 +119,18 @@ export class DashScopeSttProvider implements SttProvider {
     let finished = false;
     let committedText = "";
     let currentSentence = "";
+    const committed = new Set<string>();
+    let producer: Promise<void> | undefined;
+    const iterator = audio[Symbol.asyncIterator]();
+    const cancelled = new Promise<IteratorResult<SttAudioChunk>>((resolve) => {
+      request.signal.addEventListener("abort", () => resolve({ done: true, value: undefined }), { once: true });
+    });
 
     try {
+      if (request.signal.aborted) {
+        yield { kind: "stt.cancelled" };
+        return;
+      }
       socket = this.#options.createWebSocket(this.#options.websocketUrl, {
         Authorization: `Bearer ${this.#options.apiKey}`,
       });
@@ -112,7 +147,7 @@ export class DashScopeSttProvider implements SttProvider {
               task: "asr",
               function: "recognition",
               model: this.#options.model,
-              parameters: { sample_rate: 16_000, format: "pcm" },
+              parameters: this.#parameters,
               input: {},
             },
           }),
@@ -156,56 +191,46 @@ export class DashScopeSttProvider implements SttProvider {
         const name = eventName(event.value);
         if (name === "task-started" && !started) {
           started = true;
-          let hasAudio = false;
-          for await (const chunk of audio) {
-            assertPcmChunk(chunk);
-            if (request.signal.aborted) {
-              yield { kind: "stt.cancelled" };
-              return;
+          // 发送与接收并行：录音尚未结束时就能把 partial 返回客户端。
+          producer = (async () => {
+            while (!request.signal.aborted) {
+              const next = await Promise.race([iterator.next(), cancelled]);
+              if (next.done || request.signal.aborted) break;
+              assertPcmChunk(next.value);
+              if (next.value.data.byteLength) socket?.send(next.value.data);
             }
-            hasAudio ||= chunk.data.byteLength > 0;
-            if (chunk.data.byteLength > 0) {
-              socket.send(chunk.data);
-            }
-          }
-          if (!hasAudio) {
-            socket.close();
-            yield { kind: "stt.silence" };
-            return;
-          }
-          socket.send(
-            JSON.stringify({
+            if (!request.signal.aborted) socket?.send(JSON.stringify({
               header: {
                 action: "finish-task",
                 task_id: taskId,
                 streaming: "duplex",
               },
               payload: { input: {} },
-            }),
-          );
+            }));
+          })().catch(() => { queue.push({ kind: "error" }); });
         } else if (name === "result-generated") {
           const sentence = sentenceFrom(event.value);
           if (sentence.text) {
+            if (sentence.id !== undefined && committed.has(sentence.id)) continue;
             currentSentence = sentence.text.trim();
-            const partialText = [committedText, currentSentence]
-              .filter(Boolean)
-              .join(" ");
+            const partialText = joinTranscript(committedText, currentSentence);
             yield { kind: "stt.partial", text: partialText };
             if (sentence.sentenceEnd) {
               committedText = partialText;
+              if (sentence.id !== undefined) committed.add(sentence.id);
               currentSentence = "";
             }
           }
         } else if (name === "task-failed") {
-          throw new Error("DashScope STT task failed");
+          // 不静默剥掉热词参数重试：用户必须知道配置没生效。
+          throw new Error(this.#parameters.vocabulary_id
+            ? "Fun-ASR 识别失败，请检查定制词表与网关兼容性；热词未确认生效"
+            : "DashScope STT task failed");
         } else if (name === "task-finished") {
           finished = true;
         }
       }
-      const finalText = [committedText, currentSentence]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
+      const finalText = joinTranscript(committedText, currentSentence).trim();
       if (finalText) {
         yield { kind: "stt.final", text: finalText };
       } else {
@@ -226,8 +251,15 @@ export class DashScopeSttProvider implements SttProvider {
         };
       }
     } finally {
+      // 取消消费者时也释放音频生产者；AudioInput 的 close 由 Worker 负责。
       socket?.close();
+      cleanup.abort();
+      await producer;
       request.dispose();
     }
   }
+}
+
+function joinTranscript(previous: string, next: string): string {
+  return previous + (/[a-z0-9]$/i.test(previous) && /^[a-z0-9]/i.test(next) ? " " : "") + next;
 }

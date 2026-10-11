@@ -399,36 +399,367 @@
 
 依赖：P2.6 至 P2.12、P3.7 至 P3.10。
 
-- [ ] **P4A.1 添加 Playwright 服务边界**
+实施记录：2026-10-11 用户批准提交 4A 及后续相关语音、文字对话和 Session
+改动。这些切片共享协议与入口文件，本次合并为一个可构建的交付提交；
+下面的 Commit 点保留为原拆分设计，不代表各自已有独立提交。
+本次重新运行 `pnpm run check`、`pnpm run format` 与 `git diff --check` 均通过。
+实际提交 hash 在提交后补记；4B 尚未开始实现。
+详细证据、延迟和手动验收边界见 `docs/4A-VALIDATION.md`。
+
+- [x] **P4A.1 添加 Playwright 服务边界**
   - 从 Worker 启动受控浏览器进程，返回结构化观察结果，不向 Agent 暴露任意 Playwright 脚本执行能力。
+  - 验证：`browser/browser-service.ts` 与测试覆盖按需启动、每页串行、全局两个执行槽和取消清理。
   - Commit 点：`feat(browser): add playwright service`
-- [ ] **P4A.2 添加持久化浏览器 Profile 初始化**
+- [x] **P4A.2 添加持久化浏览器 Profile 初始化**
   - 创建 Semi-OS 专属 Profile 目录，支持用户交互登录，并确保认证状态不进入 Git 和日志。
+  - 验证：持久化上下文重开后保留 Fixture 登录 Cookie；客户端提供登录入口。真实网站人工登录尚需体验验收。
   - Commit 点：`feat(browser): add profile onboarding`
-- [ ] **P4A.3 实现 `browser_open`**
+- [x] **P4A.3 实现 `browser_open`**
   - 返回页面身份、URL、标题、加载状态和观察版本。
+  - 验证：Fixture 重定向、加载失败与登录限制；真实访问 Playwright/Vitest 官网。
   - Commit 点：`feat(browser): add browser open`
-- [ ] **P4A.4 实现 `browser_click`**
+- [x] **P4A.4 实现 `browser_click`**
   - 优先使用 role、name、label、text 定位；拒绝过期观察引用，并在动作后返回新的观察结果。
+  - 验证：重复目标、过期引用、搜索提交与伪装成搜索的副作用动作；授权绑定输入摘要及观察版本。
   - Commit 点：`feat(browser): add browser click`
-- [ ] **P4A.5 实现 `browser_type`**
+- [x] **P4A.5 实现 `browser_type`**
   - 支持受约束的文本输入、目标验证和动作后的新状态。
+  - 验证：明确输入框填入、默认不提交，搜索提交必须独立点击。
   - Commit 点：`feat(browser): add browser type`
-- [ ] **P4A.6 实现 `browser_extract`**
+- [x] **P4A.6 实现 `browser_extract`**
   - 提取可读内容、页面元数据和来源 URL，并保存为 Artifact。
+  - 验证：延迟正文、分段/截断、同版本缓存、取消；完整正文仅经 Host 保存，Pi 接收当前片段。
   - Commit 点：`feat(browser): add browser extract`
-- [ ] **P4A.7 添加资料来源证据模型**
+- [x] **P4A.7 添加资料来源证据模型**
   - 保存访问来源、提取事实、被阻止/失败来源和 Artifact 摘要。
+  - 验证：`0002_research.sql`、Host 测试和云端桥接 SQLite；拒绝不存在的来源/引用及不匹配的正文摘要。
   - Commit 点：`feat(research): record source evidence`
-- [ ] **P4A.8 添加资料调研 Skill**
+- [x] **P4A.8 添加资料调研 Skill**
   - 添加多来源搜索、事实比较、不确定性记录和避免无依据结论的内置指导。
+  - 验证：内置 `research/SKILL.md` 经 Pi 官方 ResourceLoader 加载，详情按需读取；没有独立 Skill 引擎。
   - Commit 点：`feat(research): add research skill`
-- [ ] **P4A.9 添加调研汇总与语音汇报**
+- [x] **P4A.9 添加调研汇总与语音汇报**
   - 生成带来源的简洁汇总，在第一句完整结果后启动 TTS，并在客户端展示来源列表。
+  - 验证：即时回应、动作提示、按句结论 TTS、分块 speech 标记测试；真实来源/报告/Artifact 与排队确认 UI。
   - Commit 点：`feat(research): add sourced voice briefing`
-- [ ] **P4A.10 资料调研验收**
+- [x] **P4A.10 资料调研验收**
   - 通过确定性的多站点 Fixture 和一个被阻止来源 Fixture，验证 Artifact、时间线、汇总结果和最终语音响应。
+  - 验证：Fake LLM/STT/TTS + Playwright 闭环、真实云 STT/DeepSeek/TTS 两站闭环、Host 引用与状态持久化、客户端交互截图。
+  - 完整检查：`pnpm check`、`cargo fmt --all -- --check`、`git diff --check`；真实麦克风录音和扬声器播放仍留作人工体验验收，不宣称已完成。
   - Commit 点：`test(research): verify research workflow`
+
+## 桌面助手与语音交互优化
+
+- [x] **PV.15 长口语摘要自然停顿切分**
+  - 显式 speech 摘要累计至少 18 汉字后，可在中文逗号/分号提前进入 TTS；
+    短句、英文、冒号、引号/括号内部及结构内容不启用软切分。
+  - `sentence-buffer` 与 VoiceLoop 回归覆盖跨 delta、报告隔离及取消；
+    18 项定向测试通过；`pnpm check`（Worker 64 项）、Rust 格式检查和
+    `git diff --check` 通过，真人端到端延迟待复测。
+  - 保留 STT、Pi 和已确认有声的 WAV 出口，不增加固定回应。
+  - Commit 点：`perf(voice): synthesize long speech at natural pauses`，未提交。
+
+- [x] **PV.14 TTS 连接预热与延迟分段**
+  - 参考本地 LumiCore 首句预合成；Semi-OS 已具备首句与模型生成重叠，
+    本轮增加录音期间仅握手的可选 Provider 预热，15 秒过期/取消清理，
+    首句领取一次，不提前生成音频、不更换播放出口。
+  - 补齐 `tts.answer.completed`，区分首包与媒体可播放时间。
+  - 验证：预热不发 run-task、重复预热只建一个连接、领取后取消隔离、
+    未领取取消后新建连接的确定性回归；云端实测见验收文档。
+  - Commit 点：`perf(voice): overlap TTS handshake with recording`，未提交。
+
+- [-] **PV.13 空回答终态与原生无声复查**
+  - 历史方案：直接媒体出口继续保留；“没有音量分析”已由 PV.19 的
+    本地 PCM 包络替代，不将音频接回旧 WebAudio 输出链路。
+  - 第二次真人复测仍无声，改用每句 PCM 封装 WAV 的直接媒体出口，
+    不接回 WebAudio；桌面 26 项测试通过。暂时按句等待合成且没有
+    音量分析；用户已确认有声音，首音延迟仍在继续优化。
+  - Pi Session 证据显示“星期几啊”以 `aborted` 结束；Adapter 现在区分中止、
+    失败与自动重试，空回答明确报错，不再当作正常完成。
+  - 增加 Semi-OS 语音身份提示，避免模型误称纯文字助手；录音与播放
+    隔离 AudioContext，保留各自复用及唯一播放控制器。
+  - 真实 TTS 返回 115542 bytes、2620 ms，RMS 0.0871、峰值 0.6355；
+    先前原生日志确认音频到达、时钟推进和非零分析信号。
+    这些证据不能证明扬声器实际出声，无声根因仍未确认，待真人复测。
+  - 验证：`pnpm check` 通过；补充上下文隔离测试后桌面 25 项测试通过，
+    `git diff --check` 通过；已重启原生客户端和 Worker，未提交。
+
+- [-] **PV.11 排查仅有文字、无声的播放问题**
+  - 历史方案：借用播放上下文的做法已撤回；当前使用独立采集上下文，
+    播放采用直接媒体出口，见 PV.13 / PV.19。
+  - 10 月 8 日再次反馈无声：新增 Host `diagnostics/playback.jsonl` 数值诊断，
+    记录音频首包、播放状态、时钟与音量，不保存正文/声音；补齐 running
+    但时钟停滞的失败检测。24 项桌面回归与类型检查通过，根因仍待原生复现。
+  - 实际云端 Worker 探测收到 270878 bytes 回复音频，所有语音事件通过协议校验；
+    系统未静音。尚未据此判定原生扬声器播放正常。
+  - 采集借用播放器的 AudioContext；PCM 到达或播放暂停时自动恢复上下文，
+    3 秒恢复失败明确报错；打断后不恢复旧句子。
+  - 自动回归与原生重测结果见 `docs/VOICE-OPTIMIZATION-VALIDATION.md`；
+    原生真人听音待确认，未提交。
+
+本轮覆盖此前固定回应与助手文字展示的设计，不重写阶段 3 历史记录。
+与现有 4A 改动一起保留供 review；以下 commit 点均未实际提交。
+证据及人工验收清单见 `docs/VOICE-OPTIMIZATION-VALIDATION.md`。
+
+- [x] **PV.1 透明悬浮与精简反馈**
+  - Tauri 无阴影、不主动聚焦、鼠标穿透；移除助手背景/文字/按钮及残留状态样式。
+  - 删除固定回应事件和 TTS，保留阶段提示与客户端真实风险确认。
+  - 验证：720×520 / 390×844 画布非空、动画变化、周边 alpha=0；
+    页面无可见文字，VoiceLoop 无统一回应测试通过。原生体验见 PV.6。
+  - Commit 点：`feat(assistant): render transparent voice halo`
+- [x] **PV.2 播放协议、摘要与报告分离**
+  - 句子、时间戳、实际播放位置、缓冲/失败事件；过滤旧轮次输出。
+  - 单一控制器、真实音量驱动光环；Host 广播快照并保存最终文字/失败状态。
+  - 验证：时间戳退化、队列/取消/失败、模型标记跨分片及缺失、
+    SQLite 恢复测试通过；缺标记时保留最终文字，不朗读工具前过程。
+  - Commit 点：`feat(voice): synchronize speech and persist conversations`
+- [x] **PV.3 客户端 Markdown 与同步展示**
+  - 转写、播放同步摘要、独立展开报告；禁用原始 HTML，保留来源链接。
+  - 验证：浏览器表格/代码正常，危险链接与脚本未执行，
+    旧快照不能覆盖失败提示，390×844 无横向溢出。
+  - Commit 点：`feat(client): display synchronized Markdown answers`
+- [x] **PV.4 连续采集与实时 STT**
+  - Mono Worklet、连续重采样、停止握手/尾部 flush、数值诊断；
+    录音期间送入 STT，partial 不进入 Pi。
+  - 验证：44.1 kHz 分块与整块重采样一致、尾部保留、输入未结束可收到 partial；
+    生产 Worklet 独立输出，同源 CSP 下可加载并实例化。
+  - Commit 点：`feat(stt): stream continuous microphone input`
+- [x] **PV.5 两种 ASR 同录音比较**
+  - Qwen 近场/语言/热词设置，Fun-ASR 独立参数入口；可复现比较脚本。
+  - 验证：当前云端三条同 PCM 合成录音均完成；准确度及延迟见验收文档。
+    当时保留 Qwen 默认，后续切换见 PV.9；合成结果不代表真人准确率。
+  - Commit 点：`test(voice): compare cloud ASR adapters`
+- [ ] **PV.6 原生真人体验验收**
+  - 桌面透出、鼠标穿透、不抢焦点、快捷键/托盘唤起。
+  - 权限拒绝、快速按键、尾音、中英混合/长指令、真实音量波动、
+    缓冲/失败、跨窗口同步、插话取消与真实风险确认。
+  - 用真人同录音比较 CER / 延迟后，再决定是否更换默认模型。
+  - 原生客户端已启动，上述人工体验尚未标记完成。
+  - Commit 点：`test(desktop): validate native voice interaction`
+- [x] **PV.7 首句延迟观测与 PCM 播放优化**
+  - 复用单一 `AudioContext`，PCM 分片到达即排程，连续样本不使用压缩音频
+    cross-fade；补齐模型首 delta、首句准备、TTS 首音频、真实播放和客户端
+    首次文字准备的阶段计时。
+  - 参考 Lumi 的分阶段 latency milestones、音频上下文复用和连续排程；
+    不把单次 Provider 首音频数据宣称为端到端提速。
+  - 验证：`voice-loop`、`PcmStream`、`VoicePlayer` 回归测试覆盖首片播放、
+    欠载/暂停、队列、插话清理、奇数字节和重复 Provider 事件；`pnpm check`
+    与 `git diff --check` 通过后保留未提交改动供 review。
+  - 真实真人麦克风、原生透明窗口和扬声器延迟仍属于 PV.6，未在此处代替
+    人工验收。
+  - Commit 点：`perf(voice): reduce first-answer latency`
+- [x] **PV.8 修复页面重载后的语音会话不同步**
+  - 复现：同一 Worker 已创建 Pi 会话，页面重载新建 session ID，
+    STT 成功后 `ensureSession` 拒绝切换，错误被误报为通用语音处理失败。
+  - 实现：Host 的 `Conversation::start_turn` 保持会话身份，前端先采用
+    `start_voice_conversation` 返回值；Worker 为异常会话冲突提供独立分类。
+  - 验证：Host 与 Worker 定向回归通过；真实云端 STT → Pi → TTS 连续两轮
+    均完成，沿用同一会话；`pnpm check`（78 个 JS、27 个 Rust 测试）、
+    `cargo fmt --all -- --check` 与 `git diff --check` 通过。
+  - 原生客户端与 Worker 已重新启动；真人快捷键、页面重载及扬声器体验
+    仍由 PV.6 人工验收，不以合成录音或分层回归代替。
+  - Commit：未提交，等待 review。
+  - Commit 点：`fix(voice): retain session identity across page reloads`
+
+- [x] **PV.9 切换默认识别模型为 Fun-ASR**
+  - 按用户反馈，Worker 未配置供应商时默认 Fun-ASR；本机 `.env` 及示例配置
+    显式设置 `fun-asr-realtime`，保留 `qwen` 回退，凭证与 TTS 未改动。
+  - 验证：Worker 类型检查及 13 项适配器/Worker 测试通过；真实网关三条
+    同 PCM 合成录音均完成，结果详见语音验收文档。真人准确率待体验。
+  - 本轮不处理偶发卡住，不宣称此次模型切换修复该问题。
+  - Commit：未提交，等待 review。
+
+- [-] **PV.10 首字采集、空转写反馈与缺标记播报回退**
+  - 按键即启动麦克风，不串行等待播放器、旧轮次暂停或 Host 握手；Worklet
+    预加载并复用 AudioContext，握手期间按序缓冲 PCM，松键后保留尾音。
+  - 空转写不再静默回 idle；缺 speech 标记时只从最终 post-tool 回答取一句，
+    清除内部分析、代码与引用标识，不重试 Pi、不改当前 Fun-ASR 模型。
+  - Mock WebAudio/IPC 验证慢握手不延迟采集、松键尾部保留、连续两轮复用、
+    权限拒绝不提交；详细边界与结果记录于语音验收文档。
+  - `pnpm check`（81 JS / 27 Rust）、Rust 格式检查与 `git diff --check`
+    通过；原生客户端与 Worker 已重启，保留当前模型。
+  - 原生真人首字、短句及偶发空输入仍待体验，不能以 Mock 代替。
+  - Commit：未提交，等待 review。
+
+- [x] **PV.12 修复连续录音的轮次竞争与迟到 Worklet 消息**
+  - 历史方案：等待网络收尾才开始新录音、排队期间松键即取消的行为，
+    已由 PV.16 的独立本地门控和逐轮缓冲替代；旧消息隔离约束继续保留。
+  - 收尾完成前不替换轮次身份；重复松键共用停止操作；排队时已松键则
+    取消新录音并提示重试；分片发送捕获 request ID。
+  - Worklet 停止后解绑端口并隔离旧节点回调，旧 samples / flush 不进入新轮次。
+  - 修复前确定性测试复现新麦克风被旧收尾关闭、旧音频进入新重采样器；
+    新增 7 条回归，`pnpm check`（90 JS / 27 Rust）、Rust 格式检查、
+    `git diff --check` 通过；详见语音验收文档。
+  - STT 模型不变。真人空转写的全部成因及原生连续按键体验仍由 PV.6 验收。
+  - Commit：未提交，等待 review。
+  - Commit 点：`fix(voice): isolate recording turn lifecycles`
+
+### 2026-10-08：常驻采集、通用助手与声音动效
+
+以下四块均保留未提交改动，等待 review。自动验证已通过，不代表真人
+识别准确率、原生透明窗口或扬声器效果已验收。
+
+- [x] **PV.16 常驻麦克风、逐轮门控与设备设置**
+  - 启用预热后复用轨道、独立 AudioContext 和 Worklet；闲置采样在
+    Worklet 内丢弃，不保存、不缓冲、不上传。按键立即开门，松键冲刷尾音。
+  - 本地采集与 Host/云端提交分离；旧轮次提交期间的新按键可以采集，
+    每轮身份、序号与缓冲独立，设备关闭和迟到消息不能污染下一轮。
+  - Host 保存语音/预热开关，客户端可修改；关闭、退出、设备断开释放资源，
+    闲置设备切换和上下文恢复重建就绪状态。区分无采样、静音和服务错误。
+  - 验证：真实 Worklet 源码门控、慢握手、三轮连续采集、尾音、权限拒绝、
+    设备切换、挂起恢复、关闭设置和退出后旧请求隔离回归通过。
+  - 首次授权、真人立即说话、实际休眠恢复及设备切换仍待 PV.6 人工验收。
+  - Commit 点：`fix(voice): prewarm microphone and isolate capture gates`
+- [x] **PV.17 Fun-ASR 独立词表入口与真人评测工具**
+  - 增加 `SEMI_OS_FUN_STT_VOCABULARY_ID`，校验并通过 Fun Adapter 发送；
+    参数拒绝明确反馈，不混用 Qwen 参数、不删除词表静默重试。
+  - 基准脚本读取同一批真人 WAV；至少 30 条、六个分类，统计加权 CER、
+    关键实体准确率、失败数和最终转写延迟 P50/P95，默认不输出文字。
+  - 验证：词表参数/错误分支、WAV 结构、编辑距离和分位数回归通过，
+    两个脚本独立严格类型检查通过。当前默认模型和现有凭证不变。
+  - 词表网关兼容性、30 条真人双模型比较未完成；准备说明见
+    `docs/VOICE-HUMAN-CORPUS.md`，本复选框仅表示入口与工具实现完成。
+  - Commit 点：`feat(stt): add Fun vocabulary and human corpus evaluation`
+- [x] **PV.18 通用身份、隔离工作目录与可选详情**
+  - 使用 Pi 官方 ResourceLoader 的系统提示替换编码助手定位；创建前
+    reload，取消每轮用户指令后缀，保留模型认证、原生工具与 Host 扩展。
+  - 默认使用应用数据目录的中立工作目录，不发现开发/个人 AGENTS、
+    SYSTEM/APPEND、第三方扩展、Skill 或提示模板，只显式加载内置资源。
+  - 简单回答仅口头摘要；报告可选，不复制摘要冒充详情，客户端隐藏空报告。
+    调研继续保留证据与详情；用户明确项目任务时仍可使用文件工具。
+  - 验证：真实 Pi ResourceLoader 的受污染目录隔离、内置 Skill/Host
+    扩展保留，以及摘要归一化回归通过。旧记录不删除，新提示在新会话生效。
+  - 干净原生会话的闲聊、网络调研和明确项目任务仍需真人验证。
+  - Commit 点：`fix(agent): isolate general assistant identity and optional reports`
+- [x] **PV.19 播放包络、光环声振与延迟记录**
+  - PCM 预计算 20 ms RMS 包络，按 HTMLAudioElement 的实际播放位置
+    读取；保留有声 WAV 出口，不增加 WebAudio 输出节点。
+  - 本地 ref 驱动内层细颤、外层小幅脉动和重音粒子传播，不逐帧更新
+    React/IPC/数据库；暂停、缓冲和取消回落，减少动态效果时禁用声振。
+  - Host 仅保存数值延迟；脚本按轮次/阶段首次记录计算 P50/P95，不把
+    Provider 首包当作实际出声，不从 Mock 数据宣称真人端到端提速。
+  - 验证：静音/重音 PCM、奇数字节分片、媒体时钟、暂停/恢复/取消回归
+    通过；720×520 / 390×844 非空且周边透明，合成振幅改变形变，
+    减少动态效果两次截图逐像素一致。原生录屏和真人听音仍待 PV.6。
+  - 最终 `pnpm check`：117 个 JS、29 个 Rust 测试通过，类型检查、
+    仓库 lint、Clippy 与构建通过；保留既有大 chunk 警告。
+  - Commit 点：`feat(assistant): animate halo from actual speech playback`
+
+### 2026-10-10：文字测试入口
+
+- [x] **PV.20 客户端文字对话，共用语音后的处理链路**
+  - `TextComposer.tsx`：多行草稿、Enter 发送、Shift+Enter 换行、输入法保护、
+    防重复发送、失败保留草稿；等待回执期间编辑不会被旧请求清空。
+  - Rust `text_input.rs` / `main.rs`：校验客户端提交、助手就绪和关联回执，
+    定向转发给唯一语音控制器；超时接收结果未知，不自动重试。
+  - `VoiceClient.submitText` / Worker `voice.text.submit`：只跳过采集和 STT，
+    共用 Pi Session、工具/确认、TTS、同步 Markdown、光环及 Host 保存。
+    新文字立即中断旧播报，关闭录音且不额外提交；无麦克风也可发送。
+  - 中文/Emoji 长度跨协议和 Host 保存统一按 UTF-16；迟到麦克风预热失败
+    不覆盖文字轮次。历史正序、底部跟随，向上阅读时保留滚动位置。
+  - `pnpm check`：125 项 JS（Desktop 42、Worker 70、Protocol 8、
+    Tool SDK 3、Shared 2）及 32 项 Rust 通过；类型检查、lint/Clippy、
+    JS/Rust 构建通过，保留既有大 chunk 警告。
+  - 浏览器验证输入框及失败草稿，390×844 无水平溢出；原生云端文字
+    回复、声音、跨窗口确认与语音交替仍需人工验收，见语音验收文档。
+  - Commit：未提交，等待 review。
+  - Commit 点：`feat(chat): add text input to shared voice-agent pipeline`
+
+### 2026-10-10：Codex 风格对话工作台
+
+- [x] **PV.21 客户端对话主界面重构**
+  - `ResearchWorkbench.tsx`：改为可收起、可拖拽的左侧会话栏、中间对话区和右侧上下文栏；
+    中间区继续消费 Host 快照，未伪造会话、任务或来源内容。
+  - `ConversationPanel.tsx`：用户消息右对齐，Agent 回复左对齐；移除头像和大卡片，
+    使用 `react-markdown + remark-gfm` 渲染 Markdown，并在真实快照更新期间显示流式光标。
+  - `styles.css`：采用连续的黑白灰工作区，移除明显竖向分割线、玻璃卡片和背景图；
+    分隔条只在交互时显示，输入区与选中态使用柔和圆角。窄屏自动切换为单栏。
+  - `icons.ts`：通过语义图标适配层提供侧栏折叠和恢复图标，业务组件不直接绑定图标库。
+  - 验证：`pnpm --filter @semi-os/desktop typecheck`、`git diff --check`、
+    Oil UI 截图检查（`1440×900`、`390×844`）通过；无控制台错误、水平溢出或图片加载失败。
+  - Commit：未提交，等待用户 review。
+  - Commit 点：`feat(client): refine codex-style conversation workbench`
+
+### 2026-10-11：精简工作台入口
+
+- [x] **PV.22 输入区层级与设置入口**
+  - 去掉输入区上方横线，以浅灰输入框和留白划分层级；删除输入框下方工具栏。
+  - 左上角固定显示 `SemiOS`，右上角提供助手显隐按钮，不受侧栏折叠影响。
+  - 左下角新增设置入口，现有语音开关、麦克风预热与浏览器登录收进原生对话框；
+    窄屏保留独立设置入口。设置内容暂不扩展。
+  - 验证：桌面 TypeScript 检查、`git diff --check` 通过；浏览器验证设置打开、
+    Escape 关闭、输入区上边框为零，当前视口无横向溢出。
+  - 限制：浏览器截图调用超时；本轮未完成视觉截图及原生 Host 设置操作验收。
+  - Commit 点：`feat(client): simplify workspace controls`；未提交，等待 review。
+
+- [x] **PV.23 右侧上下文浮层卡片**
+  - 右侧改为固定 320px 宽的白色卡片，高度为工作区约三分之一，
+    使用轻阴影提升层级，长内容在卡片内部滚动。
+  - 移除右侧拖拽分隔条、折叠按钮和对应状态；左侧会话栏行为保留。
+  - 卡片仅显示当前进度且无滚动条；“更多”展开全高资料抽屉，从右向左推开工作台，
+    全部进度、引用和来源正文移至抽屉，支持关闭按钮与 Escape。
+  - 验证：TypeScript、`git diff --check` 通过；浏览器验证固定 320px 宽、
+    无右侧拖拽/折叠入口、抽屉全高及 Escape 关闭。真实资料长列表尚待体验。
+  - 未提交，等待 review。
+
+- [x] **PV.24 对话刻度导航与问答预览**
+  - `ConversationNavigator.tsx`：对话区左缘显示细刻度，随阅读位置高亮；
+    鼠标悬停或键盘聚焦显示当前及下一轮的真实问答摘要，点击平滑跳转。
+  - `ConversationPanel.tsx`：按 requestId 定位当前展示轮次；主动跳转后停止
+    自动追随新内容，减少动态效果设置下使用即时跳转，不新增会话或收藏行为。
+  - 验证：桌面类型检查、`git diff --check`；独立测试页三次跳转/流式追加
+    保持阅读位置通过。测试页已删除，未写入 Host。
+  - 已查看桌面/窄屏截图：`/tmp/semios-navigation-preview/` 和
+    `/tmp/semios-navigation-shots/`；无横向溢出，测试页 favicon 404。
+  - 未做独立视觉评审，原生长期使用体验仍待用户 review；未提交。
+
+- [x] **PV.25 单 Session 历史展示与隐藏主区滚动条**
+  - 左侧固定一个“默认会话”，普通消息和 TaskRun 不再生成 Session 条目；
+    移除按 taskId 筛选对话，已有历史统一连续展示，右侧任务进度独立保留。
+  - 主对话区隐藏标准与 WebKit 滚动条，保留滚轮、键盘和刻度跳转。
+  - 验证：桌面类型检查、`git diff --check` 通过；临时测试页模拟
+    16 轮不同任务/历史会话 ID，全部显示在一个 Session 中；跳转第 4 轮成功，
+    追加第 17 轮后侧栏仍只有一项且阅读位置不变。测试页已删除。
+  - 边界：本轮仅统一展示，不改写 SQLite 历史身份、不重建 Pi 上下文；
+    手动新建/切换独立 Session 的 Host 与 Worker 生命周期尚未实现。
+  - 未提交，等待 review。
+
+- [x] **PV.26 手动新建与切换真实 Session**
+  - 左侧顶部新增图标式“新建会话”；普通消息仅追加到当前会话，
+    支持切回旧会话，空会话也保留；最初的首条消息自动命名已由 PV.27
+    的用户弹窗命名取代。
+  - Rust Host/SQLite：`0004_client_sessions.sql` 迁移及会话仓库维护唯一
+    active 选择；已有归档统一映射默认会话，原始 JSON 的旧运行身份保留。
+    切换经过助手回执，过期请求不得改变选择，失败不自动重试。
+  - 助手控制器立即停止旧录音/播报并排队暂停；Worker 按 Session 懒加载、
+    复用独立 VoiceLoop/Pi Adapter，过滤非 active 会话的迟到事件。
+    切换期间禁用输入；切回恢复归档文字，保留隐藏滚动条与刻度导航。
+  - 验证：桌面 46 项、Worker 72 项、Storage 8 项及 Tauri 5 项测试通过；
+    类型检查、桌面生产构建、Rust Clippy/格式检查和 `git diff --check` 通过。
+  - 浏览器 IPC Fixture 验证：16 轮默认历史；手动新增后连发两条消息，
+    会话条目仍为两项；来回切换、Markdown、隐藏滚动条、折叠栏图标不重叠
+    均通过。临时测试页已删除；截图调用超时，未完成视觉截图与原生云端验收。
+  - 边界：独立 Pi 上下文只在同一 Worker 生命周期内保留；跨重启恢复会话列表
+    和文字归档，不恢复 Pi 上下文。归档目前最多读取所有会话最近 200 轮。
+  - Commit 点：`feat(session): add manual creation and switching`；未提交，等待 review。
+
+- [x] **PV.27 Session 命名、重命名与删除**
+  - 新建按钮先弹窗输入名称，取消不创建；已有条目右键提供重命名/删除，
+    支持 Shift+F10、菜单方向键与 Escape。删除需二次确认。
+  - `SessionControls.tsx` 独立管理原生模态层、焦点与失败输入保留；
+    Host/SQLite 校验并持久化名称（最多 80 UTF-16 单元），新消息不再覆盖名称。
+  - 删除当前会话经助手停止录音/播报后，原子切换并删除聊天归档；
+    删除最后一个保留空白“新会话”。Host 绑定原始删除意图，迟到或错目标
+    回执不能更改选择。非当前会话删除不打断活跃对话。
+  - Worker 通过 `voice.session.dispose` 释放指定 Pi 上下文，重复请求幂等，
+    清理时及清理后的事件不再发往客户端；独立任务证据和浏览器 Profile 保留。
+  - 验证：desktop 47、Worker 73、protocol 9 个 JS 测试；Rust storage 10、
+    desktop 6 个测试覆盖名称持久化、无效输入、归档删除/事务回滚和回执绑定。
+    相关 typecheck/lint、桌面 build、Rust clippy/fmt、diff-check 通过。
+  - Ego 浏览器 IPC Fixture 验证取消创建、命名创建、预填重命名、取消删除、
+    非活跃/活跃/最后会话删除、输入恢复及键盘菜单。弹窗布局位于视口内；
+    截图接口超时，未获得截图。原生完整链路仍需重启客户端手工验收。
+  - Commit 点：`feat(session): add naming and context actions`；未提交，等待 review。
 
 ## 阶段 4B：Coding Agent 工作流
 
