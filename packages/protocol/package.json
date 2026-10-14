@@ -10,13 +10,15 @@
     }
   },
   "dependencies": {
-    "@semi-os/shared": "workspace:*"
+    "@semi-os/shared": "workspace:*",
+    "ajv": "^8.20.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --experimental-strip-types --test src/*.test.ts src/**/*.test.ts",
-    "lint": "node --check src/index.ts",
-    "format": "node --check src/index.ts",
+    "lint": "eslint src",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
     "typecheck": "tsc -p tsconfig.json"
   }
 }

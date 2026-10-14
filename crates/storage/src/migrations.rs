@@ -2,6 +2,7 @@ use crate::{StorageError, StorageResult};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 const MIGRATIONS: &[(i64, &str, &str)] = &[
+    // 新迁移只能追加在末尾，既有数据库版本不得重写。
     (
         1,
         "core task runtime",
@@ -21,6 +22,41 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         4,
         "client sessions",
         include_str!("../migrations/0004_client_sessions.sql"),
+    ),
+    (
+        5,
+        "versioned collaboration workflows",
+        include_str!("../migrations/0005_workflows.sql"),
+    ),
+    (
+        6,
+        "revision-bound workflow evidence",
+        include_str!("../migrations/0006_workflow_evidence.sql"),
+    ),
+    (
+        7,
+        "explicit source branch application",
+        include_str!("../migrations/0007_workflow_applications.sql"),
+    ),
+    (
+        8,
+        "durable background coordination",
+        include_str!("../migrations/0008_workflow_background.sql"),
+    ),
+    (
+        9,
+        "structured delegate questions",
+        include_str!("../migrations/0009_workflow_questions.sql"),
+    ),
+    (
+        10,
+        "durable rpc receipts",
+        include_str!("../migrations/0010_rpc_receipts.sql"),
+    ),
+    (
+        11,
+        "outbound rpc delivery receipts",
+        include_str!("../migrations/0011_outbound_rpc.sql"),
     ),
 ];
 

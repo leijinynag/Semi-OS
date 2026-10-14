@@ -1,0 +1,34 @@
+{
+  "workflowId": "workflow_fixture",
+  "sessionId": "session_fixture",
+  "version": 1,
+  "intentVersion": 1,
+  "title": "计数器",
+  "goal": "实现有测试的计数器",
+  "scope": ["src/count.ts"],
+  "acceptance": ["单测通过", "独立审查"],
+  "authorizedActions": ["read", "workspace_write", "local_commit", "integrate"],
+  "repository": "/tmp/semi-os-synthetic",
+  "workItems": [
+    {
+      "workItemId": "plan",
+      "title": "规划",
+      "objective": "只读分析",
+      "role": "planning",
+      "provider": "claude",
+      "dependencies": [],
+      "outputs": ["实施建议"],
+      "acceptance": ["范围清晰"]
+    },
+    {
+      "workItemId": "implement",
+      "title": "实现",
+      "objective": "实现计数器和单测",
+      "role": "implementation",
+      "provider": "pi",
+      "dependencies": ["plan"],
+      "outputs": ["diff", "测试记录"],
+      "acceptance": ["单测通过"]
+    }
+  ]
+}

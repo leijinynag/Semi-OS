@@ -15,8 +15,18 @@ pub fn validate_policy(value: &Value) -> Result<(), String> {
     let risk = value["riskLevel"].as_str().ok_or("missing risk")?;
     let evidence = &value["evidence"];
     let expected = match tool {
-        "read" | "browser_extract" => "read",
-        "write" | "edit" => "local_write",
+        "read" | "browser_extract" | "workflow_observe" | "coding_read" => "read",
+        "write"
+        | "edit"
+        | "workflow_submit_plan"
+        | "workflow_refine_plan"
+        | "workflow_dispatch"
+        | "workflow_stop"
+        | "workflow_resume_run"
+        | "workflow_steer"
+        | "workflow_test"
+        | "workflow_record_finding"
+        | "workflow_record_integration" => "local_write",
         "bash" => "privileged",
         "browser_open" => url_risk(input["url"].as_str().ok_or("missing URL")?)?,
         "browser_click" | "browser_type" => {
@@ -202,7 +212,7 @@ pub fn ensure_task(storage: &mut Storage, task: &str, time: i64) -> Result<(), S
                 task_run_id: format!("run_{task}"),
                 trace_id: format!("trace_{task}"),
                 lifecycle: TaskLifecycle::Created,
-                title: Some("资料调研".into()),
+                title: Some("工具执行".into()),
                 current_step: None,
                 checkpoint: None,
                 last_event_sequence: 0,
@@ -297,13 +307,9 @@ pub fn transition(
     if !crate::TaskStateMachine::can_transition(from, to) {
         return Err(format!("illegal lifecycle transition: {from:?} -> {to:?}"));
     }
-    // 完成只表示报告已持久化且引用经过 Host 验证，不证明网页事实正确。
+    // 调研要求正文证据；其他工具轮次只核验回执，不能强制生成研究报告。
     if to == TaskLifecycle::Completed {
-        let report = storage
-            .load_research_report(task)
-            .map_err(|e| e.to_string())?
-            .ok_or("completion requires stored report")?;
-        save_report(storage, &report)?;
+        validate_turn_completion(storage, task)?;
     }
     snapshot.lifecycle = to;
     snapshot.updated_at_ms = time;
@@ -311,7 +317,7 @@ pub fn transition(
     storage.persist_task_event(snapshot, NewTaskEvent {
         event_id: format!("evt_{task}_{sequence}"),
         event_kind: "task.lifecycle.changed".into(),
-        payload: json!({"from":from,"to":to,"verification":if to == TaskLifecycle::Completed {Some("host_stored_report_citation_validation")} else {None}}),
+        payload: json!({"from":from,"to":to,"verification":if to == TaskLifecycle::Completed {Some("host_turn_evidence_validation")} else {None}}),
         occurred_at_ms: time,
     }).map_err(|e| e.to_string())?;
     Ok(())
@@ -324,16 +330,48 @@ pub fn finish_turn(storage: &mut Storage, task: &str, time: i64) -> Result<(), S
     if snapshot.lifecycle != TaskLifecycle::Running {
         return Ok(());
     }
-    if storage
-        .load_research_report(task)
-        .map_err(|e| e.to_string())?
-        .is_some()
-    {
+    if validate_turn_completion(storage, task).is_ok() {
         transition(storage, task, TaskLifecycle::Verifying, time)?;
         transition(storage, task, TaskLifecycle::Completed, time)
     } else {
         transition(storage, task, TaskLifecycle::Failed, time)
     }
+}
+
+fn validate_turn_completion(storage: &mut Storage, task: &str) -> Result<(), String> {
+    let attempts = storage
+        .load_task_attempts(task)
+        .map_err(|e| e.to_string())?;
+    let sources = storage
+        .load_research_sources(task)
+        .map_err(|e| e.to_string())?;
+    let report = storage
+        .load_research_report(task)
+        .map_err(|e| e.to_string())?;
+    if !sources.is_empty()
+        || attempts
+            .iter()
+            .any(|attempt| attempt.tool_name.starts_with("browser_"))
+        || report.is_some()
+    {
+        return save_report(
+            storage,
+            &report.ok_or("research completion requires stored report")?,
+        );
+    }
+    if attempts.is_empty()
+        || attempts.iter().any(|attempt| {
+            attempt.status != semi_os_protocol::ToolAttemptStatus::Succeeded
+                || attempt
+                    .verification
+                    .as_ref()
+                    .is_none_or(|value| value["status"] != "passed")
+        })
+    {
+        return Err("completion requires successful verified tool receipts".into());
+    }
+    // 这里只表示本轮工具操作结束；协作工作流的子 Agent 验收是另一个状态边界。
+    Ok(())
 }
 
 pub fn save_receipt(storage: &mut Storage, receipt: &ToolExecutionReceipt) -> Result<(), String> {
@@ -416,6 +454,23 @@ mod tests {
         validate_policy(&request).unwrap();
         request["inputJson"] = json!(r#"{"url":"https://example.com/delete"}"#);
         assert!(validate_policy(&request).is_err());
+    }
+
+    #[test]
+    fn collaboration_controls_match_registered_tool_risk() {
+        let raw = r#"{"workflowId":"workflow_test"}"#;
+        for tool in [
+            "workflow_stop",
+            "workflow_resume_run",
+            "workflow_steer",
+            "workflow_dispatch",
+        ] {
+            let mut value = json!({"toolName":tool,"riskLevel":"local_write","inputJson":raw,
+                "inputDigest":format!("sha256:{:x}",Sha256::digest(raw.as_bytes()))});
+            validate_policy(&value).unwrap();
+            value["riskLevel"] = json!("read");
+            assert!(validate_policy(&value).is_err());
+        }
     }
 
     #[test]

@@ -1,0 +1,9 @@
+node_modules
+dist
+target
+.vite
+tmp
+docs/assets
+pnpm-lock.yaml
+Cargo.lock
+**/generated

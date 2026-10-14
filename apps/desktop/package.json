@@ -10,8 +10,9 @@
     "tauri:build": "tauri build",
     "build": "tsc -b && vite build",
     "test": "node --experimental-strip-types --test src/**/*.test.ts",
-    "lint": "tsc -b --pretty false",
-    "format": "tsc -b --pretty false",
+    "lint": "eslint src",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {

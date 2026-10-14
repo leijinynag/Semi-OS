@@ -20,7 +20,24 @@ export const workerName = "semi-os-agent-worker";
  * 调试输出破坏 Host 的分帧和协议校验。
  */
 export function handleWorkerLine(line: string, pid = process.pid): Envelope {
-  const request = decodeJsonl(line);
+  let request: ReturnType<typeof decodeJsonl>;
+  try {
+    request = decodeJsonl(line);
+  } catch (error) {
+    let requestId: RequestId | undefined;
+    try {
+      const candidate = JSON.parse(line) as { requestId?: unknown };
+      if (
+        typeof candidate.requestId === "string" &&
+        /^req_[A-Za-z0-9_-]+$/.test(candidate.requestId)
+      ) {
+        requestId = candidate.requestId as RequestId;
+      }
+    } catch {
+      // protocolError will use its stable fallback request ID.
+    }
+    return protocolError(error, requestId);
+  }
   if (request.direction !== "request" || request.kind !== "health.check") {
     return {
       direction: "error",
@@ -49,19 +66,14 @@ export function handleWorkerLine(line: string, pid = process.pid): Envelope {
 
 function protocolError(error: unknown, requestId?: RequestId): Envelope {
   const message =
-    error instanceof ProtocolValidationError
-      ? error.message
-      : "Worker failed to parse request";
+    error instanceof ProtocolValidationError ? error.message : "Worker failed to parse request";
   return {
     direction: "error",
     protocolVersion: PROTOCOL_VERSION,
     requestId: requestId ?? ("req_worker_protocol_error" as RequestId),
     kind: "protocol.error",
     payload: {
-      code:
-        error instanceof ProtocolValidationError
-          ? error.code
-          : "invalid_request",
+      code: error instanceof ProtocolValidationError ? error.code : "invalid_request",
       message,
       retryable: false,
     },
@@ -100,13 +112,14 @@ export function runWorker(): void {
   });
   lines.once("close", () => void service.dispose());
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => { lines.close(); void service.dispose().finally(() => process.exit(0)); });
+    process.once(signal, () => {
+      lines.close();
+      void service.dispose().finally(() => process.exit(0));
+    });
   }
 }
 
-const entrypoint = process.argv[1]
-  ? pathToFileURL(process.argv[1]).href
-  : undefined;
+const entrypoint = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
 if (entrypoint === import.meta.url) {
   runWorker();
 }

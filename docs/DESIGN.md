@@ -30,6 +30,84 @@ loop. Rust owns privileged operating-system access and durable local state.
 Tools are exposed dynamically according to platform capability, user policy,
 task context and current permission state.
 
+### Architecture hardening baseline
+
+The protocol schema at `schemas/protocol.schema.json` is the single source of
+truth for the Host/Worker boundary. TypeScript and Rust consumers validate the
+envelope and kind-specific payload fields before dispatch. TypeScript
+discriminated unions and Rust DTOs are generated from that schema; Worker
+request dispatch uses an exhaustive switch. Unknown message kinds,
+malformed payloads and unsupported protocol versions are explicit boundary
+errors, not best-effort fallbacks.
+
+Quality checks are intentionally split into `lint`, `format:check`, `typecheck`,
+`test` and `build`, with Rust checks and `git diff --check` running alongside
+them. Existing legacy formatting is tracked in `.prettier-baseline` so the
+baseline can become stricter without a history-wide formatting diff.
+
+Host decomposition is incremental: pure routers and a structured `HostError`
+are extracted while Tauri window, tray and lifecycle assembly remains in the
+entrypoint. Durable Storage APIs expose domain DTOs; JSON remains an internal
+representation for compatibility migrations. RPC retries reuse a request
+identity and payload digest, and an unknown side-effect result must be
+reconciled before retry.
+
+Workflow queries use `WorkflowSnapshotDto`, `WorkflowNotification`,
+`WorkflowBackground` and related typed records at the Storage/Host/UI boundary.
+The compatibility layer may still decode historical JSON snapshots and accept
+legacy Worker operation results, but it must decode them before UI emission,
+notification routing or run authorization. This keeps old migrations stable
+without allowing arbitrary database JSON to become a client contract.
+
+Read-only implementations live in `workflow_queries.rs`; raw JSON queries are
+crate-private, DTOs live in `workflow_dto.rs`, and state-machine tests live in
+`workflow_tests.rs`. Mutation results now return `WorkflowSnapshotDto` inside
+Storage, while Host/IPC serializes the unchanged legacy wire shape. Coordinator
+claims use an explicit `WorkflowClaimResult` discriminator, and checkpoints are
+validated before a lease is acquired. Delegated decision lookups return
+`WorkflowDecisionResult` rather than an arbitrary JSON value; decision values
+have explicit authority, reason, approval and question-answer fields.
+Startup recovery validates snapshots across all sessions before notifying the
+Worker; corrupt records produce an explicit recovery error instead of silently
+dropping a session. Decision registration and answers accept typed
+`WorkflowDecisionInput` and `WorkflowDecisionValue`; their decision kind is
+still validated by the domain layer.
+
+Host workflow dispatch decodes legacy `{ operationId, operation, value }`
+messages into operation-specific DTOs before accessing Storage. Unknown
+operations, missing fields and invalid field types fail before mutation;
+optional find filters default only when omitted, not when malformed. This is
+an internal domain projection, not an alternative wire schema: the generated
+protocol validator remains the process-boundary authority. Existing JSON
+entrypoints remain compatibility adapters, and typed plans reach persistence
+without an intermediate JSON round trip.
+
+P8.5 has inbound Host RPC receipts (`rpc.rs`, migration `0010`):
+durable workflow mutations replay saved results for identical requests and
+reject digest conflicts. Live lease and authorization checks are deliberately
+re-evaluated rather than replayed. The outbound ledger (migration `0011`)
+records identity, digest and transport state through a separate Storage
+connection, avoiding reentrant business-Storage locks. It stores neither raw
+request payloads nor secrets; realtime `voice.*` requests are excluded.
+Queued duplicates are suppressed, failed enqueue releases the unsent receipt,
+and `sending` is persisted before the first pipe byte. Interrupted sends enter
+reconciliation; a reconnect cannot blindly replay them. Unsent requests may be
+queued again with the same identity. ACK pairing is checked, and a transport
+ACK never proves business completion. Explicit Host reconciliation requires
+evidence; it does not fabricate a completed business result.
+
+The first Host decomposition slices isolate lifecycle, voice and research
+routing from the Tauri shell. `LifecycleCommand` and `route_lifecycle` can be
+tested without a WebView, Worker or database. Voice event application and
+research event classification follow the same rule: stale identities,
+cross-session events and malformed payloads are rejected before the desktop
+snapshot or durable state is changed. Research and workflow persistence,
+reply construction and effects are handled in the Host modules; thin desktop
+routers apply those effects and wire UI delivery. The Tauri entrypoint keeps
+command registration, dependency injection and window/tray lifecycle assembly.
+`HostError::ui_message` keeps internal storage and runtime details out of UI
+responses, with string compatibility retained at existing IPC entrypoints.
+
 The three MVP scenario families are not a mandatory technical sequence. They can
 be developed in parallel because they share the same voice pipeline, Pi session,
 TaskRun lifecycle, tool contract, event stream and evidence model. The main
@@ -282,10 +360,10 @@ persisted Pi session data and task checkpoints.
 
 Use three typed channels:
 
-| Channel | Transport | Purpose |
-| --- | --- | --- |
-| React ↔ Rust | Tauri commands/events | UI intent and domain event stream |
-| Rust ↔ Node | local JSONL RPC over stdio | supervised control and privileged tool bridge |
+| Channel           | Transport                  | Purpose                                           |
+| ----------------- | -------------------------- | ------------------------------------------------- |
+| React ↔ Rust      | Tauri commands/events      | UI intent and domain event stream                 |
+| Rust ↔ Node       | local JSONL RPC over stdio | supervised control and privileged tool bridge     |
 | Node ↔ child tool | process-specific stdio/RPC | Playwright service, coding agent, future adapters |
 
 JSONL records carry `protocolVersion`, `requestId`, `taskId`, `kind`, `payload`
@@ -389,13 +467,13 @@ branches.
 
 Latency is not dominated by Pi alone. Measure separate budgets:
 
-| Segment | Target experience |
-| --- | --- |
-| Hotkey to listening indicator | effectively immediate |
-| Speech end to final transcription | measure provider finalization separately |
-| Plan/progress | meaningful stage events, no universal acknowledgement |
-| First complete assistant sentence to audio | begin TTS immediately |
-| Tool progress | emit structured milestones, not silent waiting |
+| Segment                                    | Target experience                                     |
+| ------------------------------------------ | ----------------------------------------------------- |
+| Hotkey to listening indicator              | effectively immediate                                 |
+| Speech end to final transcription          | measure provider finalization separately              |
+| Plan/progress                              | meaningful stage events, no universal acknowledgement |
+| First complete assistant sentence to audio | begin TTS immediately                                 |
+| Tool progress                              | emit structured milestones, not silent waiting        |
 
 No fixed acknowledgement is generated for every input. TTS uses sentence
 buffering for a short spoken summary; the full Markdown report remains separate.
@@ -573,32 +651,99 @@ The agent cannot submit an opaque multi-action script to the desktop driver.
 Scripts may exist inside trusted Skills, but privileged actions still cross the
 same per-action policy and receipt boundary.
 
-### 6.4 Coding-agent delegation
+### 6.4 用户主导的多 Agent 协作
 
-Coding work is a tool-backed subtask, not a second product mode. The adapter
-must support:
+协作是 Pi 的工具能力，不是手写的另一套 Agent Loop。主 Pi 根据任务决定是否
+委派规划、审查、实施和返工；调度器只校验授权、依赖和资源，不决定工作流。
+简单任务不强制套完整流水线。默认最多两个执行中的子 Agent，主 Pi 不计入。
 
-- start with repository, objective and constraints;
-- stream milestones and changed-file summaries;
-- inject steering;
-- cancel/pause cooperatively;
-- collect exit state, diff, tests and diagnostics;
-- prevent the child from bypassing Semi-OS confirmation policy for external
-  side effects.
+```mermaid
+flowchart LR
+    User[用户意图 / 普通聊天] --> Pi[前台 Pi / 官方扩展与 Skill]
+    Pi --> Plan[版本化计划与任务 DAG]
+    Plan --> Host[Rust Host / 真人授权 / SQLite]
+    Host --> Queue[持久事件 / 单领取者 / 检查点]
+    Queue --> Background[每工作流独立后台 Pi / 官方 Runtime Adapter]
+    Background -->|所属工作流工具| Scheduler[Node 调度与进程服务]
+    Scheduler -->|子任务完成 / 阻塞 / 决策请求| Host
+    Scheduler --> A[独立实施 worktree]
+    Scheduler --> B[独立实施 worktree]
+    A --> Integration[独立整合 worktree]
+    B --> Integration
+    Integration --> Evidence[版本绑定的测试 / 独立审查]
+    Evidence --> Apply[用户确认应用成果]
+    Host --> UI[工位 / 依赖 / 事件时间线]
+    Pi -->|跨 Session 进度查询 / 用户指令| Host
+```
 
-The initial implementation may invoke an installed local agent. Later,
-different coding agents can be registered behind `CodingAgentProvider`.
+- `WorkflowPlan` 保存目标、范围、验收、工作区、授权动作和任务图。
+  `WorkItem` 的角色与 Provider 分离，`AgentRun` 表示一次执行尝试。
+  `ReviewFinding` 与 `IntegrationResult` 保存真实版本的审查及整合证据。
+  `WorkflowApplication` 是用户应用成果的独立授权，包含计划版本/摘要、
+  源仓库、当前 ref/HEAD、整合工作区及具体成果提交。
+- 批准前只能只读调查、规划和审查。批准由用户通过 Host 作出，Worker
+  不提供自批准工具。批准绑定精确计划版本、摘要及用户意图代际。
+- 目标、范围、验收或授权边界改变必须重新批准。范围内重分工保留变更记录，
+  不覆盖旧尝试。三轮未解决的同一审查问题转为 `needs_user`。
+- 用户修改要求先停止受影响任务的新操作，协调在途结果；迟到事件不能
+  验收为新代际成果。停止播报、结束一轮对话或切换 Session 不取消后台协作。
+- Rust 独占 SQLite、批准与策略；Node 独占子进程、Provider 与工作区。
+  Pi CLI RPC、Claude 结构化流、Codex app-server 分别适配，复用本地认证；
+  不启用跳过权限选项，无法拦截的高风险操作默认拒绝。
+- 并行写入使用 `codex/` 分支与独立 Git worktree。源目录脏时要求用户处理
+  或明确选择已提交基线，不静默忽略；非 Git 首版不并行写入。
+- 成果本地提交须列入已批准计划。独立整合 worktree 串行 cherry-pick，
+  不自动 push、不隐式修改用户当前分支。冲突与未整合/脏 worktree 保留。
+  整合后重新测试及独立审查；后续修改使旧验证失效。
+- 应用成果必须经过客户端独立确认，计划批准不代替应用批准。仅在工作流空闲、
+  整合 verified、源及整合工作区干净、ref/HEAD 与预览一致且可以 fast-forward
+  时执行；不自动合并分叉、不 reset。Host 保存单次令牌和执行回执，
+  待应用或 unknown 时阻止新计划及执行，避免旧授权作用于新成果。
+  重启中断转为 unknown，用户人工核对后废止旧令牌，再重新预览确认。
+  Git 外部进程仍可能在校验与 merge 之间改动仓库，失败或事后不一致须核对，
+  不将前后检查宣称为跨进程原子锁。
+- 前台聊天和后台协调会话分离，不复制全部聊天记录。后台用
+  `coordinator_<workflowId>` 会话与应用数据目录独立 cwd，仅注入该工作流工具
+  及内置协作 Skill，不提供原生 shell/写工具、不连接 STT/TTS。
+- 事件先持久化再发布。Host 保存领取者、90 秒租约、已领取/已消费序号和
+  Pi 检查点；Worker 每 25 秒续租。空领取不调用模型，轮次结束原子提交检查点
+  与消费游标；重复领取/回执幂等，活动事件不淹没终态通知。模型或工具结果
+  不确定时保留现场，不能因回执丢失重放整轮。
+- 真人批准总计划时保存托管 grant，绑定计划摘要、意图版本、仓库和动作；
+  实际操作还核对工作项、登记的真实工作区、角色及当前批准。未知 shell、
+  越界或不明确的 Codex 批量文件变更仍需真人。macOS 测试运行器限制读写路径、
+  禁网并去除云端密钥；它是特定命令执行边界，不是所有 Provider 的全局沙箱。
+- 子 Agent 澄清/子计划作为结构化请求持久化。后台 Pi 只能决定实现细节，
+  用户偏好、新目标和额外权限转交用户；真人与代理答案分别留痕。Claude
+  `AskUserQuestion` 已验证真实 CLI 回调；`ExitPlanMode` 未验证，保留计划产出、
+  主 Pi 审查后另派明确实施任务的兼容流程。
+- 安全通信失败最多按 2/10/30 秒重试；模型失败不重放。Host 从持久事件验证
+  实质进展，连续三轮无进展转 `needs_user`，同一审查问题三轮返工也须用户决策。
+- 启动阶段分为未启动、启动请求已发送、执行中和成果已保存。Worker 重启先
+  核对并恢复确定未启动的队列；在途轮次及执行标为待核对，暂停/取消/待重批
+  不自动恢复。脏 worktree 保留，不能用新建空目录遮盖旧修改。
+- 用户通过工作流修改入口时，Host 先原子撤销旧 grant 并记录要求，再通知
+  Worker 停止。普通聊天/进度查询/Session 切换不打断后台；自然语言改要求仍需
+  前台 Pi 调用控制工具，不宣称 Host 能自动识别所有聊天中的目标变更。
+- 原生窗口关闭隐藏至托盘继续运行；显式退出停止 Worker 并保留持久状态。
+  完成/需要用户处理时发布去重客户端通知并更新托盘标题/提示，不自动播报，
+  尚未接入系统通知中心。跨 Session 可按名称、仓库和批准/执行状态查询，
+  通知点击以精确工作流 ID 读取，不依赖最近 30 条查询结果。
+- 客户端使用现有右侧卡片与全高抽屉显示计划批准、工位、依赖、时间线、
+  Diff、测试及审查。状态来自结构化事件，不展示推理或虚构百分比。
+
+以上为批准的目标设计，实际实现与验收状态以 `tasks.md` 为准。
 
 ## 7. Policy, confirmation and security
 
 ### 7.1 Default risk policy
 
-| Risk class | Examples | MVP default |
-| --- | --- | --- |
-| `read` | inspect files, DOM, accessibility tree | automatic |
-| `local_write` | edit local file, create local artifact | automatic |
-| `external_side_effect` | send message, submit form, publish, purchase | confirm |
-| `privileged` | install software, permission/security changes | confirm |
+| Risk class             | Examples                                      | MVP default |
+| ---------------------- | --------------------------------------------- | ----------- |
+| `read`                 | inspect files, DOM, accessibility tree        | automatic   |
+| `local_write`          | edit local file, create local artifact        | automatic   |
+| `external_side_effect` | send message, submit form, publish, purchase  | confirm     |
+| `privileged`           | install software, permission/security changes | confirm     |
 
 Settings may make low-risk actions stricter. High-risk tools default to
 confirmation. The product must clearly warn when a user weakens policy.
@@ -692,14 +837,14 @@ L5 Procedural Candidate
   repeatable workflows that may later become trusted Skills
 ```
 
-| Layer | Stores | Default loading |
-| --- | --- | --- |
-| L0 Working Context | Pi messages, task checkpoint, current plan, compaction summary | always for the active task |
-| L1 Standing Rules | safety rules, tool boundaries, confirmation policy | always; enforced by Host where applicable |
-| L2 Curated Memory | profile, preference, project and application facts | small relevant pack at turn start |
-| L3 Episodic Summary | prior task summaries and verified result references | loaded when the task resembles prior work |
-| L4 Historical Evidence | raw messages, events, artifacts and receipts | loaded only for investigation or reconciliation |
-| L5 Procedural Candidate | successful repeatable workflows and Skill candidates | candidate metadata first, full Skill on selection |
+| Layer                   | Stores                                                         | Default loading                                   |
+| ----------------------- | -------------------------------------------------------------- | ------------------------------------------------- |
+| L0 Working Context      | Pi messages, task checkpoint, current plan, compaction summary | always for the active task                        |
+| L1 Standing Rules       | safety rules, tool boundaries, confirmation policy             | always; enforced by Host where applicable         |
+| L2 Curated Memory       | profile, preference, project and application facts             | small relevant pack at turn start                 |
+| L3 Episodic Summary     | prior task summaries and verified result references            | loaded when the task resembles prior work         |
+| L4 Historical Evidence  | raw messages, events, artifacts and receipts                   | loaded only for investigation or reconciliation   |
+| L5 Procedural Candidate | successful repeatable workflows and Skill candidates           | candidate metadata first, full Skill on selection |
 
 ### 9.2 Personality is a separate context layer
 
@@ -828,19 +973,19 @@ processes remain on the same machine; checkpoint health is observable.
 
 Core tables:
 
-| Table | Purpose |
-| --- | --- |
-| `tasks` | current task projection and lifecycle |
-| `task_events` | append-only state/event history |
-| `agent_sessions` | Pi session/checkpoint references |
-| `tool_attempts` | invocation, policy, result and timing |
-| `approvals` | approval binding and decision |
-| `artifacts` | screenshots, diffs, downloads and evidence |
-| `memories` | canonical memory records, including author, scope and mutability policy |
-| `memory_sources` | provenance linking memories to tasks/events |
-| `memory_links` | supersedes, contradicts, consolidates and associates relations |
-| `settings` | typed user policy and provider settings |
-| `capabilities` | observed platform/provider availability |
+| Table            | Purpose                                                                 |
+| ---------------- | ----------------------------------------------------------------------- |
+| `tasks`          | current task projection and lifecycle                                   |
+| `task_events`    | append-only state/event history                                         |
+| `agent_sessions` | Pi session/checkpoint references                                        |
+| `tool_attempts`  | invocation, policy, result and timing                                   |
+| `approvals`      | approval binding and decision                                           |
+| `artifacts`      | screenshots, diffs, downloads and evidence                              |
+| `memories`       | canonical memory records, including author, scope and mutability policy |
+| `memory_sources` | provenance linking memories to tasks/events                             |
+| `memory_links`   | supersedes, contradicts, consolidates and associates relations          |
+| `settings`       | typed user policy and provider settings                                 |
+| `capabilities`   | observed platform/provider availability                                 |
 
 Sensitive payloads are encrypted or replaced with Keychain references. Raw
 audio is ephemeral by default and not persisted unless the user enables it.
@@ -967,18 +1112,18 @@ leaking unrelated context.
 
 ## 14. Key risks
 
-| Risk | Consequence | Mitigation |
-| --- | --- | --- |
-| Voice latency feels slow | product feels inferior before tools matter | meaningful stage prompts, streaming STT/TTS, per-stage budgets |
-| Pi API changes | worker churn | adapter, pinned dependency, contract tests |
-| macOS UI semantics are incomplete | brittle desktop actions | accessibility first, screenshot fallback, fresh observation |
-| Browser login/profile theft | account compromise | dedicated profile, restrictive permissions, never commit state |
-| Child coding agent bypasses policy | uncontrolled side effect | route privileged/external actions through host policy |
-| Memory becomes noisy or invasive | trust loss and worse reasoning | admission filters, scoped progressive loading, provenance, audit history and edit/delete controls |
-| Automatic writes capture a wrong inference | future tasks receive misleading context | confidence thresholds, source links, contradiction records, unsupported-identity filter and visible correction path |
-| Compaction loses an important task detail | resumed task repeats or takes the wrong action | structured summary fields, receipt references, recent-turn retention and recovery tests |
-| Retrying unknown requests duplicates actions | messages/orders sent twice | idempotency and reconciliation before retry |
-| Worker crash loses context | abandoned tasks | event log, checkpoints, supervised restart |
+| Risk                                         | Consequence                                    | Mitigation                                                                                                          |
+| -------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Voice latency feels slow                     | product feels inferior before tools matter     | meaningful stage prompts, streaming STT/TTS, per-stage budgets                                                      |
+| Pi API changes                               | worker churn                                   | adapter, pinned dependency, contract tests                                                                          |
+| macOS UI semantics are incomplete            | brittle desktop actions                        | accessibility first, screenshot fallback, fresh observation                                                         |
+| Browser login/profile theft                  | account compromise                             | dedicated profile, restrictive permissions, never commit state                                                      |
+| Child coding agent bypasses policy           | uncontrolled side effect                       | route privileged/external actions through host policy                                                               |
+| Memory becomes noisy or invasive             | trust loss and worse reasoning                 | admission filters, scoped progressive loading, provenance, audit history and edit/delete controls                   |
+| Automatic writes capture a wrong inference   | future tasks receive misleading context        | confidence thresholds, source links, contradiction records, unsupported-identity filter and visible correction path |
+| Compaction loses an important task detail    | resumed task repeats or takes the wrong action | structured summary fields, receipt references, recent-turn retention and recovery tests                             |
+| Retrying unknown requests duplicates actions | messages/orders sent twice                     | idempotency and reconciliation before retry                                                                         |
+| Worker crash loses context                   | abandoned tasks                                | event log, checkpoints, supervised restart                                                                          |
 
 ## 15. Decisions still open
 

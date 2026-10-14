@@ -1,0 +1,169 @@
+[
+  {
+    "name": "mismatched operation identity",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.request",
+      "payload": { "operationId": "req_other", "operation": "find", "value": {} }
+    }
+  },
+  {
+    "name": "health request",
+    "valid": true,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "health.check",
+      "payload": { "includeCapabilities": false }
+    }
+  },
+  {
+    "name": "unknown kind",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "future.request",
+      "payload": {}
+    }
+  },
+  {
+    "name": "missing text",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "voice.text.submit",
+      "payload": { "sessionId": "session_test" }
+    }
+  },
+  {
+    "name": "negative audio sequence",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "voice.audio.append",
+      "payload": { "sequence": -1, "data": "AA==" }
+    }
+  },
+  {
+    "name": "malformed acknowledgement",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.acknowledged",
+      "payload": { "operationId": "req_contract", "ok": "yes" }
+    }
+  },
+  {
+    "name": "wrong direction",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "health.check",
+      "payload": {}
+    }
+  },
+  {
+    "name": "future protocol",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 2,
+      "requestId": "req_contract",
+      "kind": "health.check",
+      "payload": {}
+    }
+  },
+  {
+    "name": "unknown workflow operation",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.request",
+      "payload": { "operationId": "req_contract", "operation": "future", "value": {} }
+    }
+  },
+  {
+    "name": "missing work item authorization identity",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.request",
+      "payload": {
+        "operationId": "req_contract",
+        "operation": "authorize",
+        "value": { "workflowId": "workflow_test" }
+      }
+    }
+  },
+  {
+    "name": "invalid coordinator checkpoint",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.request",
+      "payload": {
+        "operationId": "req_contract",
+        "operation": "coordinator.finish",
+        "value": {
+          "workflowId": "workflow_test",
+          "owner": "owner",
+          "sequence": 1,
+          "progress": true,
+          "checkpoint": { "sessionId": 1, "sequence": 1, "data": {} }
+        }
+      }
+    }
+  },
+  {
+    "name": "valid workflow query",
+    "valid": true,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.request",
+      "payload": { "operationId": "req_contract", "operation": "find", "value": { "name": "demo" } }
+    }
+  },
+  {
+    "name": "invalid structured question",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "workflow.request",
+      "payload": {
+        "operationId": "req_contract",
+        "operation": "delegate.request",
+        "value": {
+          "workflowId": "workflow_test",
+          "runId": "run_test",
+          "requestId": "question",
+          "kind": "clarification",
+          "input": { "questions": [{ "question": "choice", "multiSelect": "yes" }] }
+        }
+      }
+    }
+  }
+]

@@ -1,3 +1,4 @@
+use crate::outbound_rpc::OutboundLedger;
 use crate::{DiagnosticRecord, DiagnosticStore};
 use semi_os_protocol::{validate_envelope, Envelope, EnvelopeContext, RequestId, PROTOCOL_VERSION};
 use serde::Serialize;
@@ -21,6 +22,7 @@ pub struct WorkerCommand {
     pub program: String,
     pub args: Vec<String>,
     pub current_dir: PathBuf,
+    pub environment: Vec<(String, String)>,
 }
 
 /// 有限指数退避策略；`max_restarts` 不包含第一次启动。
@@ -84,6 +86,7 @@ pub struct WorkerSupervisor {
     diagnostics: Arc<DiagnosticStore>,
     event_handler: WorkerEventHandler,
     message_handler: WorkerMessageHandler,
+    ledger: Option<Arc<OutboundLedger>>,
 }
 
 impl WorkerSupervisor {
@@ -100,16 +103,25 @@ impl WorkerSupervisor {
             diagnostics,
             event_handler,
             message_handler,
+            ledger: None,
         }
+    }
+
+    /// 生产入口必须配置持久账本；无账本构造仅保留给隔离测试。
+    pub fn with_receipts(mut self, path: &std::path::Path) -> io::Result<Self> {
+        self.ledger = Some(Arc::new(OutboundLedger::open(path)?));
+        Ok(self)
     }
 
     /// 在专用线程中启动监督循环，避免阻塞 Tauri 事件循环。
     pub fn start(self) -> WorkerSupervisorHandle {
         let (command_tx, command_rx) = mpsc::channel();
+        let ledger = self.ledger.clone();
         let join_handle = thread::spawn(move || self.run(command_rx));
         WorkerSupervisorHandle {
             command_tx: Some(command_tx),
             join_handle: Some(join_handle),
+            ledger,
         }
     }
 
@@ -137,6 +149,19 @@ impl WorkerSupervisor {
                 }
             };
 
+            if let Some(ledger) = &self.ledger {
+                if let Err(error) = ledger.interrupt() {
+                    self.record(
+                        "worker_rpc",
+                        "RPC 发送状态保存失败，停止自动重启",
+                        restart_count,
+                        json!({"error": error.to_string()}),
+                    );
+                    self.publish(WorkerEvent::Stopped);
+                    return;
+                }
+            }
+            discard_voice_requests(&mut pending);
             match outcome {
                 MonitorOutcome::Stopped => {
                     self.publish(WorkerEvent::Stopped);
@@ -189,6 +214,8 @@ impl WorkerSupervisor {
                 self.publish(WorkerEvent::Stopped);
                 return;
             }
+            // 退避期间收集的语音仍属于已断开的控制器轮次，不能交给新 Worker。
+            discard_voice_requests(&mut pending);
         }
     }
 
@@ -199,6 +226,7 @@ impl WorkerSupervisor {
         restart_count: u32,
     ) -> io::Result<MonitorOutcome> {
         let mut child = Command::new(&self.command.program)
+            .envs(self.command.environment.iter().cloned())
             .args(&self.command.args)
             .current_dir(&self.command.current_dir)
             .stdin(Stdio::piped())
@@ -218,7 +246,11 @@ impl WorkerSupervisor {
             .stdin
             .take()
             .ok_or_else(|| io::Error::other("worker stdin unavailable"))?;
-        write_envelope(&mut stdin, &health_request)?;
+        if let Err(error) = write_envelope(&mut stdin, &health_request) {
+            // 握手首包写入失败发生在读取线程建立前，同样必须回收子进程。
+            terminate_child(&mut child);
+            return Err(error);
+        }
 
         let stdout = child
             .stdout
@@ -232,15 +264,38 @@ impl WorkerSupervisor {
             self.wait_for_health(&mut child, command_rx, pending, &line_rx, &request_id);
         let outcome = match handshake {
             Ok(HandshakeOutcome::Ready(pid)) => {
-                self.publish(WorkerEvent::Ready { pid, restart_count });
-                monitor_ready_child(
-                    &mut child,
-                    &mut stdin,
-                    command_rx,
-                    pending,
-                    &line_rx,
-                    self.message_handler.as_ref(),
-                )?
+                // 握手期间仍可能收到旧控制器的语音；必须先清掉，再发布可接收新轮次的 Ready。
+                let stopped = restart_count > 0 && collect_commands(command_rx, pending);
+                if restart_count > 0 {
+                    discard_voice_requests(pending);
+                }
+                if stopped {
+                    terminate_child(&mut child);
+                    MonitorOutcome::Stopped
+                } else {
+                    self.publish(WorkerEvent::Ready { pid, restart_count });
+                    match monitor_ready_child(
+                        &mut child,
+                        &mut stdin,
+                        command_rx,
+                        pending,
+                        &line_rx,
+                        self.message_handler.as_ref(),
+                        self.ledger.as_deref(),
+                    ) {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            // 写管道失败仍必须回收子进程和读取线程，不能遗留孤儿 Worker。
+                            terminate_child(&mut child);
+                            drop(stdin);
+                            let _ = stdout_thread.join();
+                            if let Some(handle) = stderr_thread {
+                                let _ = handle.join();
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
             }
             Ok(HandshakeOutcome::Stopped) => MonitorOutcome::Stopped,
             Err(message) => {
@@ -313,6 +368,7 @@ impl WorkerSupervisor {
 pub struct WorkerSupervisorHandle {
     command_tx: Option<Sender<SupervisorCommand>>,
     join_handle: Option<JoinHandle<()>>,
+    ledger: Option<Arc<OutboundLedger>>,
 }
 
 impl WorkerSupervisorHandle {
@@ -325,11 +381,24 @@ impl WorkerSupervisorHandle {
         if !matches!(envelope, Envelope::Request { .. }) {
             return Err("only request envelopes can be sent to the worker".to_owned());
         }
-        self.command_tx
+        let sender = self
+            .command_tx
             .as_ref()
-            .ok_or_else(|| "worker supervisor is stopped".to_owned())?
-            .send(SupervisorCommand::Send(Box::new(envelope)))
-            .map_err(|_| "worker supervisor command channel is closed".to_owned())
+            .ok_or_else(|| "worker supervisor is stopped".to_owned())?;
+        if let Some(ledger) = &self.ledger {
+            if !ledger.queue(&envelope).map_err(|error| error.to_string())? {
+                return Ok(());
+            }
+        }
+        if let Err(error) = sender.send(SupervisorCommand::Send(Box::new(envelope))) {
+            if let (Some(ledger), SupervisorCommand::Send(envelope)) = (&self.ledger, error.0) {
+                ledger
+                    .release(&envelope)
+                    .map_err(|_| "RPC 排队状态保存失败，需要核对".to_owned())?;
+            }
+            return Err("worker supervisor command channel is closed".to_owned());
+        }
+        Ok(())
     }
 
     /// 幂等停止：通知监督线程、终止当前子进程并等待清理完成。
@@ -409,6 +478,7 @@ fn monitor_ready_child(
     pending: &mut VecDeque<Envelope>,
     line_rx: &Receiver<String>,
     message_handler: &dyn Fn(Envelope),
+    ledger: Option<&OutboundLedger>,
 ) -> io::Result<MonitorOutcome> {
     loop {
         if collect_commands(command_rx, pending) {
@@ -416,14 +486,19 @@ fn monitor_ready_child(
             return Ok(MonitorOutcome::Stopped);
         }
         while let Some(envelope) = pending.pop_front() {
-            write_envelope(stdin, &envelope)?;
+            send_envelope(stdin, &envelope, ledger)?;
         }
         if let Some(status) = child.try_wait()? {
             return Ok(MonitorOutcome::Exited(status.code()));
         }
         match line_rx.recv_timeout(Duration::from_millis(25)) {
             Ok(line) => match parse_worker_message(&line) {
-                Ok(envelope) => message_handler(envelope),
+                Ok(envelope) => {
+                    if let Some(ledger) = ledger {
+                        ledger.acknowledge(&envelope)?;
+                    }
+                    message_handler(envelope);
+                }
                 Err(message) => {
                     terminate_child(child);
                     return Ok(MonitorOutcome::ProtocolError(message));
@@ -538,6 +613,22 @@ fn write_envelope(writer: &mut impl Write, envelope: &Envelope) -> io::Result<()
     writer.flush()
 }
 
+fn send_envelope(
+    writer: &mut impl Write,
+    envelope: &Envelope,
+    ledger: Option<&OutboundLedger>,
+) -> io::Result<()> {
+    if let Some(ledger) = ledger {
+        ledger.start(envelope)?;
+    }
+    write_envelope(writer, envelope)
+}
+
+fn discard_voice_requests(pending: &mut VecDeque<Envelope>) {
+    // 语音无持久重放语义；Host 的 Worker 退出事件负责通知控制器结束旧轮次。
+    pending.retain(|envelope| !matches!(envelope, Envelope::Request { kind, .. } if kind.starts_with("voice.")));
+}
+
 fn backoff_delay(policy: RestartPolicy, restart_count: u32) -> Duration {
     let exponent = restart_count.saturating_sub(1).min(31);
     let multiplier = 1_u32 << exponent;
@@ -553,6 +644,10 @@ fn format_exit_status(status: ExitStatus) -> String {
         |code| format!("code {code}"),
     )
 }
+
+#[cfg(test)]
+#[path = "supervisor_rpc_tests.rs"]
+mod rpc_tests;
 
 #[cfg(test)]
 mod tests {
@@ -582,6 +677,7 @@ mod tests {
                 program: "node".to_owned(),
                 args: vec![fixture.to_string_lossy().into_owned()],
                 current_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                environment: vec![],
             },
             RestartPolicy {
                 max_restarts: 1,
@@ -667,6 +763,7 @@ mod tests {
                 program: "node".to_owned(),
                 args: vec![fixture.to_string_lossy().into_owned()],
                 current_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                environment: vec![],
             },
             RestartPolicy {
                 max_restarts: 0,
@@ -725,6 +822,7 @@ mod tests {
                 program: "node".to_owned(),
                 args: vec![fixture.to_string_lossy().into_owned()],
                 current_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+                environment: vec![],
             },
             RestartPolicy {
                 max_restarts: 0,

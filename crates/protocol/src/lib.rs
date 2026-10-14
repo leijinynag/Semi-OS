@@ -6,10 +6,12 @@
 mod domain;
 mod generated;
 mod receipt;
+mod workflow;
 
 pub use domain::*;
 pub use generated::*;
 pub use receipt::*;
+pub use workflow::*;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -108,31 +110,31 @@ pub struct ProtocolValidationError {
 /// serde 可以保证基本字段类型，但无法表达当前版本支持范围、ID 前缀和
 /// error kind 白名单，因此消息进入 Host 业务逻辑前必须调用本函数。
 pub fn validate_envelope(envelope: &Envelope) -> Result<(), ProtocolValidationError> {
-    let (protocol_version, request_id, kind, is_error) = match envelope {
+    let (protocol_version, request_id, kind, direction, is_error) = match envelope {
         Envelope::Request {
             protocol_version,
             request_id,
             kind,
             ..
-        }
-        | Envelope::Response {
+        } => (*protocol_version, request_id, kind, "request", false),
+        Envelope::Response {
             protocol_version,
             request_id,
             kind,
             ..
-        }
-        | Envelope::Event {
+        } => (*protocol_version, request_id, kind, "response", false),
+        Envelope::Event {
             protocol_version,
             request_id,
             kind,
             ..
-        } => (*protocol_version, request_id, kind, false),
+        } => (*protocol_version, request_id, kind, "event", false),
         Envelope::Error {
             protocol_version,
             request_id,
             kind,
             ..
-        } => (*protocol_version, request_id, kind, true),
+        } => (*protocol_version, request_id, kind, "error", true),
     };
 
     if protocol_version != PROTOCOL_VERSION {
@@ -159,9 +161,67 @@ pub fn validate_envelope(envelope: &Envelope) -> Result<(), ProtocolValidationEr
             message: "error kind is invalid".to_owned(),
         });
     }
+    if !is_error {
+        let shape =
+            registered_message_shape(direction, kind).ok_or_else(|| ProtocolValidationError {
+                code: "unsupported_kind",
+                message: format!("Unsupported {direction} message kind: {kind}"),
+            })?;
+        let payload = match envelope {
+            Envelope::Request { payload, .. }
+            | Envelope::Response { payload, .. }
+            | Envelope::Event { payload, .. } => payload,
+            Envelope::Error { .. } => unreachable!("error envelopes are excluded above"),
+        };
+        if matches!(kind.as_str(), "workflow.request" | "research.persist")
+            && payload["operationId"].as_str() != Some(request_id.0.as_str())
+        {
+            return Err(ProtocolValidationError {
+                code: "invalid_payload",
+                message: "operationId must match requestId".into(),
+            });
+        }
+        let valid_shape = match shape {
+            PayloadShape::Object => payload.is_object(),
+            PayloadShape::ObjectOrNull => payload.is_object() || payload.is_null(),
+        };
+        if !valid_shape {
+            return Err(ProtocolValidationError {
+                code: "invalid_payload",
+                message: format!("{direction} message {kind} has an invalid payload shape"),
+            });
+        }
+    }
 
+    // 只编译本地生成的 Schema；关闭网络/文件解析，外部输入不能加载新规则。
+    static VALIDATOR: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    let validator = VALIDATOR.get_or_init(|| {
+        jsonschema::validator_for(
+            &serde_json::from_str(include_str!("wire.schema.generated.json"))
+                .expect("generated schema must be valid JSON"),
+        )
+        .expect("generated protocol schema must compile")
+    });
+    let value = serde_json::to_value(envelope).map_err(|_| ProtocolValidationError {
+        code: "invalid_payload",
+        message: "Cannot encode protocol message".into(),
+    })?;
+    validator
+        .validate(&value)
+        .map_err(|_| ProtocolValidationError {
+            code: "invalid_payload",
+            message: format!("Invalid {kind} payload or context"),
+        })?;
     Ok(())
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PayloadShape {
+    Object,
+    ObjectOrNull,
+}
+
+include!("registry.generated.rs");
 
 // ID 前缀用于区分领域对象；后缀限制为便于日志、SQLite 和 JSON 传输的字符集。
 fn matches_id(value: &str, prefix: &str) -> bool {
@@ -186,6 +246,35 @@ mod tests {
     }
 
     #[test]
+    fn shares_field_level_positive_and_negative_contracts_with_node() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../tests/contract/fixtures/payload-cases.json"
+        ))
+        .unwrap();
+        for case in cases {
+            let result = serde_json::from_value::<Envelope>(case["message"].clone())
+                .map_err(|error| error.to_string())
+                .and_then(|envelope| validate_envelope(&envelope).map_err(|error| error.message));
+            assert_eq!(
+                result.is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "{}: {:?}",
+                case["name"],
+                result
+            );
+            if case["valid"] == true {
+                // wire 校验与生成 DTO 必须兼容，不能只有 schema 通过而类型解码失败。
+                let value = case["message"].clone();
+                if value["direction"] == "request" {
+                    serde_json::from_value::<crate::messages::RequestMessage>(value).unwrap();
+                } else {
+                    serde_json::from_value::<crate::messages::EventMessage>(value).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rejects_unknown_protocol_version() {
         let envelope = Envelope::Request {
             protocol_version: 99,
@@ -205,4 +294,46 @@ mod tests {
             "unsupported_version"
         );
     }
+
+    #[test]
+    fn rejects_unknown_kind_and_invalid_payload_shape() {
+        let unknown = Envelope::Request {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: RequestId("req_unknown".to_owned()),
+            kind: "unknown.request".to_owned(),
+            payload: serde_json::json!({}),
+            context: EnvelopeContext {
+                task_id: None,
+                task_run_id: None,
+                trace_id: None,
+            },
+        };
+        assert_eq!(
+            validate_envelope(&unknown)
+                .expect_err("unknown kind must fail")
+                .code,
+            "unsupported_kind"
+        );
+
+        let malformed = Envelope::Request {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: RequestId("req_malformed".to_owned()),
+            kind: "voice.text.submit".to_owned(),
+            payload: serde_json::json!("not-an-object"),
+            context: EnvelopeContext {
+                task_id: None,
+                task_run_id: None,
+                trace_id: None,
+            },
+        };
+        assert_eq!(
+            validate_envelope(&malformed)
+                .expect_err("payload shape must fail")
+                .code,
+            "invalid_payload"
+        );
+    }
 }
+/// 字段 DTO 与消息判别联合由同一 Schema 生成，不能手写第二套 wire 契约。
+#[path = "messages.generated.rs"]
+pub mod messages;

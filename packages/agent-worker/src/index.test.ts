@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  decodeJsonl,
-  encodeJsonl,
-  type RequestId,
-  type RequestEnvelope,
-} from "@semi-os/protocol";
+import { decodeJsonl, encodeJsonl, type RequestId, type RequestEnvelope } from "@semi-os/protocol";
 import { handleWorkerLine, workerName } from "./index.ts";
 
 test("answers a valid health check with health.ready", () => {
@@ -17,9 +12,7 @@ test("answers a valid health check with health.ready", () => {
     payload: null,
   };
 
-  const response = decodeJsonl(
-    encodeJsonl(handleWorkerLine(encodeJsonl(request), 42)),
-  );
+  const response = decodeJsonl(encodeJsonl(handleWorkerLine(encodeJsonl(request), 42)));
   assert.equal(response.direction, "response");
   assert.equal(response.kind, "health.ready");
   assert.equal(response.requestId, request.requestId);
@@ -30,16 +23,18 @@ test("answers a valid health check with health.ready", () => {
 });
 
 test("rejects unsupported requests without crashing the worker", () => {
-  const request: RequestEnvelope = {
+  // 未登记 kind 是边界错误，不能通过 encodeJsonl 构造；这里模拟外部
+  // 直接送入 Worker 的原始 JSONL，验证 Worker 能返回协议错误而不崩溃。
+  const request = {
     direction: "request",
     protocolVersion: 1,
-    requestId: "req_worker_unknown" as RequestId,
+    requestId: "req_worker_unknown",
     kind: "unknown.request",
     payload: null,
   };
 
-  const response = handleWorkerLine(encodeJsonl(request), 42);
+  const response = handleWorkerLine(`${JSON.stringify(request)}\n`, 42);
   assert.equal(response.direction, "error");
-  assert.equal(response.kind, "request.error");
-  assert.equal(response.payload.code, "unsupported_request");
+  assert.equal(response.kind, "protocol.error");
+  assert.equal(response.payload.code, "unsupported_kind");
 });

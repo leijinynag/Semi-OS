@@ -25,11 +25,1150 @@
     },
     "kind": {
       "type": "string",
-      "minLength": 1
+      "enum": [
+        "health.check",
+        "health.ready",
+        "voice.turn.start",
+        "voice.audio.append",
+        "voice.turn.commit",
+        "voice.text.submit",
+        "voice.interrupt",
+        "voice.session.dispose",
+        "voice.session.disposed",
+        "voice.text.accepted",
+        "voice.turn.started",
+        "voice.audio.accepted",
+        "voice.turn.committed",
+        "voice.interrupt.accepted",
+        "voice.state",
+        "voice.transcript.partial",
+        "voice.transcript.final",
+        "voice.assistant.text_delta",
+        "voice.answer",
+        "voice.sentence",
+        "voice.timestamps",
+        "voice.audio.chunk",
+        "voice.audio.completed",
+        "voice.audio.stop",
+        "voice.turn.completed",
+        "voice.error",
+        "research.progress",
+        "research.receipt",
+        "research.report",
+        "research.timing",
+        "research.interrupted",
+        "research.confirmation.required",
+        "research.confirmation.announced",
+        "research.persist",
+        "research.persisted",
+        "research.acknowledged",
+        "research.policy.cancelled",
+        "workflow.request",
+        "workflow.control",
+        "workflow.control.accepted",
+        "workflow.acknowledged",
+        "workflow.received",
+        "workflow.run.inspect",
+        "workflow.run.reconcile",
+        "workflow.run.steer",
+        "workflow.run.answer",
+        "workflow.run.accepted",
+        "workflow.run.result",
+        "workflow.application.prepare",
+        "workflow.application.apply",
+        "browser.login.open",
+        "browser.login.accepted",
+        "browser.login.opened",
+        "browser.login.failed",
+        "fixture.request",
+        "fixture.echo",
+        "browser.navigation",
+        "browser.extraction",
+        "browser.startup",
+        "browser.playwright",
+        "worker.progress",
+        "worker.state_changed",
+        "session.ready",
+        "session.started",
+        "client.device_ready",
+        "client.press_to_first_sample",
+        "client.press_to_first_send",
+        "client.release_to_final_transcript",
+        "client.release_to_first_answer_playback",
+        "client.release_to_first_segment",
+        "client.release_to_first_text_ready",
+        "client.release_to_tts_ready",
+        "runtime.error",
+        "protocol.error",
+        "request.error"
+      ]
     },
-    "payload": {}
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "x-messages": {
+    "request": {
+      "health.check": {
+        "type": ["object", "null"],
+        "properties": { "includeCapabilities": { "type": "boolean" } }
+      },
+      "voice.turn.start": { "$ref": "#/$defs/voiceStart" },
+      "voice.audio.append": { "$ref": "#/$defs/audioAppend" },
+      "voice.turn.commit": {
+        "type": "object",
+        "required": ["lastSequence"],
+        "properties": { "lastSequence": { "type": "integer", "minimum": -1 } }
+      },
+      "voice.text.submit": { "$ref": "#/$defs/textSubmit" },
+      "voice.interrupt": {
+        "type": "object",
+        "required": ["taskId", "mode"],
+        "properties": {
+          "taskId": { "$ref": "#/$defs/nonempty" },
+          "mode": { "enum": ["pause", "cancel", "steer"] },
+          "text": { "type": "string" }
+        }
+      },
+      "voice.session.dispose": { "$ref": "#/$defs/sessionIdentity" },
+      "workflow.control": {
+        "type": "object",
+        "required": ["workflowId", "sessionId", "action"],
+        "properties": {
+          "workflowId": { "$ref": "#/$defs/nonempty" },
+          "sessionId": { "$ref": "#/$defs/nonempty" },
+          "action": {
+            "enum": [
+              "approved",
+              "rejected",
+              "needs_revision",
+              "pause",
+              "resume",
+              "resume_coordinator",
+              "cancel",
+              "observe",
+              "reconcile_application",
+              "answer_decision"
+            ]
+          },
+          "requestId": { "$ref": "#/$defs/nonempty" }
+        }
+      },
+      "workflow.acknowledged": { "$ref": "#/$defs/ack" },
+      "workflow.run.inspect": { "$ref": "#/$defs/runIdentity" },
+      "workflow.run.reconcile": { "$ref": "#/$defs/runIdentity" },
+      "workflow.run.steer": { "$ref": "#/$defs/runInstruction" },
+      "workflow.run.answer": { "$ref": "#/$defs/runInstruction" },
+      "workflow.application.prepare": {
+        "type": "object",
+        "required": ["sessionId", "workflowId"],
+        "properties": {
+          "sessionId": { "$ref": "#/$defs/nonempty" },
+          "workflowId": { "$ref": "#/$defs/nonempty" },
+          "applicationId": { "type": ["string", "null"] }
+        }
+      },
+      "workflow.application.apply": {
+        "type": "object",
+        "required": ["sessionId", "workflowId", "applicationId"],
+        "properties": {
+          "sessionId": { "$ref": "#/$defs/nonempty" },
+          "workflowId": { "$ref": "#/$defs/nonempty" },
+          "applicationId": { "$ref": "#/$defs/nonempty" }
+        }
+      },
+      "research.confirmation.required": { "$ref": "#/$defs/taskIdentity" },
+      "research.persisted": { "$ref": "#/$defs/ack" },
+      "browser.login.open": {
+        "type": "object",
+        "properties": { "url": { "$ref": "#/$defs/nonempty" } }
+      },
+      "fixture.request": { "type": "object" }
+    },
+    "response": {
+      "health.ready": {
+        "type": "object",
+        "required": ["pid"],
+        "properties": { "pid": { "type": "integer", "minimum": 1 }, "worker": { "type": "string" } }
+      },
+      "voice.session.disposed": { "$ref": "#/$defs/sessionIdentity" },
+      "voice.text.accepted": { "$ref": "#/$defs/accepted" },
+      "voice.turn.started": { "$ref": "#/$defs/accepted" },
+      "voice.audio.accepted": {
+        "type": "object",
+        "required": ["sequence"],
+        "properties": { "sequence": { "type": "integer", "minimum": 0 } }
+      },
+      "voice.turn.committed": { "$ref": "#/$defs/accepted" },
+      "voice.interrupt.accepted": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": { "mode": { "enum": ["pause", "cancel", "steer"] } }
+      },
+      "workflow.received": { "$ref": "#/$defs/accepted" },
+      "workflow.control.accepted": { "$ref": "#/$defs/accepted" },
+      "workflow.run.accepted": { "$ref": "#/$defs/accepted" },
+      "workflow.run.result": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["ok", "value"],
+            "properties": { "ok": { "const": true }, "value": {} }
+          },
+          {
+            "type": "object",
+            "required": ["ok", "error"],
+            "properties": { "ok": { "const": false }, "error": { "$ref": "#/$defs/nonempty" } }
+          }
+        ]
+      },
+      "research.confirmation.announced": { "$ref": "#/$defs/accepted" },
+      "research.acknowledged": { "$ref": "#/$defs/accepted" },
+      "browser.login.accepted": { "$ref": "#/$defs/accepted" },
+      "browser.login.opened": { "$ref": "#/$defs/browserObservation" },
+      "browser.login.failed": {
+        "type": "object",
+        "required": ["message"],
+        "properties": { "message": { "$ref": "#/$defs/nonempty" } }
+      }
+    },
+    "event": {
+      "fixture.echo": { "type": "object" },
+      "voice.state": {
+        "type": "object",
+        "required": ["state"],
+        "properties": { "state": { "$ref": "#/$defs/voiceState" } }
+      },
+      "voice.transcript.partial": { "$ref": "#/$defs/transcript" },
+      "voice.transcript.final": { "$ref": "#/$defs/transcript" },
+      "voice.assistant.text_delta": {
+        "type": "object",
+        "required": ["text", "source"],
+        "properties": { "text": { "type": "string" }, "source": { "const": "agent" } }
+      },
+      "voice.answer": {
+        "type": "object",
+        "required": ["taskId", "summary", "report"],
+        "properties": {
+          "taskId": { "$ref": "#/$defs/nonempty" },
+          "summary": { "type": "string", "maxLength": 128000 },
+          "report": { "type": "string", "maxLength": 512000 }
+        }
+      },
+      "voice.sentence": {
+        "type": "object",
+        "required": ["sentenceId", "text", "purpose"],
+        "properties": {
+          "sentenceId": { "$ref": "#/$defs/nonempty" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 8192 },
+          "purpose": { "enum": ["answer", "stage", "confirmation"] }
+        }
+      },
+      "voice.timestamps": {
+        "type": "object",
+        "required": ["sentenceId", "words"],
+        "properties": {
+          "sentenceId": { "$ref": "#/$defs/nonempty" },
+          "words": {
+            "type": "array",
+            "maxItems": 4096,
+            "items": {
+              "type": "object",
+              "required": ["text", "startMs", "endMs"],
+              "properties": {
+                "text": { "type": "string", "maxLength": 8192 },
+                "startMs": { "type": "integer", "minimum": 0, "maximum": 600000 },
+                "endMs": { "type": "integer", "minimum": 0, "maximum": 600000 }
+              }
+            }
+          }
+        }
+      },
+      "voice.audio.chunk": {
+        "type": "object",
+        "required": ["sentenceId", "sequence", "mimeType", "audioBase64", "first"],
+        "properties": {
+          "sentenceId": { "$ref": "#/$defs/nonempty" },
+          "sequence": { "type": "integer", "minimum": 0 },
+          "mimeType": { "enum": ["audio/mpeg", "audio/pcm;rate=22050;channels=1;format=s16le"] },
+          "audioBase64": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000000,
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+          },
+          "first": { "type": "boolean" }
+        }
+      },
+      "voice.audio.completed": {
+        "type": "object",
+        "required": ["sentenceId"],
+        "properties": { "sentenceId": { "$ref": "#/$defs/nonempty" } }
+      },
+      "voice.audio.stop": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": { "reason": { "$ref": "#/$defs/nonempty" } }
+      },
+      "voice.turn.completed": { "$ref": "#/$defs/taskIdentity" },
+      "voice.error": { "$ref": "#/$defs/errorPayload" },
+      "research.progress": {
+        "type": "object",
+        "required": ["taskId", "label", "toolName", "callId"],
+        "properties": {
+          "taskId": { "$ref": "#/$defs/nonempty" },
+          "label": { "$ref": "#/$defs/nonempty" },
+          "toolName": { "$ref": "#/$defs/nonempty" },
+          "callId": { "$ref": "#/$defs/nonempty" }
+        }
+      },
+      "research.receipt": { "$ref": "#/$defs/toolReceipt" },
+      "research.report": { "$ref": "#/$defs/researchReport" },
+      "research.timing": { "$ref": "#/$defs/timing" },
+      "research.interrupted": {
+        "type": "object",
+        "required": ["taskId", "mode"],
+        "properties": {
+          "taskId": { "$ref": "#/$defs/nonempty" },
+          "mode": { "enum": ["pause", "cancel", "steer"] }
+        }
+      },
+      "research.persist": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["operationId", "operation", "value"],
+            "properties": {
+              "operationId": { "$ref": "#/$defs/nonempty" },
+              "operation": { "const": "source" },
+              "value": { "$ref": "#/$defs/researchSource" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["operationId", "operation", "value"],
+            "properties": {
+              "operationId": { "$ref": "#/$defs/nonempty" },
+              "operation": { "const": "report" },
+              "value": { "$ref": "#/$defs/researchReport" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["operationId", "operation", "value"],
+            "properties": {
+              "operationId": { "$ref": "#/$defs/nonempty" },
+              "operation": { "const": "policy" },
+              "value": { "$ref": "#/$defs/policyRequest" }
+            }
+          }
+        ]
+      },
+      "research.policy.cancelled": {
+        "type": "object",
+        "required": ["operationId"],
+        "properties": { "operationId": { "$ref": "#/$defs/nonempty" } }
+      },
+      "workflow.request": {
+        "type": "object",
+        "required": ["operationId", "operation", "value"],
+        "properties": { "operationId": { "$ref": "#/$defs/nonempty" } },
+        "oneOf": [
+          {
+            "properties": {
+              "operation": { "enum": ["submit", "refine"] },
+              "value": { "$ref": "#/$defs/workflowPlan" }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "enum": ["list", "notifications"] },
+              "value": { "$ref": "#/$defs/sessionIdentity" }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "authorize" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "version", "digest", "workItemId"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "version": { "$ref": "#/$defs/positiveVersion" },
+                  "digest": { "$ref": "#/$defs/planDigest" },
+                  "workItemId": { "$ref": "#/$defs/nonempty" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "run" },
+              "value": { "$ref": "#/$defs/agentRun" }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "event" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "kind", "summary"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "kind": { "$ref": "#/$defs/nonempty" },
+                  "summary": { "$ref": "#/$defs/nonempty" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "finding" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "finding"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "finding": { "$ref": "#/$defs/reviewFinding" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "integration" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "result"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "result": { "$ref": "#/$defs/integrationResult" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "test" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "runId", "evidence", "text"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "runId": { "$ref": "#/$defs/nonempty" },
+                  "text": { "type": "string" },
+                  "evidence": { "$ref": "#/$defs/testEvidence" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "consume" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "sequence"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "sequence": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "application.begin" },
+              "value": {
+                "type": "object",
+                "required": ["applicationId"],
+                "properties": { "applicationId": { "$ref": "#/$defs/nonempty" } }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "application.finish" },
+              "value": {
+                "type": "object",
+                "required": ["applicationId", "applied"],
+                "properties": {
+                  "applicationId": { "$ref": "#/$defs/nonempty" },
+                  "applied": { "type": "boolean" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "coordinator.claim",
+                  "coordinator.renew",
+                  "coordinator.fail",
+                  "coordinator.unavailable"
+                ]
+              },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "owner"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "owner": { "$ref": "#/$defs/nonempty" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "coordinator.finish" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "owner", "sequence", "checkpoint", "progress"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "owner": { "$ref": "#/$defs/nonempty" },
+                  "sequence": { "type": "integer", "minimum": 0 },
+                  "checkpoint": { "$ref": "#/$defs/coordinatorCheckpoint" },
+                  "progress": { "type": "boolean" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "suspend" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId"],
+                "properties": { "workflowId": { "$ref": "#/$defs/nonempty" } }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "find" },
+              "value": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "repository": { "type": "string" },
+                  "status": { "type": "string" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "run.phase" },
+              "value": {
+                "type": "object",
+                "required": ["runId", "phase"],
+                "properties": {
+                  "runId": { "$ref": "#/$defs/nonempty" },
+                  "phase": { "enum": ["not_started", "start_requested", "executing", "saved"] }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "run.phase.read" },
+              "value": {
+                "type": "object",
+                "required": ["runId"],
+                "properties": { "runId": { "$ref": "#/$defs/nonempty" } }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "delegate.request" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "runId", "requestId", "kind", "input"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "runId": { "$ref": "#/$defs/nonempty" },
+                  "requestId": { "$ref": "#/$defs/nonempty" },
+                  "kind": { "enum": ["clarification", "plan"] },
+                  "input": { "$ref": "#/$defs/decisionInput" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "delegate.decision" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "runId", "requestId", "kind", "decision"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "runId": { "$ref": "#/$defs/nonempty" },
+                  "requestId": { "$ref": "#/$defs/nonempty" },
+                  "kind": { "enum": ["clarification", "plan"] },
+                  "decision": { "$ref": "#/$defs/decisionValue" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "delegate.result" },
+              "value": {
+                "type": "object",
+                "required": ["workflowId", "requestId"],
+                "properties": {
+                  "workflowId": { "$ref": "#/$defs/nonempty" },
+                  "requestId": { "$ref": "#/$defs/nonempty" }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "operation": { "const": "operation.authorize" },
+              "value": { "$ref": "#/$defs/operationAuthorization" }
+            }
+          }
+        ]
+      },
+      "browser.navigation": { "$ref": "#/$defs/timing" },
+      "browser.extraction": { "$ref": "#/$defs/timing" },
+      "browser.startup": { "$ref": "#/$defs/timing" },
+      "browser.playwright": { "$ref": "#/$defs/timing" },
+      "worker.progress": {
+        "type": "object",
+        "required": ["sequence"],
+        "properties": { "sequence": { "type": "integer", "minimum": 0 } }
+      },
+      "worker.state_changed": {
+        "type": "object",
+        "required": ["from", "to", "reason"],
+        "properties": {
+          "from": { "$ref": "#/$defs/workerState" },
+          "to": { "$ref": "#/$defs/workerState" },
+          "reason": { "type": "string" }
+        }
+      },
+      "session.ready": { "$ref": "#/$defs/timing" },
+      "session.started": { "$ref": "#/$defs/sessionIdentity" },
+      "client.device_ready": { "$ref": "#/$defs/timing" },
+      "client.press_to_first_sample": { "$ref": "#/$defs/timing" },
+      "client.press_to_first_send": { "$ref": "#/$defs/timing" },
+      "client.release_to_final_transcript": { "$ref": "#/$defs/timing" },
+      "client.release_to_first_answer_playback": { "$ref": "#/$defs/timing" },
+      "client.release_to_first_segment": { "$ref": "#/$defs/timing" },
+      "client.release_to_first_text_ready": { "$ref": "#/$defs/timing" },
+      "client.release_to_tts_ready": { "$ref": "#/$defs/timing" },
+      "runtime.error": {
+        "type": "object",
+        "required": ["message"],
+        "properties": { "message": { "$ref": "#/$defs/nonempty" } }
+      },
+      "protocol.error": { "$ref": "#/$defs/errorPayload" },
+      "request.error": { "$ref": "#/$defs/errorPayload" }
+    },
+    "error": {
+      "protocol.error": { "$ref": "#/$defs/errorPayload" },
+      "request.error": { "$ref": "#/$defs/errorPayload" }
+    }
   },
   "$defs": {
+    "positiveVersion": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "planDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" },
+    "stringList": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/nonempty" } },
+    "workItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workItemId",
+        "title",
+        "objective",
+        "role",
+        "provider",
+        "dependencies",
+        "outputs",
+        "acceptance"
+      ],
+      "properties": {
+        "workItemId": { "$ref": "#/$defs/nonempty" },
+        "title": { "$ref": "#/$defs/nonempty" },
+        "objective": { "$ref": "#/$defs/nonempty" },
+        "role": {
+          "enum": [
+            "research",
+            "planning",
+            "review",
+            "implementation",
+            "integration",
+            "verification"
+          ]
+        },
+        "provider": { "enum": ["pi", "claude", "codex"] },
+        "dependencies": { "$ref": "#/$defs/stringList" },
+        "outputs": { "$ref": "#/$defs/stringList" },
+        "acceptance": { "$ref": "#/$defs/stringList" }
+      }
+    },
+    "workflowPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflowId",
+        "sessionId",
+        "version",
+        "intentVersion",
+        "title",
+        "goal",
+        "scope",
+        "acceptance",
+        "authorizedActions",
+        "repository",
+        "workItems"
+      ],
+      "properties": {
+        "workflowId": { "$ref": "#/$defs/nonempty" },
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "version": { "$ref": "#/$defs/positiveVersion" },
+        "intentVersion": { "$ref": "#/$defs/positiveVersion" },
+        "title": { "$ref": "#/$defs/nonempty" },
+        "goal": { "$ref": "#/$defs/nonempty" },
+        "scope": { "$ref": "#/$defs/stringList" },
+        "acceptance": { "$ref": "#/$defs/stringList" },
+        "authorizedActions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["read", "workspace_write", "local_commit", "integrate"] }
+        },
+        "repository": { "type": "string", "pattern": "^/" },
+        "baselineCommit": { "$ref": "#/$defs/commit" },
+        "workItems": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/workItem" }
+        }
+      }
+    },
+    "agentRun": {
+      "type": "object",
+      "required": [
+        "runId",
+        "workflowId",
+        "planVersion",
+        "intentVersion",
+        "workItemId",
+        "attempt",
+        "provider",
+        "status",
+        "startedAtMs"
+      ],
+      "properties": {
+        "runId": { "$ref": "#/$defs/nonempty" },
+        "workflowId": { "$ref": "#/$defs/nonempty" },
+        "planVersion": { "$ref": "#/$defs/positiveVersion" },
+        "intentVersion": { "$ref": "#/$defs/positiveVersion" },
+        "workItemId": { "$ref": "#/$defs/nonempty" },
+        "attempt": { "$ref": "#/$defs/positiveVersion" },
+        "provider": { "enum": ["pi", "claude", "codex"] },
+        "status": {
+          "enum": [
+            "pending",
+            "queued",
+            "running",
+            "blocked",
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "startedAtMs": { "type": "integer", "minimum": 0 },
+        "endedAtMs": { "type": "integer", "minimum": 0 },
+        "workspace": { "type": "string" },
+        "providerSessionId": { "type": "string" },
+        "revision": { "$ref": "#/$defs/commit" },
+        "summary": { "type": "string" },
+        "error": { "type": "string" },
+        "branch": { "type": "string" },
+        "baselineCommit": { "$ref": "#/$defs/commit" },
+        "permission": {
+          "type": "object",
+          "required": ["requestId", "tool", "description"],
+          "properties": {
+            "requestId": { "type": "string" },
+            "tool": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        },
+        "capabilities": {
+          "type": "object",
+          "required": ["steer", "pause", "resume"],
+          "properties": {
+            "steer": { "type": "boolean" },
+            "pause": { "type": "boolean" },
+            "resume": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "reviewFinding": {
+      "type": "object",
+      "required": ["findingId", "workItemId", "revision", "summary", "status", "reworkRounds"],
+      "properties": {
+        "findingId": { "$ref": "#/$defs/nonempty" },
+        "workItemId": { "$ref": "#/$defs/nonempty" },
+        "revision": { "$ref": "#/$defs/commit" },
+        "summary": { "$ref": "#/$defs/nonempty" },
+        "status": { "enum": ["open", "resolved", "needs_user"] },
+        "reworkRounds": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "testEvidence": {
+      "type": "object",
+      "required": ["command", "exitCode", "revision", "artifactId"],
+      "properties": {
+        "command": { "$ref": "#/$defs/nonempty" },
+        "exitCode": { "type": "integer" },
+        "revision": { "$ref": "#/$defs/commit" },
+        "artifactId": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "integrationResult": {
+      "type": "object",
+      "required": ["revision", "branch", "workspace", "commits", "status", "tests", "reviews"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/commit" },
+        "branch": { "$ref": "#/$defs/nonempty" },
+        "workspace": { "$ref": "#/$defs/nonempty" },
+        "commits": { "type": "array", "items": { "$ref": "#/$defs/commit" } },
+        "status": { "enum": ["unverified", "conflict", "verified"] },
+        "tests": { "type": "array", "items": { "$ref": "#/$defs/testEvidence" } },
+        "reviews": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["runId", "revision", "findingIds"],
+            "properties": {
+              "runId": { "$ref": "#/$defs/nonempty" },
+              "revision": { "$ref": "#/$defs/commit" },
+              "findingIds": { "$ref": "#/$defs/stringList" }
+            }
+          }
+        }
+      }
+    },
+    "coordinatorCheckpoint": {
+      "type": "object",
+      "required": ["sessionId", "sequence", "data"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "data": { "type": "object" }
+      }
+    },
+    "decisionInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan": { "type": "string" },
+        "questions": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["question"],
+            "properties": {
+              "question": { "$ref": "#/$defs/nonempty" },
+              "header": { "type": "string" },
+              "multiSelect": { "type": "boolean" },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["label", "description"],
+                  "properties": {
+                    "label": { "type": "string" },
+                    "description": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "decisionValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "authority": { "enum": ["implementation_detail", "needs_user"] },
+        "reason": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "answers": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "operationAuthorization": {
+      "type": "object",
+      "required": ["workflowId", "runId", "tool", "input"],
+      "properties": {
+        "workflowId": { "$ref": "#/$defs/nonempty" },
+        "runId": { "$ref": "#/$defs/nonempty" },
+        "tool": { "$ref": "#/$defs/nonempty" },
+        "input": { "type": "object" }
+      }
+    },
+    "nonempty": { "type": "string", "minLength": 1 },
+    "sessionIdentity": {
+      "type": "object",
+      "required": ["sessionId"],
+      "properties": { "sessionId": { "$ref": "#/$defs/nonempty" } }
+    },
+    "taskIdentity": {
+      "type": "object",
+      "required": ["taskId"],
+      "properties": { "taskId": { "$ref": "#/$defs/nonempty" } }
+    },
+    "accepted": {
+      "type": "object",
+      "required": ["accepted"],
+      "properties": { "accepted": { "const": true } }
+    },
+    "ack": {
+      "type": "object",
+      "required": ["operationId", "ok"],
+      "properties": {
+        "operationId": { "$ref": "#/$defs/nonempty" },
+        "ok": { "type": "boolean" },
+        "value": {},
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "voiceStart": {
+      "type": "object",
+      "required": ["sessionId", "taskId", "cwd", "mimeType"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "cwd": { "$ref": "#/$defs/nonempty" },
+        "mimeType": { "$ref": "#/$defs/nonempty" },
+        "sampleRateHz": { "type": "integer", "minimum": 1 },
+        "action": { "enum": ["prompt", "steer", "follow_up"] }
+      }
+    },
+    "textSubmit": {
+      "type": "object",
+      "required": ["sessionId", "taskId", "cwd", "text"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "cwd": { "$ref": "#/$defs/nonempty" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 64000, "pattern": "\\S" },
+        "action": { "enum": ["prompt", "steer", "follow_up"] }
+      }
+    },
+    "audioAppend": {
+      "type": "object",
+      "required": ["sequence", "audioBase64"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "audioBase64": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "required": ["text"],
+      "properties": { "text": { "type": "string", "maxLength": 64000 } }
+    },
+    "runIdentity": {
+      "type": "object",
+      "required": ["sessionId", "workflowId", "runId"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "workflowId": { "$ref": "#/$defs/nonempty" },
+        "runId": { "$ref": "#/$defs/nonempty" }
+      }
+    },
+    "runInstruction": {
+      "type": "object",
+      "required": ["sessionId", "workflowId", "runId", "text"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "workflowId": { "$ref": "#/$defs/nonempty" },
+        "runId": { "$ref": "#/$defs/nonempty" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 8000, "pattern": "\\S" }
+      }
+    },
+    "errorPayload": {
+      "type": "object",
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "$ref": "#/$defs/nonempty" },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "details": {}
+      }
+    },
+    "timing": {
+      "type": "object",
+      "required": ["durationMs"],
+      "properties": {
+        "stage": { "type": "string" },
+        "durationMs": { "type": "number", "minimum": 0 }
+      }
+    },
+    "browserObservation": {
+      "type": "object",
+      "required": ["pageId", "url", "title", "version", "status", "elements"],
+      "properties": {
+        "pageId": { "$ref": "#/$defs/nonempty" },
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["ready", "needs_user", "failed"] },
+        "reason": { "type": "string" },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ref", "role", "name"],
+            "properties": {
+              "ref": { "type": "string" },
+              "role": { "type": "string" },
+              "name": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "researchReport": {
+      "type": "object",
+      "required": ["taskId", "summary", "claims", "limitations"],
+      "properties": {
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "summary": { "type": "string" },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["text", "citations"],
+            "properties": {
+              "text": { "type": "string" },
+              "citations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["sourceId", "quoteId"],
+                  "properties": {
+                    "sourceId": { "$ref": "#/$defs/nonempty" },
+                    "quoteId": { "$ref": "#/$defs/nonempty" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "researchSource": {
+      "type": "object",
+      "required": [
+        "sourceId",
+        "taskId",
+        "originalUrl",
+        "finalUrl",
+        "title",
+        "collectedAtMs",
+        "status",
+        "quotes"
+      ],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonempty" },
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "originalUrl": { "$ref": "#/$defs/nonempty" },
+        "finalUrl": { "$ref": "#/$defs/nonempty" },
+        "title": { "$ref": "#/$defs/nonempty" },
+        "collectedAtMs": { "type": "integer" },
+        "status": { "enum": ["collected", "needs_user", "failed"] },
+        "reason": { "type": "string" },
+        "artifactId": { "type": "string" },
+        "digest": { "type": "string" },
+        "excerpt": { "type": "string" },
+        "text": { "type": "string", "maxLength": 1000000 },
+        "quotes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["quoteId", "start", "end", "text"],
+            "properties": {
+              "quoteId": { "$ref": "#/$defs/nonempty" },
+              "start": { "type": "integer", "minimum": 0 },
+              "end": { "type": "integer", "minimum": 1 },
+              "text": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "policyRequest": {
+      "type": "object",
+      "required": ["taskId", "toolName", "riskLevel", "inputJson"],
+      "properties": {
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "toolName": { "$ref": "#/$defs/nonempty" },
+        "riskLevel": { "$ref": "#/$defs/toolRiskLevel" },
+        "inputJson": { "type": "string" },
+        "sessionId": { "type": "string" }
+      }
+    },
+    "toolReceipt": {
+      "type": "object",
+      "required": [
+        "attemptId",
+        "taskId",
+        "toolName",
+        "idempotencyKey",
+        "attemptNumber",
+        "status",
+        "riskLevel",
+        "inputSummary",
+        "inputDigest",
+        "policyDecision",
+        "startedAtMs",
+        "artifacts"
+      ],
+      "properties": {
+        "attemptId": { "$ref": "#/$defs/nonempty" },
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "toolName": { "$ref": "#/$defs/nonempty" },
+        "idempotencyKey": { "$ref": "#/$defs/nonempty" },
+        "attemptNumber": { "type": "integer", "minimum": 1 },
+        "status": { "$ref": "#/$defs/toolAttemptStatus" },
+        "riskLevel": { "$ref": "#/$defs/toolRiskLevel" },
+        "inputSummary": { "type": "string" },
+        "inputDigest": { "$ref": "#/$defs/nonempty" },
+        "policyDecision": { "$ref": "#/$defs/policyDecision" },
+        "startedAtMs": { "type": "integer" },
+        "finishedAtMs": { "type": "integer" },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "resultType": { "$ref": "#/$defs/resultType" },
+        "verification": { "type": "object" },
+        "artifacts": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "taskId": {
       "type": "string",
       "pattern": "^task_[A-Za-z0-9_-]+$",
@@ -71,15 +1210,7 @@
     },
     "voiceState": {
       "type": "string",
-      "enum": [
-        "idle",
-        "listening",
-        "transcribing",
-        "thinking",
-        "speaking",
-        "interrupted",
-        "error"
-      ],
+      "enum": ["idle", "listening", "transcribing", "thinking", "speaking", "interrupted", "error"],
       "x-semi-os-type": "VoiceState"
     },
     "toolRiskLevel": {

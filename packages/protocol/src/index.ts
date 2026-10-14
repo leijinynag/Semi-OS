@@ -3,6 +3,8 @@ export const protocolPackageName = "@semi-os/protocol";
 export * from "./envelope.ts";
 export * from "./voice.ts";
 export * from "./research.ts";
+export * from "./workflow.ts";
+export * from "./message-registry.ts";
 export type {
   CapabilityStatus,
   ResultType,

@@ -1,8 +1,9 @@
 # Semi-OS MVP 开发任务清单
 
-> 当前状态：架构基线已完成，业务实现尚未开始。
+> 当前状态：4A 已提交并推送；4B 及后台托管优化已实现，真实 Pi 自主合成闭环通过；完整原生与故障联调待验收。所有 4B 改动保留未提交。
 >
-> 使用规则：完成一个完整的功能切片，验证通过后立即更新本文件，再创建对应提交。
+> 使用规则：完成一个功能切片并验证后更新本文件，保留未提交改动供 review；
+> 只有用户明确批准后才创建提交或 push。
 > 不要因为代码已经存在就直接标记完成。
 
 ## 使用说明
@@ -405,7 +406,7 @@
 本次重新运行 `pnpm run check`、`pnpm run format` 与 `git diff --check` 均通过。
 交付 Commit：`b2ab28e`，覆盖 P4A.1–P4A.10 及下面已完成的相关语音、
 文字对话、客户端和 Session 切片。下文原“未提交”说明保留作历史记录，
-其当前提交状态统一以本条为准。4B 尚未开始实现。
+其当前提交状态统一以本条为准。4B 当前状态见对应阶段记录。
 详细证据、延迟和手动验收边界见 `docs/4A-VALIDATION.md`。
 
 - [x] **P4A.1 添加 Playwright 服务边界**
@@ -763,34 +764,152 @@
     截图接口超时，未获得截图。原生完整链路仍需重启客户端手工验收。
   - Commit 点：`feat(session): add naming and context actions`；未提交，等待 review。
 
-## 阶段 4B：Coding Agent 工作流
+## 阶段 4B：用户主导的多 Agent 协作工作流
 
 依赖：P2.4 至 P2.12、P3.7 至 P3.10。
 
-- [ ] **P4B.1 定义 `CodingAgentProvider`**
-  - 定义仓库、目标、约束、启动、观察、Steer、暂停、取消、恢复和结果收集契约。
-  - Commit 点：`feat(coding): define provider contract`
-- [ ] **P4B.2 实现通用 PTY 类终端层**
-  - 负责进程生命周期、stdin、stdout/stderr 流式输出、终端尺寸、退出、取消和有界输出缓冲。
-  - Commit 点：`feat(coding): add pty terminal adapter`
-- [ ] **P4B.3 添加 Provider 启动配置**
-  - 为 Pi、Claude Code 和 Codex 添加可配置的启动 Profile，不在 TaskRun 模型中写死三者差异。
-  - Commit 点：`feat(coding): add local agent launch profiles`
-- [ ] **P4B.4 统一输出与里程碑**
-  - 将终端输出归一化为进度里程碑、交互提示、变更文件摘要、警告和完成信号。
-  - Commit 点：`feat(coding): normalize agent progress`
-- [ ] **P4B.5 添加 Coding Agent 工具**
-  - 通过 Tool Registry 暴露启动、观察、Steer、暂停和取消操作。
-  - Commit 点：`feat(coding): expose coding agent tools`
-- [ ] **P4B.6 添加仓库结果验证**
-  - 收集仓库身份、Diff、变更文件、诊断、测试输出和子 Agent 退出状态作为证据。
-  - Commit 点：`feat(coding): verify delegated work`
-- [ ] **P4B.7 添加重启与中断恢复**
-  - 保留子 Agent 回执，避免重复已完成工作，并明确表达不确定的进程结果。
-  - Commit 点：`feat(coding): recover interrupted agent tasks`
-- [ ] **P4B.8 Coding Agent 验收**
-  - 使用本地 Coding Agent 完成一次合成仓库需求，中途 Steer 一次，检查进度并验证最终 Diff 和测试结果。
-  - Commit 点：`test(coding): verify delegated coding workflow`
+- [x] **P4B.1 协作契约、任务 DAG 与计划批准**
+  - [x] 定义 WorkflowPlan、WorkItem、AgentRun、ReviewFinding、IntegrationResult，角色与 Provider 分离。
+  - [x] 跨进程运行时校验；拒绝环、重复身份、未知依赖及越界工作区。
+  - [x] Host 保存不可变计划版本、批准记录、快照和追加事件。
+  - [x] 批准绑定当前版本、内容摘要、意图代际；批准前实施禁止、Worker 无批准入口。
+  - [x] 真实用户批准/拒绝/要求修改入口；过期批准与重复请求测试。
+  - 证据：TS/Rust `workflow` 契约、storage `0005–0007` 迁移与批准测试；
+    `WorkflowPanel` 经 Tauri IPC 发出精确版本请求。`pnpm check` 通过。
+  - Commit 点：`feat(workflow): add versioned plans and approval gate`
+- [x] **P4B.2 公共进程层、并发与 worktree**
+  - [x] 管道与 PTY 生命周期、LF 分帧、有界输出、进程树取消。
+  - [x] 最多两个子 Agent，依赖就绪才运行，同仓库写入工作区独占。
+  - [x] 仓库身份/基线/codex 分支/归属；脏仓库 needs_user 与显式基线。
+  - [x] 依赖成果版本、只读隔离、非 Git 并行写拒绝及安全清理测试。
+  - 证据：`collaboration/process.ts`、`service.ts`、`workspaces.ts` 与对应测试。
+    合成 Git 仓库验证源分支不变、冲突保留、重启归属及历史改写拒绝；`pnpm check` 通过。
+  - Commit 点：`feat(coding): add process scheduler and isolated workspaces`
+- [x] **P4B.3 独立 Provider 接入**
+  - [x] Pi CLI RPC：启动、观察、steer、清队列取消、恢复及权限拦截。
+  - [x] Claude 结构化流：本地认证、增量输出、控制与权限请求。
+  - [x] Codex app-server：线程/轮次、批准、追加指令、取消与恢复。
+  - [x] 统一实际能力；不支持的暂停/恢复/权限拦截明确拒绝，不用跳过权限选项。
+  - [x] 确定性异常流及已认证 CLI 冒烟，单独记录认证缺口。
+  - 证据：三个 `*-provider.ts`、`providers.test.ts`；Pi/Claude/Codex 合成文件
+    只读及写入冒烟通过，写入均观察到权限请求。Claude 不提供轮中 steer；
+    所有 Provider 不声称原地暂停。恢复为显式新尝试，未完成的实测边界见验收文档。
+  - Commit 点：三个 Provider 各自 `feat(coding): add <provider> adapter`
+- [x] **P4B.4 结构化进度、监督队列与持久化**
+  - [x] 阶段、工具活动、阻塞、权限、完成及异常标准事件。
+  - [x] Host SQLite 持久化队列/执行回执；先保存再发布 UI。
+  - [x] 主 Pi 边界消费、用户指令优先、不轮询模型、不自动重启子任务。
+  - [x] 对话结束不强制研究报告，不取消后台协作。
+  - 证据：storage 监督游标、Worker 串行消费与用户抢占测试。
+    无活动健康检查产生持久化事件，并在主 Pi 可处理边界通知一次，不自动重启；
+    只读成果要求干净且基线不变。Claude 失败仅显示脱敏类别，不泄露原始错误。
+    `pnpm check` 覆盖语音/文字、研究与 Session 回归。
+  - Commit 点：`feat(workflow): persist execution and supervision events`
+- [x] **P4B.5 协作工具、Skill 与可视化**
+  - [x] 官方 Tool Registry 注册提案/调整图/派单/观察/控制；内置协作 Skill。
+  - [x] 卡片摘要/活跃工位，全高抽屉任务依赖/时间线/成果详情。
+  - [x] 批准、修改、拒绝、暂停、恢复、取消及阻塞回答真实入口。
+  - [x] UI 不解析推理、不造百分比；简单任务不强制流水线。
+  - 证据：`workflow-tools.ts`、内置 collaboration Skill、`WorkflowPanel.tsx`；
+    快照合并测试拒绝迟到版本。浏览器 IPC Fixture 的按钮和布局记录见验收文档，
+    不等同于原生完整链路验收。`pnpm check` 通过。
+  - Commit 点：`feat(workflow): add orchestration tools and workstations`
+- [x] **P4B.6 交付、整合与版本绑定验证**
+  - [x] 已批准授权才保存本地交付提交；收集 diff/文件/测试/诊断。
+  - [x] 独立整合 worktree 按依赖串行 cherry-pick；冲突/失败保留。
+  - [x] 整合测试及独立审查绑定版本，后续修改使证据失效。
+  - [x] 三轮返工问题转 needs_user；禁止自动修改用户当前分支。
+  - [x] 客户端“应用到当前分支”独立确认入口及干净/基线检查。
+  - 证据：真实 Git/测试运行器闭环及 Rust 证据校验通过；缺 Artifact、自审、
+    过期版本不能设为 verified。客户端预览源仓库/ref/HEAD 和整合版本后独立确认；
+    Host 单次令牌绑定全部身份，仅允许干净源分支 fast-forward，不 push。
+    执行失败或重启中断标为 unknown，用户核对后废止旧令牌，禁止盲目重试。
+    Git 测试覆盖脏目录、变化基线、分支切换、分叉拒绝与成功应用；
+    浏览器 IPC Fixture 验证确认载荷，原生实测仍归 P4B.8。`pnpm check` 通过。
+  - Commit 点：`feat(workflow): integrate deliverables with revision evidence`
+- [x] **P4B.7 用户改意图、中断与重启恢复**
+  - [x] 停止受影响新操作、协调在途操作、保留旧成果及历史尝试。
+  - [x] 实质变化重新批准，旧事件不污染新代际；范围内重分工留痕。
+  - [x] Session 切换/停止播报不取消协作；Provider 会话恢复及 unknown 对账。
+  - [x] 重启不盲重复、脏/未整合/状态不明 worktree 保留。
+  - 证据：Worker 抢占/监督失败游标、storage 恢复/新意图证据历史、
+    worktree 归属及续接基线检查通过。后台优化后，重启只续排 Host 证明未启动、
+    无工作区的任务；已发送启动请求及 unknown 由用户核对，保留现场再显式续接。
+    暂停/取消/待重批不得自动恢复。活跃工作流阻止删除 Session，避免失去控制入口。
+  - Commit 点：`feat(workflow): reconcile interruptions and intent changes`
+- [-] **P4B.8 多 Agent 闭环验收**
+  - [x] Fixture 覆盖批准前只读、过期/拒绝、循环依赖、并发和异常进程。
+  - [x] 合成 Git 仓库验证规划、并行实施、整合、测试和独立审查；
+        Rust 测试补充计划修订、返工上限及版本证据。
+  - [-] 真 CLI 认证/读取/写入权限冒烟通过；完整主 Pi + Rust Host +
+    两种真实子 Provider、轮中追加指令与后台对话原生联调尚待验收。
+    真实 Rust Host/SQLite + Pi/Claude 合成协作本次完整通过：
+    5 次尝试、18 次权限请求，独立 worktree 并行、串行整合、
+    `node check.mjs` 退出 0、独立审查与版本证据持久化成功，源仓库不变。
+    Claude 恢复为 `2.1.261` 后临时关闭进程自动更新，认证未变。
+    测试桥驱动批准及流程，不声称主 Pi 自主编排与原生客户端验收通过。
+    Codex 写入复测通过；后续后台优化已补 Host 只读命令/真实路径分类及回归，
+    未知 shell 仍须用户。真实 Codex 产品层原生规划/审查仍待验收，
+    独立 Provider 冒烟不能代替产品层验证。
+  - [x] 回归资料调研、语音、文字对话、Session；`pnpm check`、Rust fmt 通过。
+        本次全套 215 个测试通过；真实云端合成语音调研采集 2 个网站、
+        保存 2 份正文 Artifact，保留 3 条失败来源，生成 9 句 PCM 且无语音错误。
+        后端单次耗时 59.358 秒，不代表真人录音及实际扬声器出声验收。
+  - [x] 更新 `docs/4B-VALIDATION.md`，区分自动测试/真实 CLI/原生手测。
+  - 所有 4B 改动未提交，等待 review。4A 已提交并 push：`b2ab28e`，
+    任务交付记录 `923af22`。本次不再提交或 push。
+  - Commit 点：`test(workflow): verify user-led multi-agent collaboration`
+
+### 2026-10-11：4B 后台托管优化
+
+以下五块可独立 review；实现和确定性验证与原生验收分别标记，不将所有场景合并为“通过”。
+
+- [x] **P4B.O1 权限分类、监督唤醒与执行阶段**
+  - Host 解析受控只读 shell 与真实路径；拒绝越界、未知命令和危险 Git 选项。
+  - macOS 受限测试运行器禁网、去除密钥、限制工作区/临时目录写入；不宣称 Provider 全局沙箱。
+  - 保存 `not_started/start_requested/executing/saved`；安全通信按 2/10/30 秒重试，模型/工具不重放。
+  - 精确工作流通知直接进入持久领取，不让 Session 查询失败吞掉终态唤醒。
+  - 证据：`workflow_policy.rs`、`test-runner.test.ts`、`coordinator.test.ts`、
+    `worker-service.test.ts`、storage 恢复测试；真实 macOS 越界读写/网络拒绝测试通过。
+  - Commit 点：`fix(workflow): classify permissions and retain background wakeups`
+- [x] **P4B.O2 托管授权与结构化子 Agent 决策**
+  - 真人批准保存 grant，绑定计划/意图/仓库/动作；实际操作复核工作项及工作区。
+  - 子计划/澄清请求持久化，代理和真人答案分别记录；新目标/偏好/权限转用户。
+  - Claude `AskUserQuestion` 真实 CLI 回调通过；不模拟键盘、不使用跳过权限模式。
+  - `ExitPlanMode` 未验证，保留“计划产出 → 主 Pi 审查 → 明确实施工作项”兼容流程。
+  - 证据：`0008/0009` 迁移、Host/storage 决策测试、`smoke-claude-decision.ts`；
+    实测 1 次结构化问答，无键盘批准。Claude 子进程保持关闭自动更新，不改 CLI 安装。
+  - Commit 点：`feat(workflow): add delegated grants and provider decisions`
+- [x] **P4B.O3 独立后台 Pi、持久事件及启动对账**
+  - 每工作流独立 Pi 会话/应用数据 cwd，仅所属协作工具；无事件不调用模型、不接语音。
+  - Host 独占领取者、90 秒租约、25 秒续租、检查点与事件回执；重复通知不重复派单。
+  - 三轮无实质进展由持久事件校验，不能用 Worker 声称进展绕过；未知结果等待核对。
+  - 重启只恢复可证明未启动队列；在途及脏现场保留，暂停/取消/待重批不自启。
+  - 证据：`coordinator.ts`、`workflow_background.rs`、storage 无进展/互斥/恢复测试；
+    `smoke-background.ts` 通过真实 Pi SDK、Rust Host/SQLite、Pi/Claude CLI。
+  - Commit 点：`feat(workflow): persist independent Pi coordinators`
+- [x] **P4B.O4 查询、用户优先入口、进度与托盘提示**
+  - 跨 Session 按名称/仓库/批准或执行状态找任务；通知以精确 ID 打开任务。
+  - UI 修改要求先经 Host 撤销旧授权再停止执行；普通聊天不抢占后台。
+  - 卡片/抽屉增加最后活动、阻塞原因、真实问答及核对后继续入口。
+  - 完成/待用户处理发布去重客户端通知与托盘提示；后台不播报，尚未接系统通知中心。
+  - 证据：`WorkflowPanel.tsx`、`workflow-model.test.ts`、Tauri 通知和用户命令；
+    跨批准/执行状态查询、前台不打断后台自动测试通过。原生窗口生命周期见 O5。
+  - Commit 点：`feat(workflow): expose background progress and priority controls`
+- [-] **P4B.O5 自主闭环与故障验收**
+  - [x] 真实后台 Pi 自主闭环：总计划预先定义、真人批准一次；11 个事件轮次、
+        4 次执行尝试、并行独立 worktree、整合、真实测试、独立审查及 verified 持久化。
+        测试脚本不代替 Pi 选择推进步骤，源仓库未变。
+  - [x] 确定性回归覆盖通信重试/无进展、重复领取/回执、未知执行、暂停/取消、
+        越界权限、过期授权、版本失效与既有语音/调研/文字/Session。
+  - [x] 同步 `AGENTS.md`、架构/决策和 `docs/4B-VALIDATION.md`；
+        最终检查命令及数量以验收文档为准。
+  - [-] 原生关闭窗口/显式退出、真实聊天并行/跨 Session、Worker 崩溃与断网、
+    权限等待中恢复及真正自主返工仍待专项体验验收。
+    当前真实冒烟不证明 Pi 动态创建初始任务图或真实子计划审批。
+  - Commit 点：`test(workflow): validate autonomous background collaboration`
+
+本轮不 commit、不 push。自动通过不能代替上面明确保留的原生/故障验收。
 
 ## 阶段 4C：原生桌面与 Lark 工作流
 
@@ -890,8 +1009,10 @@
 - [ ] **P7.5 添加跨平台构建检查**
   - 保持 macOS 原生控制能力受平台保护，同时确保桌面壳和 Provider 抽象在支持的平台上正常构建。
   - Commit 点：`ci(build): add platform build checks`
-- [ ] **P7.6 添加 CI**
+- [x] **P7.6 添加 CI**
   - 运行格式化、Lint、TypeScript 检查、Rust 检查、单元测试、契约测试和确定性集成 Fixture。
+  - 已配置 macOS GitHub Actions 执行 `pnpm check`；本地门禁已验证。
+    未 push，本轮不宣称托管 Actions 已运行成功。
   - Commit 点：`ci(repo): add continuous integration`
 - [ ] **P7.7 添加发布打包配置**
   - 配置应用元数据、签名/更新器占位、权限说明、Provider 设置和首次启动能力检查。
@@ -899,6 +1020,105 @@
 - [ ] **P7.8 MVP 发布门禁**
   - 端到端运行三类验收工作流，记录证据，并在本文件中更新发布 commit 和已知限制。
   - Commit 点：`chore(release): close MVP gate`
+
+## 阶段 8：架构加固与质量基线
+
+依赖：阶段 1 至阶段 4B；不提前实现 P4C、P5 或 MCP。
+
+- [x] **P8.1 建立质量基线与 CI**
+  - 已添加 ESLint Flat Config、Prettier 配置、独立质量命令和 GitHub
+    Actions；历史文件通过 `.prettier-baseline` 保持最小 diff。
+  - workspace 预检逐个验证必需脚本并提供明确诊断；精确内容 baseline
+    仅豁免未修改历史文件。托管干净环境的 Actions 运行仍待 push 后验证。
+  - 证据：`eslint.config.mjs`、`.prettierrc.json`、`scripts/check-format.mjs`、
+    `.github/workflows/quality.yml`、`package.json`。
+  - 当前验证：`pnpm run lint:js`、`pnpm run format:check`、
+    `pnpm run typecheck`、`pnpm run test:js`、Rust 检查和
+    `git diff --check`。
+- [x] **P8.2 类型化现有协议 Payload**
+  - [x] 建立 Host/Worker 外部消息注册表，覆盖 voice、research、workflow、
+        browser、health、lifecycle 及跨运行时契约 Fixture；Pi Runtime 内部事件不
+        进入外部注册表。
+  - [x] `assertValidEnvelope` 和 Rust `validate_envelope` 按 direction/kind
+        拒绝未知消息、错误 payload 形状和不支持协议版本；领域模块继续负责字段、
+        长度、状态与 DAG 的深层校验。
+  - [x] Schema 包含现有 kind 的字段级 payload；生成 TS 判别联合、
+        Rust DTO 和校验 schema，生成一致性进入质量门禁。
+  - [x] `worker-service.ts` 迁移为类型化 switch，默认分支进行穷尽检查；
+        跨运行时共享 Fixture 验证未知 kind、畸形字段和未来版本拒绝。
+  - 证据：`packages/protocol/src/message-registry.ts`、`envelope.ts`、
+    `schemas/protocol.schema.json`、`crates/protocol/src/lib.rs`；
+    `packages/protocol` 与 `semi-os-protocol` 的未知 kind/错误 payload 测试。
+- [x] **P8.3 渐进拆分 Host 路由与统一错误边界**
+  - [x] 新增 `HostError` 与稳定的 UI 安全错误映射，保留旧 Tauri/Worker 入口的
+        `String` 兼容层。
+  - [x] 抽取可脱离 WebView、Worker 和 SQLite 的生命周期路由命令与状态转换测试。
+  - [x] 抽取 voice 事件核心路由：校验 `requestId`、`sessionId`、`taskId` 和
+        payload 后再替换会话快照；旧事件、非 voice 事件和迟到 `idle` 不污染当前状态。
+  - [x] 抽取 research 事件分类核心：Tauri 入口不再自行判断事件身份、策略确认、
+        终态和持久化操作的类别。
+  - [x] research/workflow 的 Storage 与 Worker 回执副作用移出入口；
+        Host 核心脱离 WebView 测试，桌面 `router/` 处理 UI 投递与组装。
+  - 当前证据：`crates/host/src/error.rs`、`crates/host/src/lifecycle.rs`、
+    `crates/host/src/voice.rs`、`crates/host/src/research_router.rs`；
+    `cargo test -p semi-os-host`、`cargo check -p semi-os-desktop`。
+- [x] **P8.4 收敛 Storage/Policy DTO 边界**
+  - 对外查询接口使用明确 DTO；数据库内部仍可使用 JSON 兼容历史字段，
+    不修改已执行 migration。
+  - [x] 工作流快照、后台协调、计划授权、决策输入、通知与查询结果已使用
+        `WorkflowSnapshotDto` 等明确 DTO；原始 JSON 查询限制为 crate 内部。
+  - [x] Tauri 查询、通知、Ready 恢复、运行核对与 Policy 授权均先解码 DTO，
+        不再把任意快照 JSON 直接发送到 WebView 或索引为业务状态。
+  - [x] 覆盖结构化问题输入、Claude `multiSelect`、脏事件、权限撤销和损坏
+        快照测试；通过 `cargo test -p semi-os-storage`、`cargo test -p semi-os-host`
+        与 `cargo check -p semi-os-desktop`。
+  - [x] 抽出 `workflow_queries.rs`、`workflow_dto.rs` 和
+        `workflow_tests.rs`；状态变更、查询投影与测试不再集中在同一文件，
+        Host 不再直接调用原始 JSON 查询。
+  - [x] 快照类 Worker 回执在发送成功 ACK 前校验 DTO；Ready 恢复查询跨
+        Session 全量校验，损坏记录明确报错，不静默丢弃。增加正常/损坏快照
+        ACK 与跨 Session 恢复测试。
+  - [x] 写入快照接口、协调领取/检查点和代理决策回执已迁移为明确 DTO；
+        Host/IPC 保持既有 JSON wire shape，损坏 checkpoint 在取得租约前拒绝，
+        领取事件序列和 decision receipt 均有结构化解码测试。
+  - [x] 决策注册、代理决策和真人回答的公开写入入参使用
+        `WorkflowDecisionInput` / `WorkflowDecisionValue`；决策 kind 和部分
+        领域状态仍由业务层校验，未宣称全部状态已枚举化。
+  - [x] Host 工作流操作解码为显式 DTO 与 enum 分派，拒绝未知 operation、
+        缺字段、类型错误和额外操作字段；默认筛选只接受省略字段。
+        兼容后台入口仍只处理所属操作，计划落盘不再重复 JSON 编解码。
+        证据：`crates/host/src/workflow.rs` 和 `workflow_policy.rs`，
+        畸形入参不变更快照、旧 wire shape 和后台入口兼容性回归测试。
+  - 边界已收敛；Storage 内部历史 JSON 状态机与部分领域状态字符串
+    保留兼容，不扩大为全量重写。RPC receipt 与未知副作用对账属于 P8.5。
+  - 前一切片验证：`pnpm lint`、`pnpm format:check`、`pnpm typecheck`、
+    `pnpm test`、`pnpm build`、`cargo check --workspace`、
+    `cargo fmt --all -- --check` 和 `git diff --check` 均通过；
+    Rust Storage 22、恢复 10、Host 35 项测试通过。本轮未提交、未 push，
+    保留独立 review 点。
+  - 本轮操作 DTO 切片验证：完整 `pnpm check` 通过，包含协议生成一致性、
+    格式、类型、ESLint、Clippy、JS/Rust 测试与构建及 diff 检查；
+    定向 `cargo test -p semi-os-host -p semi-os-storage` 通过，
+    Host 43、Storage 24、恢复 10 项测试全部通过。未提交、未 push。
+- [x] **P8.5 增加 RPC requestId 幂等与未知结果对账**
+  - 在 Host/RPC 边界保存 request receipt、payload digest 和 reconciliation
+    状态，禁止对未知副作用盲目重放。
+  - inbound 持久变更回放已保存结果，digest 冲突拒绝；实时授权和租约
+    重新校验。outbound `0011` 保存未发送/排队/发送中/已确认/待对账状态，
+    首个字节前落盘，ACK 不等于业务完成，未知发送禁止重放。
+  - 对账要求 Host 证据；不保存请求原文、凭证或实时语音，重启丢弃旧语音请求。
+- [x] **P8.6 补齐跨边界契约与恢复测试**
+  - 覆盖 malformed payload、重复 requestId、Worker 重启、迟到事件、
+    重复工作流事件和 unknown side effect 对账。
+  - 真实 Node 管道 Fixture 覆盖重复请求、崩溃重启不重放、ACK 配对；
+    部分写入验证发送前落盘，失败入队可恢复，实时语音不落盘。
+  - 定向 Rust 验证：Host 49、Storage 28、恢复 10 项测试通过。
+    既有事件去重、旧轮次隔离、dirty worktree 与授权回归保留；
+    云端、原生真人和托管 CI 验收不以 Fixture 通过替代。
+  - 最终质量验证：完整 `pnpm check` 通过，覆盖 workspace 命令检查、
+    协议生成一致性、Prettier/Rust fmt、TypeScript、ESLint、Clippy、
+    JS/Rust 测试、JS/Rust 构建和 `git diff --check`。
+    前端构建仍有大 chunk 提示，不影响本轮门禁通过；本轮未提交、未 push。
 
 ## MVP 之后暂缓
 

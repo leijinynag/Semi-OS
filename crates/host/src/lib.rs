@@ -5,14 +5,25 @@
 
 pub mod conversation;
 mod diagnostics;
+mod error;
 mod lifecycle;
+mod outbound_rpc;
 pub mod research;
+pub mod research_router;
+pub mod rpc;
 mod supervisor;
 mod task;
 mod tool_execution;
+pub mod voice;
+pub mod workflow;
+pub mod workflow_command;
+pub mod workflow_policy;
 
 pub use diagnostics::{DiagnosticRecord, DiagnosticStore};
-pub use lifecycle::{HostLifecycle, HostLifecycleSnapshot, HostPhase};
+pub use error::{HostError, HostResult};
+pub use lifecycle::{
+    route_lifecycle, HostLifecycle, HostLifecycleSnapshot, HostPhase, LifecycleCommand,
+};
 pub use supervisor::{
     RestartPolicy, WorkerCommand, WorkerEvent, WorkerEventHandler, WorkerMessageHandler,
     WorkerSupervisor, WorkerSupervisorHandle,
@@ -22,4 +33,8 @@ pub use task::{
 };
 pub use tool_execution::{
     decide_execution, save_execution_receipt, ToolExecutionDecision, ToolExecutionError,
+};
+pub use workflow_command::{
+    WorkflowControlAction, WorkflowControlRequest, WorkflowQuestionAnswerRequest,
+    WorkflowRequirementChangeRequest, WorkflowUserDecision, WorkflowUserDecisionRequest,
 };

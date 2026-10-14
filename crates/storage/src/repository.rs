@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::{path::Path, time::Duration};
 
 pub struct Storage {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 /// 客户端 Session 独立于单轮 request/task；空会话也必须可在重启后恢复。
@@ -70,6 +70,7 @@ impl Storage {
 
     /// 仅删除聊天归档；独立任务回执/证据仍保留，不将会话管理变成证据清理接口。
     pub fn delete_client_session(&mut self, id: &str) -> StorageResult<()> {
+        self.ensure_session_has_no_live_workflow(id)?;
         let transaction = self.connection.transaction()?;
         let active: bool = transaction
             .query_row(
@@ -99,6 +100,9 @@ impl Storage {
         id: &str,
         deleting: Option<&str>,
     ) -> StorageResult<()> {
+        if let Some(deleting) = deleting {
+            self.ensure_session_has_no_live_workflow(deleting)?;
+        }
         let transaction = self.connection.transaction()?;
         let exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM client_sessions WHERE session_id=?1)",
@@ -137,6 +141,20 @@ impl Storage {
             )?;
         }
         transaction.commit()?;
+        Ok(())
+    }
+
+    /// 先结束或取消协作再删除 Session，避免后台工作失去用户监督与授权入口。
+    fn ensure_session_has_no_live_workflow(&self, session: &str) -> StorageResult<()> {
+        if self
+            .load_workflows_dto(session)?
+            .iter()
+            .any(|workflow| !matches!(workflow.status.as_str(), "cancelled" | "rejected"))
+        {
+            return Err(StorageError::InvalidWorkflow(
+                "请先取消此会话的协作工作流再删除会话".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -547,6 +565,15 @@ impl Storage {
 
     /// 根据幂等键决定恢复动作，避免 Worker 重启后重复执行已完成的副作用。
     ///
+    pub fn load_task_attempts(&self, task_id: &str) -> StorageResult<Vec<ToolAttempt>> {
+        let mut statement = self.connection.prepare(&format!(
+            "{} WHERE task_id=?1 ORDER BY started_at_ms,attempt_id",
+            TOOL_ATTEMPT_SELECT
+        ))?;
+        let rows = statement.query_map([task_id], tool_attempt_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// `started`、`unknown`、`needs_user` 没有确定终态，不能直接重试；上层必须
     /// 先通过工具专属读回或远端查询完成对账。明确失败或取消的尝试已经结束，
     /// 可以由上层策略决定是否创建下一次尝试。

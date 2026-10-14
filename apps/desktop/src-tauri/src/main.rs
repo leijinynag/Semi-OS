@@ -1,12 +1,13 @@
 use semi_os_host::conversation::Conversation;
 use semi_os_host::{
-    DiagnosticRecord, DiagnosticStore, HostLifecycle, HostLifecycleSnapshot, RestartPolicy,
-    WorkerCommand, WorkerEvent, WorkerSupervisor, WorkerSupervisorHandle,
+    route_lifecycle, DiagnosticRecord, DiagnosticStore, HostLifecycle, HostLifecycleSnapshot,
+    LifecycleCommand, RestartPolicy, WorkerCommand, WorkerEvent, WorkerSupervisor,
+    WorkerSupervisorHandle, WorkflowControlAction, WorkflowControlRequest,
+    WorkflowQuestionAnswerRequest, WorkflowRequirementChangeRequest, WorkflowUserDecision,
+    WorkflowUserDecisionRequest,
 };
-use semi_os_protocol::{
-    validate_envelope, Envelope, EnvelopeContext, RequestId, ToolExecutionReceipt,
-};
-use semi_os_storage::{ClientSession, Storage};
+use semi_os_protocol::{validate_envelope, Envelope, EnvelopeContext, RequestId};
+use semi_os_storage::{ClientSession, Storage, WorkflowSnapshotDto};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
@@ -18,6 +19,8 @@ use tauri::{
     Emitter, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+mod router;
+use router::{handle_research_message, handle_workflow_message};
 mod text_input;
 mod voice_settings;
 use voice_settings::VoiceSettings;
@@ -123,6 +126,64 @@ struct DesktopState {
     conversation: Mutex<Option<Conversation>>,
     voice_settings: Mutex<VoiceSettings>,
     text_input: Mutex<text_input::TextInputRelay>,
+    workflow_notices: Mutex<std::collections::HashMap<String, String>>,
+}
+
+/// 只在完成或需用户处理发生变化时通知；后台协调不接语音播放器。
+fn publish_workflow(app: &tauri::AppHandle, snapshot: &WorkflowSnapshotDto) -> Result<(), String> {
+    app.emit("host://workflow", snapshot)
+        .map_err(|e| e.to_string())?;
+    let state = app.state::<Arc<DesktopState>>();
+    let id = snapshot.plan.workflow_id.as_str();
+    let execution = snapshot.background.coordinator.execution_status.as_str();
+    let mut notices = state
+        .workflow_notices
+        .lock()
+        .map_err(|_| "notification state unavailable")?;
+    if !["completed", "needs_user"].contains(&execution) {
+        notices.remove(id);
+        if notices.is_empty() {
+            if let Some(tray) = app.tray_by_id("semi-os") {
+                let _ = tray.set_title(Some("Semi-OS"));
+                let _ = tray.set_tooltip(Some("Semi-OS 桌面助手"));
+            }
+        }
+        return Ok(());
+    }
+    let key = format!(
+        "{}:{}:{}",
+        snapshot.plan.intent_version,
+        execution,
+        snapshot
+            .background
+            .coordinator
+            .reason
+            .as_deref()
+            .unwrap_or("")
+    );
+    if notices.get(id) == Some(&key) {
+        return Ok(());
+    }
+    notices.insert(id.into(), key);
+    let title = snapshot.plan.title.as_str();
+    let summary = if execution == "completed" {
+        "成果已验证"
+    } else {
+        "需要处理"
+    };
+    if let Some(tray) = app.tray_by_id("semi-os") {
+        let _ = tray.set_title(Some(if execution == "completed" {
+            "Semi-OS ✓"
+        } else {
+            "Semi-OS !"
+        }));
+        let _ = tray.set_tooltip(Some(format!("{title} · {summary}")));
+    }
+    app.emit(
+        "host://workflow-notice",
+        &json!({"workflowId":id,"title":title,"status":execution,"summary":summary}),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -621,20 +682,8 @@ fn handle_voice_message(app: &tauri::AppHandle, message: &Envelope) -> Result<()
     else {
         return Ok(());
     };
-    if ![
-        "voice.transcript.partial",
-        "voice.transcript.final",
-        "voice.answer",
-        "voice.error",
-        "voice.turn.completed",
-        "voice.state",
-    ]
-    .contains(&kind.as_str())
-    {
-        return Ok(());
-    }
     let state = app.state::<Arc<DesktopState>>();
-    let value = {
+    let update = {
         let mut guard = state
             .conversation
             .lock()
@@ -642,70 +691,30 @@ fn handle_voice_message(app: &tauri::AppHandle, message: &Envelope) -> Result<()
         let Some(previous) = guard.as_ref() else {
             return Ok(());
         };
-        if previous.request_id != request_id.0 {
+        let Some(mut update) =
+            semi_os_host::voice::apply_voice_event(previous, &request_id.0, kind, payload)?
+        else {
             return Ok(());
-        }
-        if payload
-            .get("sessionId")
-            .is_some_and(|id| id != &previous.session_id)
-            || payload
-                .get("taskId")
-                .is_some_and(|id| id != &previous.task_id)
-        {
-            return Err("voice identity mismatch".into());
-        }
-        // 先验证副本再替换，畸形 Worker 事件不能破坏当前可恢复快照。
-        let mut current = previous.clone();
-        match kind.as_str() {
-            "voice.transcript.partial" | "voice.transcript.final" => {
-                current.transcript = payload["text"].as_str().ok_or("invalid transcript")?.into();
-            }
-            "voice.answer" => {
-                current.summary = payload["summary"].as_str().ok_or("invalid summary")?.into();
-                current.report = payload["report"].as_str().ok_or("invalid report")?.into();
-            }
-            "voice.error" => {
-                current.state = "error".into();
-                current.error = Some(
-                    payload["message"]
-                        .as_str()
-                        .ok_or("invalid voice error")?
-                        .into(),
-                );
-            }
-            "voice.state" if payload["state"] != "idle" && current.error.is_none() => {
-                // 合成结束不能把仍在播放的快照置为 idle。
-                current.state = payload["state"].as_str().ok_or("invalid state")?.into();
-            }
-            _ => {}
-        }
-        current.validate()?;
-        current.revision += 1;
-        guard.replace(current.clone());
-        current
+        };
+        update.conversation.revision += 1;
+        guard.replace(update.conversation.clone());
+        update
     };
-    if [
-        "voice.transcript.final",
-        "voice.answer",
-        "voice.error",
-        "voice.turn.completed",
-    ]
-    .contains(&kind.as_str())
-    {
-        save_voice_conversation(&state, &value)?;
-        if kind == "voice.transcript.final" {
-            let sessions = state
-                .storage
-                .lock()
-                .map_err(|_| "storage unavailable")?
-                .as_ref()
-                .ok_or("storage unavailable")?
-                .load_client_sessions()
-                .map_err(|error| error.to_string())?;
-            let _ = app.emit("host://client-sessions", sessions);
-        }
+    if update.persist {
+        save_voice_conversation(&state, &update.conversation)?;
     }
-    app.emit("host://voice-snapshot", value)
+    if update.refresh_sessions {
+        let sessions = state
+            .storage
+            .lock()
+            .map_err(|_| "storage unavailable")?
+            .as_ref()
+            .ok_or("storage unavailable")?
+            .load_client_sessions()
+            .map_err(|error| error.to_string())?;
+        let _ = app.emit("host://client-sessions", sessions);
+    }
+    app.emit("host://voice-snapshot", update.conversation)
         .map_err(|error| error.to_string())
 }
 
@@ -854,177 +863,404 @@ fn get_research_report(
         .map_err(|e| e.to_string())
 }
 
-/// 持久化先于 UI 发布。回执经 Host 策略校验，来源经正文引用校验。
-fn handle_research_message(app: &tauri::AppHandle, message: &Envelope) -> Result<bool, String> {
-    let Envelope::Event {
-        kind,
-        payload,
-        request_id,
-        ..
-    } = message
-    else {
-        return Ok(false);
-    };
-    if ![
-        "research.persist",
-        "research.receipt",
-        "research.progress",
-        "research.policy.cancelled",
-        "voice.turn.completed",
-        "research.interrupted",
-    ]
-    .contains(&kind.as_str())
-    {
-        return Ok(false);
+#[tauri::command]
+fn find_workflows(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    name: String,
+    repository: String,
+    status: String,
+) -> Result<Vec<WorkflowSnapshotDto>, String> {
+    if window.label() != "client" {
+        return Err("only client may query workflows".into());
     }
-    let state = app.state::<Arc<DesktopState>>();
-    let now = std::time::SystemTime::now()
+    state
+        .storage
+        .lock()
+        .map_err(|_| "storage unavailable")?
+        .as_ref()
+        .ok_or("storage unavailable")?
+        .find_workflows_dto(&name, &repository, &status)
+        .map_err(|e| e.to_string())
+}
+
+/// 通知携带精确身份，不依赖最近列表的分页上限。
+#[tauri::command]
+fn get_workflow(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    workflow_id: String,
+) -> Result<Option<WorkflowSnapshotDto>, String> {
+    if window.label() != "client" {
+        return Err("only client may query workflows".into());
+    }
+    state
+        .storage
+        .lock()
+        .map_err(|_| "storage unavailable")?
+        .as_ref()
+        .ok_or("storage unavailable")?
+        .load_workflow_dto(&workflow_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_workflows(
+    state: State<'_, Arc<DesktopState>>,
+    session_id: String,
+) -> Result<Vec<WorkflowSnapshotDto>, String> {
+    state
+        .storage
+        .lock()
+        .map_err(|_| "storage unavailable")?
+        .as_ref()
+        .ok_or("storage unavailable")?
+        .load_workflows_dto(&session_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn decide_workflow(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    request: WorkflowUserDecisionRequest,
+) -> Result<WorkflowSnapshotDto, String> {
+    let WorkflowUserDecisionRequest {
+        workflow_id,
+        version,
+        digest,
+        decision,
+        reason,
+    } = request;
+    if window.label() != CLIENT_WINDOW {
+        return Err("only the client may decide a workflow".into());
+    }
+    if matches!(decision, WorkflowUserDecision::NeedsRevision)
+        && reason
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty() || s.encode_utf16().count() > 8000)
+    {
+        return Err("请填写计划修改要求".into());
+    }
+    let snapshot = state
+        .storage
+        .lock()
+        .map_err(|_| "storage unavailable")?
+        .as_mut()
+        .ok_or("storage unavailable")?
+        .decide_workflow_with_reason(
+            &workflow_id,
+            version,
+            &digest,
+            decision.as_storage_value(),
+            reason.as_deref(),
+            unix_time_ms(),
+        )
+        .map_err(|e| e.to_string())?;
+    let snapshot_dto = snapshot;
+    publish_workflow(&app, &snapshot_dto)?;
+    // 决策已经持久化，Worker 暂时离线不能使 UI 误以为批准失败。
+    if notify_workflow_worker(&state, &snapshot_dto, decision.as_storage_value()).is_err() {
+        let _ = app.emit(
+            "host://workflow-notification-pending",
+            &snapshot_dto.plan.workflow_id,
+        );
+    }
+    Ok(snapshot_dto)
+}
+
+/// 先撤销数据库授权，再通知进程；Worker 即使迟到也无法开始新的操作。
+#[tauri::command]
+fn control_workflow(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    request: WorkflowControlRequest,
+) -> Result<WorkflowSnapshotDto, String> {
+    if window.label() != CLIENT_WINDOW {
+        return Err("only the client may control a workflow".into());
+    }
+    let WorkflowControlRequest {
+        workflow_id,
+        version,
+        digest,
+        action,
+    } = request;
+    let action_value = action.as_storage_value();
+    let snapshot = {
+        let mut guard = state.storage.lock().map_err(|_| "storage unavailable")?;
+        let storage = guard.as_mut().ok_or("storage unavailable")?;
+        let old = storage
+            .load_workflow_dto(&workflow_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("unknown workflow")?;
+        if old.plan.version != version || old.digest != digest {
+            return Err("计划已经变化，请刷新后操作".into());
+        }
+        if matches!(action, WorkflowControlAction::ResumeCoordinator) {
+            storage.resume_workflow_coordinator(&workflow_id, unix_time_ms())
+        } else {
+            storage.control_workflow(&workflow_id, action_value, unix_time_ms())
+        }
+        .map_err(|e| e.to_string())?
+    };
+    let snapshot_dto = snapshot;
+    publish_workflow(&app, &snapshot_dto)?;
+    if notify_workflow_worker(&state, &snapshot_dto, action_value).is_err() {
+        let _ = app.emit(
+            "host://workflow-notification-pending",
+            &snapshot_dto.plan.workflow_id,
+        );
+    }
+    Ok(snapshot_dto)
+}
+
+/// 真人入口，先落盘撤销旧授权；扩大目标不能通过子 Agent 问答悄悄批准。
+#[tauri::command]
+fn change_workflow_requirement(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    request: WorkflowRequirementChangeRequest,
+) -> Result<WorkflowSnapshotDto, String> {
+    if window.label() != CLIENT_WINDOW {
+        return Err("only client users may change requirements".into());
+    }
+    let WorkflowRequirementChangeRequest {
+        workflow_id,
+        version,
+        digest,
+        text,
+    } = request;
+    let snapshot = {
+        let mut guard = state.storage.lock().map_err(|_| "storage unavailable")?;
+        let storage = guard.as_mut().ok_or("storage unavailable")?;
+        let old = storage
+            .load_workflow_dto(&workflow_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("unknown workflow")?;
+        if old.plan.version != version || old.digest != digest {
+            return Err("计划已经变化，请刷新".into());
+        }
+        storage
+            .change_workflow_intent(&workflow_id, &text, unix_time_ms())
+            .map_err(|e| e.to_string())?
+    };
+    let snapshot_dto = snapshot;
+    publish_workflow(&app, &snapshot_dto)?;
+    let _ = notify_workflow_worker(&state, &snapshot_dto, "needs_revision");
+    Ok(snapshot_dto)
+}
+
+#[tauri::command]
+fn answer_workflow_question(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    request: WorkflowQuestionAnswerRequest,
+) -> Result<WorkflowSnapshotDto, String> {
+    if window.label() != CLIENT_WINDOW {
+        return Err("only client users may answer delegated questions".into());
+    }
+    let WorkflowQuestionAnswerRequest {
+        workflow_id,
+        request_id,
+        answer,
+    } = request;
+    let snapshot = {
+        let mut guard = state.storage.lock().map_err(|_| "storage unavailable")?;
+        guard
+            .as_mut()
+            .ok_or("storage unavailable")?
+            .answer_workflow_decision(&workflow_id, &request_id, &answer, unix_time_ms())
+            .map_err(|e| e.to_string())?
+    };
+    let snapshot_dto = snapshot;
+    publish_workflow(&app, &snapshot_dto)?;
+    // 决定已保存，通知丢失不回滚；Worker 重启后先核对，不模拟用户输入。
+    let notification = Envelope::Request {
+        protocol_version: 1,
+        request_id: RequestId(format!(
+            "req_workflow_answer_{}",
+            TEXT_INPUT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )),
+        kind: "workflow.control".into(),
+        payload: json!({"workflowId":workflow_id,"sessionId":snapshot_dto.plan.session_id,
+            "action":"answer_decision","requestId":request_id}),
+        context: EnvelopeContext {
+            task_id: None,
+            task_run_id: None,
+            trace_id: None,
+        },
+    };
+    if state
+        .worker
+        .lock()
+        .map_err(|_| "worker unavailable")?
+        .as_ref()
+        .is_none_or(|worker| worker.send(notification).is_err())
+    {
+        let _ = app.emit(
+            "host://workflow-notification-pending",
+            &snapshot_dto.plan.workflow_id,
+        );
+    }
+    Ok(snapshot_dto)
+}
+
+fn notify_workflow_worker(
+    state: &DesktopState,
+    snapshot: &WorkflowSnapshotDto,
+    action: &str,
+) -> Result<(), String> {
+    state.worker.lock().map_err(|_| "worker unavailable")?.as_ref().ok_or("worker unavailable")?
+        .send(Envelope::Request {
+            protocol_version: 1,
+            request_id: RequestId(format!("req_workflow_control_{}", TEXT_INPUT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed))),
+            kind: "workflow.control".into(),
+            payload: json!({"workflowId":snapshot.plan.workflow_id,"sessionId":snapshot.plan.session_id,"action":action}),
+            context: EnvelopeContext { task_id: None, task_run_id: None, trace_id: None },
+        })
+}
+
+/// 核对、停止及追加指令只来自客户端用户；追加信息不能直接改变批准边界。
+#[tauri::command]
+fn inspect_workflow_run(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    workflow_id: String,
+    run_id: String,
+    request_id: String,
+    action: String,
+    text: Option<String>,
+) -> Result<(), String> {
+    if window.label() != CLIENT_WINDOW
+        || !["inspect", "reconcile", "steer", "answer"].contains(&action.as_str())
+    {
+        return Err("only client users can reconcile a run".into());
+    }
+    let snapshot = state
+        .storage
+        .lock()
+        .map_err(|_| "storage unavailable")?
+        .as_ref()
+        .ok_or("storage unavailable")?
+        .load_workflow_dto(&workflow_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("unknown workflow")?;
+    let run = snapshot
+        .runs
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .ok_or("unknown run")?;
+    if action == "reconcile" && !["unknown", "blocked"].contains(&run.status.as_str()) {
+        return Err("only uncertain or blocked attempts can be reconciled".into());
+    }
+    if ["steer", "answer"].contains(&action.as_str()) {
+        if text
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty() || value.encode_utf16().count() > 8000)
+        {
+            return Err("请输入追加指令".into());
+        }
+        let required = if action == "steer" {
+            &["running"][..]
+        } else {
+            &["blocked", "unknown"][..]
+        };
+        if !required.contains(&run.status.as_str()) {
+            return Err("执行状态已变化，请重新查看".into());
+        }
+    }
+    let envelope = Envelope::Request {
+        protocol_version: 1,
+        request_id: RequestId(request_id),
+        kind: format!("workflow.run.{action}"),
+        payload: json!({"workflowId":workflow_id,"runId":run_id,"sessionId":snapshot.plan.session_id,"text":text}),
+        context: EnvelopeContext {
+            task_id: None,
+            task_run_id: None,
+            trace_id: None,
+        },
+    };
+    validate_envelope(&envelope).map_err(|e| e.message)?;
+    state
+        .worker
+        .lock()
+        .map_err(|_| "worker unavailable")?
+        .as_ref()
+        .ok_or("worker unavailable")?
+        .send(envelope)
+}
+
+fn unix_time_ms() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as i64;
-    if kind == "research.policy.cancelled" {
-        if let Some(id) = payload["operationId"].as_str() {
-            state
-                .confirmations
-                .lock()
-                .map_err(|_| "confirmation unavailable")?
-                .remove(id);
-            app.emit("host://research-confirmation-expired", id)
-                .map_err(|e| e.to_string())?;
-        }
-        return Ok(true);
+        .as_millis() as i64
+}
+
+/// 应用源分支仅由客户端独立确认；Worker 只能消费此处已经落盘的精确批准。
+#[tauri::command]
+fn apply_workflow_result(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    request_id: String,
+    workflow_id: String,
+    application: Option<semi_os_protocol::WorkflowApplication>,
+) -> Result<(), String> {
+    if window.label() != CLIENT_WINDOW {
+        return Err("only client users can apply results".into());
     }
-    if kind == "voice.turn.completed" || kind == "research.interrupted" {
-        let task = payload["taskId"].as_str().ok_or("missing task")?;
+    let session_id = {
         let mut guard = state.storage.lock().map_err(|_| "storage unavailable")?;
         let storage = guard.as_mut().ok_or("storage unavailable")?;
-        if kind == "voice.turn.completed" {
-            semi_os_host::research::finish_turn(storage, task, now)?;
-        } else if let Some(snapshot) = storage.load_task(task).map_err(|e| e.to_string())? {
-            let to = if payload["mode"] == "cancel" {
-                semi_os_protocol::TaskLifecycle::Cancelled
-            } else {
-                semi_os_protocol::TaskLifecycle::Paused
-            };
-            // Unknown 必须保留待对账状态；已结束或尚未执行的任务不强制变成 Paused。
-            if semi_os_host::TaskStateMachine::can_transition(snapshot.lifecycle, to) {
-                semi_os_host::research::transition(storage, task, to, now)?;
+        let snapshot = storage
+            .load_workflow_dto(&workflow_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("unknown workflow")?;
+        if let Some(request) = &application {
+            if request.workflow_id != workflow_id {
+                return Err("application workflow mismatch".into());
             }
-        }
-        return Ok(false);
-    }
-    if kind == "research.persist" && payload["operation"] == "policy" {
-        let value = &payload["value"];
-        if let Err(error) = semi_os_host::research::validate_policy(value) {
-            send_evidence_ack(&state, message, Err(error))?;
-            return Ok(true);
-        }
-        let task = value["taskId"].as_str().ok_or("missing policy task")?;
-        let risk = value["riskLevel"].as_str().ok_or("missing policy risk")?;
-        if !["read", "local_write", "external_side_effect", "privileged"].contains(&risk) {
-            return Err("invalid risk".into());
-        }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-        {
-            let mut guard = state.storage.lock().map_err(|_| "storage unavailable")?;
-            semi_os_host::research::ensure_task(
-                guard.as_mut().ok_or("storage unavailable")?,
-                task,
-                now,
-            )?;
-        }
-        if risk == "read" || risk == "local_write" {
-            send_evidence_ack(&state, message, Ok(()))?;
-        } else {
-            let id = payload["operationId"].as_str().ok_or("missing operation")?;
-            state
-                .confirmations
-                .lock()
-                .map_err(|_| "confirmation unavailable")?
-                .insert(id.into(), {
-                    let mut pending = message.clone();
-                    if let Envelope::Event { payload, .. } = &mut pending {
-                        payload["value"]["requestedAtMs"] = json!(now);
-                    }
-                    pending
-                });
-            app.emit("host://research-confirmation", payload.clone())
+            storage
+                .approve_workflow_application(request, unix_time_ms())
                 .map_err(|e| e.to_string())?;
-            state
-                .worker
-                .lock()
-                .map_err(|_| "worker unavailable")?
-                .as_ref()
-                .ok_or("worker unavailable")?
-                .send(Envelope::Request {
-                    protocol_version: 1,
-                    request_id: RequestId(id.into()),
-                    kind: "research.confirmation.required".into(),
-                    payload: json!({"taskId": task}),
-                    context: EnvelopeContext {
-                        task_id: None,
-                        task_run_id: None,
-                        trace_id: None,
-                    },
-                })?;
-        }
-        return Ok(true);
-    }
-    let result = {
-        let mut guard = state.storage.lock().map_err(|_| "storage unavailable")?;
-        let storage = guard.as_mut().ok_or("storage unavailable")?;
-        match kind.as_str() {
-            "research.persist" => match payload["operation"].as_str() {
-                Some("source") => semi_os_host::research::save_source(storage, &payload["value"]),
-                Some("report") => semi_os_host::research::save_report(storage, &payload["value"]),
-                _ => Err("invalid persistence operation".into()),
-            },
-            "research.receipt" => serde_json::from_value::<ToolExecutionReceipt>(payload.clone())
-                .map_err(|e| e.to_string())
-                .and_then(|r| semi_os_host::research::save_receipt(storage, &r)),
-            _ => {
-                let task = payload["taskId"].as_str().ok_or("missing task")?;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64;
-                semi_os_host::research::record_progress(storage, task, payload.clone(), now)
+            if let Some(updated) = storage
+                .load_workflow_dto(&workflow_id)
+                .map_err(|e| e.to_string())?
+            {
+                publish_workflow(&app, &updated)?;
             }
         }
+        snapshot.plan.session_id.clone()
     };
-    if kind == "research.persist" {
-        let reply = Envelope::Request {
-            protocol_version: 1,
-            request_id: RequestId(request_id.0.clone()),
-            kind: "research.persisted".into(),
-            payload: json!({"operationId":payload["operationId"],"ok":result.is_ok(),"error":result.as_ref().err()}),
-            context: EnvelopeContext {
-                task_id: None,
-                task_run_id: None,
-                trace_id: None,
-            },
-        };
-        state
-            .worker
-            .lock()
-            .map_err(|_| "worker unavailable")?
-            .as_ref()
-            .ok_or("worker unavailable")?
-            .send(reply)?;
-        if result.is_ok() && payload["operation"] == "source" {
-            let mut source = payload["value"].clone();
-            if let Some(object) = source.as_object_mut() {
-                object.remove("text");
-            }
-            let _ = app.emit("host://research-source", source);
+    let envelope = Envelope::Request {
+        protocol_version: 1,
+        request_id: RequestId(request_id),
+        kind: if application.is_some() {
+            "workflow.application.apply"
+        } else {
+            "workflow.application.prepare"
         }
-        return Ok(true);
-    }
-    result?;
-    Ok(false)
+        .into(),
+        payload: json!({"workflowId":workflow_id,"sessionId":session_id,"applicationId":application.map(|a|a.application_id)}),
+        context: EnvelopeContext {
+            task_id: None,
+            task_run_id: None,
+            trace_id: None,
+        },
+    };
+    validate_envelope(&envelope).map_err(|e| e.message)?;
+    state
+        .worker
+        .lock()
+        .map_err(|_| "worker unavailable")?
+        .as_ref()
+        .ok_or("Worker 离线，批准已保留，请核对后继续")?
+        .send(envelope)
 }
 
 /// 显示指定窗口，并按调用场景决定是否获取焦点。
@@ -1061,8 +1297,11 @@ fn get_host_lifecycle(
     state
         .lifecycle
         .lock()
-        .map(|lifecycle| lifecycle.snapshot())
         .map_err(|_| "host lifecycle lock is unavailable".to_owned())
+        .and_then(|mut lifecycle| {
+            route_lifecycle(&mut lifecycle, LifecycleCommand::Read)
+                .map_err(|error| error.ui_message().to_owned())
+        })
 }
 
 /// 窗口显隐由 Rust Host 执行，React 只表达用户意图，不直接持有窗口权限。
@@ -1095,6 +1334,11 @@ fn send_worker_request(
     if !matches!(envelope, Envelope::Request { .. }) {
         return Err("only request envelopes can be sent to the worker".to_owned());
     }
+    if let Envelope::Request { kind, .. } = &envelope {
+        if !kind.starts_with("voice.") && kind != "health.check" && kind != "browser.login.open" {
+            return Err("internal Host messages cannot be sent by a WebView".into());
+        }
+    }
     state
         .worker
         .lock()
@@ -1118,6 +1362,7 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("diagnostics/worker.jsonl");
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let app_handle = app.clone();
     let message_app_handle = app.clone();
     let supervisor = WorkerSupervisor::new(
@@ -1131,14 +1376,83 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
                 "packages/agent-worker/src/index.ts".to_owned(),
             ],
             current_dir: repository_root,
+            environment: vec![
+                (
+                    "SEMI_OS_WORKTREE_DIR".into(),
+                    data_dir.join("worktrees").to_string_lossy().into_owned(),
+                ),
+                (
+                    "SEMI_OS_COORDINATOR_DIR".into(),
+                    data_dir.join("coordinators").to_string_lossy().into_owned(),
+                ),
+                (
+                    "SEMI_OS_AGENT_WORKSPACE".into(),
+                    data_dir
+                        .join("agent-workspace")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            ],
         },
         RestartPolicy::default(),
         Arc::new(DiagnosticStore::new(diagnostics_path)),
         Arc::new(move |event: WorkerEvent| {
+            if matches!(event, WorkerEvent::Starting { .. }) {
+                let state = app_handle.state::<Arc<DesktopState>>();
+                if let Ok(mut guard) = state.storage.lock() {
+                    if let Some(storage) = guard.as_mut() {
+                        if storage.recover_workflow_runs(unix_time_ms()).is_err() {
+                            let _ = app_handle.emit(
+                                "host://workflow-recovery-error",
+                                "协作恢复失败，请先核对工作区",
+                            );
+                        }
+                    }
+                };
+            }
+            if matches!(event, WorkerEvent::Ready { .. }) {
+                // Ready 时 stdin 已建立；先释放数据库锁，再通知 Worker 消费持久事件。
+                let state = app_handle.state::<Arc<DesktopState>>();
+                let snapshots = state
+                    .storage
+                    .lock()
+                    .map_err(|_| "storage unavailable".to_string())
+                    .and_then(|guard| {
+                        guard
+                            .as_ref()
+                            .ok_or_else(|| "storage unavailable".to_string())?
+                            .workflow_recovery_snapshots_dto()
+                            .map_err(|error| error.to_string())
+                    })
+                    .unwrap_or_else(|_| {
+                        let _ = app_handle.emit(
+                            "host://workflow-recovery-error",
+                            "协作记录读取失败，请先核对记录与工作区",
+                        );
+                        Vec::new()
+                    });
+                for snapshot in snapshots {
+                    let _ = publish_workflow(&app_handle, &snapshot);
+                    if notify_workflow_worker(&state, &snapshot, "observe").is_err() {
+                        let _ = app_handle.emit(
+                            "host://workflow-notification-pending",
+                            &snapshot.plan.workflow_id,
+                        );
+                    }
+                }
+            }
             // UI 只接收 WorkerEvent 中经过约束的字段，不转发 stderr 或环境变量。
             let _ = app_handle.emit("host://worker-event", event);
         }),
         Arc::new(move |message| {
+            match handle_workflow_message(&message_app_handle, &message) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(error) => {
+                    let _ = message_app_handle.emit("host://research-error", error);
+                    return;
+                }
+            }
             if let Err(error) = handle_voice_message(&message_app_handle, &message) {
                 let _ = message_app_handle.emit("host://research-error", error);
             }
@@ -1155,12 +1469,15 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
             let _ = message_app_handle.emit("host://worker-message", message);
         }),
     );
-    Ok(supervisor.start())
+    Ok(supervisor
+        .with_receipts(&data_dir.join("semi-os.sqlite"))
+        .map_err(|error| error.to_string())?
+        .start())
 }
 
 fn shutdown(state: &Arc<DesktopState>) {
     if let Ok(mut lifecycle) = state.lifecycle.lock() {
-        lifecycle.mark_shutting_down();
+        let _ = route_lifecycle(&mut lifecycle, LifecycleCommand::BeginShutdown);
     }
     if let Ok(mut worker) = state.worker.lock() {
         if let Some(mut handle) = worker.take() {
@@ -1168,7 +1485,7 @@ fn shutdown(state: &Arc<DesktopState>) {
         }
     }
     if let Ok(mut lifecycle) = state.lifecycle.lock() {
-        lifecycle.mark_stopped();
+        let _ = route_lifecycle(&mut lifecycle, LifecycleCommand::MarkStopped);
     }
 }
 
@@ -1181,6 +1498,7 @@ fn main() {
         conversation: Mutex::new(None),
         voice_settings: Mutex::new(VoiceSettings::default()),
         text_input: Mutex::new(text_input::TextInputRelay::default()),
+        workflow_notices: Mutex::new(std::collections::HashMap::new()),
     });
 
     let app = tauri::Builder::default()
@@ -1209,6 +1527,15 @@ fn main() {
             get_research_archive,
             get_research_artifact,
             get_research_report,
+            get_workflows,
+            find_workflows,
+            get_workflow,
+            decide_workflow,
+            control_workflow,
+            change_workflow_requirement,
+            answer_workflow_question,
+            inspect_workflow_run,
+            apply_workflow_result,
             confirm_research_action,
             start_voice_conversation,
             publish_voice_snapshot,
@@ -1290,11 +1617,18 @@ fn main() {
                 .lock()
                 .map_err(|_| "worker supervisor lock is unavailable")?
                 .replace(worker);
-            desktop_state
+            let mut lifecycle = desktop_state
                 .lifecycle
                 .lock()
-                .map_err(|_| "host lifecycle lock is unavailable")?
-                .mark_ready(true);
+                .map_err(|_| "host lifecycle lock is unavailable")?;
+            route_lifecycle(
+                &mut lifecycle,
+                LifecycleCommand::MarkReady {
+                    shortcut_registered: true,
+                },
+            )
+            .map(|_| ())
+            .map_err(|error| error.ui_message())?;
 
             Ok(())
         })

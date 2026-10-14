@@ -6,11 +6,26 @@
 mod error;
 mod migrations;
 mod models;
+mod outbound_rpc;
 mod repository;
+mod rpc;
+mod workflow;
+mod workflow_background;
+mod workflow_dto;
+mod workflow_queries;
 
 pub use error::{StorageError, StorageResult};
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
 };
+pub use outbound_rpc::{OutboundReceipt, OutboundStatus};
 pub use repository::{validate_session_title, ClientSession, Storage};
+pub use rpc::{RpcDispatchDecision, RpcReceipt, RpcReceiptStatus, RpcResult};
 pub use semi_os_protocol::ToolAttemptStatus;
+pub use workflow_dto::{
+    WorkflowBackground, WorkflowCheckpoint, WorkflowClaimResult, WorkflowCoordinator,
+    WorkflowDecisionActor, WorkflowDecisionAuthority, WorkflowDecisionInput, WorkflowDecisionKind,
+    WorkflowDecisionRequest, WorkflowDecisionResult, WorkflowDecisionValue, WorkflowEventRecord,
+    WorkflowGrant, WorkflowNotification, WorkflowQuestion, WorkflowQuestionOption,
+    WorkflowSnapshotDto,
+};

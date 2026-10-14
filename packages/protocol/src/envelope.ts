@@ -1,9 +1,6 @@
-import type {
-  RequestId,
-  TaskId,
-  TaskRunId,
-  TraceId,
-} from "@semi-os/shared";
+import type { RequestId, TaskId, TaskRunId, TraceId } from "@semi-os/shared";
+import { assertRegisteredMessage } from "./message-registry.ts";
+import type { RequestMessage, ValidatedMessage } from "./generated/messages.generated.ts";
 
 /**
  * Host 与 Agent Worker 当前共同支持的协议版本。
@@ -31,8 +28,7 @@ export interface EnvelopeContext {
   traceId?: TraceId;
 }
 
-export interface RequestEnvelope<TPayload extends JsonValue = JsonValue>
-  extends EnvelopeContext {
+export interface RequestEnvelope<TPayload extends JsonValue = JsonValue> extends EnvelopeContext {
   /** 请求方向标识。 */
   direction: "request";
   /** 协议版本。 */
@@ -45,8 +41,7 @@ export interface RequestEnvelope<TPayload extends JsonValue = JsonValue>
   payload: TPayload;
 }
 
-export interface ResponseEnvelope<TPayload extends JsonValue = JsonValue>
-  extends EnvelopeContext {
+export interface ResponseEnvelope<TPayload extends JsonValue = JsonValue> extends EnvelopeContext {
   direction: "response";
   protocolVersion: typeof PROTOCOL_VERSION;
   requestId: RequestId;
@@ -54,8 +49,7 @@ export interface ResponseEnvelope<TPayload extends JsonValue = JsonValue>
   payload: TPayload;
 }
 
-export interface EventEnvelope<TPayload extends JsonValue = JsonValue>
-  extends EnvelopeContext {
+export interface EventEnvelope<TPayload extends JsonValue = JsonValue> extends EnvelopeContext {
   direction: "event";
   protocolVersion: typeof PROTOCOL_VERSION;
   requestId: RequestId;
@@ -78,11 +72,7 @@ export interface ErrorEnvelope extends EnvelopeContext {
   payload: ErrorPayload;
 }
 
-export type Envelope =
-  | RequestEnvelope
-  | ResponseEnvelope
-  | EventEnvelope
-  | ErrorEnvelope;
+export type Envelope = RequestEnvelope | ResponseEnvelope | EventEnvelope | ErrorEnvelope;
 
 // ID 前缀既用于人工排查日志，也用于避免不同领域 ID 被意外混用。
 const idPatterns = {
@@ -106,11 +96,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function assertId(
-  value: unknown,
-  field: keyof typeof idPatterns,
-  required: boolean,
-): void {
+function assertId(value: unknown, field: keyof typeof idPatterns, required: boolean): void {
   if (value === undefined && !required) {
     return;
   }
@@ -128,18 +114,12 @@ function assertId(
  * TypeScript 类型会在编译后消失，因此来自 stdin、子进程或网络的数据
  * 必须先经过这里，才能收窄为 Envelope 并进入业务逻辑。
  */
-export function assertValidEnvelope(value: unknown): asserts value is Envelope {
+export function assertValidEnvelope(value: unknown): asserts value is ValidatedMessage {
   if (!isRecord(value)) {
-    throw new ProtocolValidationError(
-      "Envelope must be a JSON object",
-      "invalid_envelope",
-    );
+    throw new ProtocolValidationError("Envelope must be a JSON object", "invalid_envelope");
   }
   if (!("protocolVersion" in value)) {
-    throw new ProtocolValidationError(
-      "protocolVersion is required",
-      "missing_field",
-    );
+    throw new ProtocolValidationError("protocolVersion is required", "missing_field");
   }
   if (!("direction" in value)) {
     throw new ProtocolValidationError("direction is required", "missing_field");
@@ -172,35 +152,15 @@ export function assertValidEnvelope(value: unknown): asserts value is Envelope {
   assertId(value.taskRunId, "taskRunId", false);
   assertId(value.traceId, "traceId", false);
   if (typeof value.kind !== "string" || value.kind.length === 0) {
-    throw new ProtocolValidationError(
-      "kind must be a non-empty string",
-      "invalid_field",
-    );
+    throw new ProtocolValidationError("kind must be a non-empty string", "invalid_field");
   }
-  if (value.direction === "error") {
-    if (!isRecord(value.payload)) {
-      throw new ProtocolValidationError(
-        "error payload must be an object",
-        "invalid_payload",
-      );
-    }
-    if (
-      typeof value.payload.code !== "string" ||
-      value.payload.code.length === 0 ||
-      typeof value.payload.message !== "string" ||
-      typeof value.payload.retryable !== "boolean"
-    ) {
-      throw new ProtocolValidationError(
-        "error payload shape is invalid",
-        "invalid_payload",
-      );
-    }
-    if (value.kind !== "protocol.error" && value.kind !== "request.error") {
-      throw new ProtocolValidationError(
-        "error kind is invalid",
-        "invalid_field",
-      );
-    }
+  assertRegisteredMessage(value.direction, value.kind, value.payload);
+  if (
+    (value.kind === "workflow.request" || value.kind === "research.persist") &&
+    isRecord(value.payload) &&
+    value.payload.operationId !== value.requestId
+  ) {
+    throw new ProtocolValidationError("operationId must match requestId", "invalid_payload");
   }
 }
 
@@ -218,27 +178,30 @@ export function encodeJsonl(envelope: Envelope): string {
  * 这里只接受一条记录和至多一个尾随换行，避免调用方误把多条消息当成
  * 一个原子请求处理。流的分帧工作应由上层逐行读取器负责。
  */
-export function decodeJsonl(line: string): Envelope {
+export function decodeJsonl(line: string): ValidatedMessage {
   const normalizedLine = line.endsWith("\n") ? line.slice(0, -1) : line;
   if (
     normalizedLine.length === 0 ||
     normalizedLine.includes("\n") ||
     normalizedLine.includes("\r")
   ) {
-    throw new ProtocolValidationError(
-      "JSONL input must contain exactly one line",
-      "invalid_jsonl",
-    );
+    throw new ProtocolValidationError("JSONL input must contain exactly one line", "invalid_jsonl");
   }
   let value: unknown;
   try {
     value = JSON.parse(normalizedLine) as unknown;
   } catch {
-    throw new ProtocolValidationError(
-      "JSONL input is not valid JSON",
-      "invalid_json",
-    );
+    throw new ProtocolValidationError("JSONL input is not valid JSON", "invalid_json");
   }
   assertValidEnvelope(value);
+  return value;
+}
+
+/** 字段验证通过后才允许按 kind 收窄，不信任调用方的编译期断言。 */
+export function parseRequestMessage(value: unknown): RequestMessage {
+  assertValidEnvelope(value);
+  if (value.direction !== "request") {
+    throw new ProtocolValidationError("Expected a request", "invalid_field");
+  }
   return value;
 }

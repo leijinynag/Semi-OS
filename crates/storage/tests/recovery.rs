@@ -27,7 +27,7 @@ fn migrates_all_core_tables_on_reopen() {
     let database_path = directory.path().join("semi-os.sqlite3");
 
     let storage = Storage::open(&database_path).expect("database should migrate");
-    assert_eq!(storage.schema_version().expect("version should load"), 4);
+    assert_eq!(storage.schema_version().expect("version should load"), 11);
     drop(storage);
 
     let connection = rusqlite::Connection::open(&database_path).expect("database should open");
@@ -46,26 +46,41 @@ fn migrates_all_core_tables_on_reopen() {
     assert_eq!(
         table_names,
         vec![
+            "agent_runs",
             "agent_sessions",
             "approvals",
             "artifacts",
             "capabilities",
             "client_sessions",
             "conversation_turns",
+            "outbound_rpc_receipts",
             "research_reports",
             "research_sources",
+            "rpc_receipts",
             "schema_migrations",
             "settings",
             "task_events",
             "tasks",
             "tool_attempts",
+            "workflow_applications",
+            "workflow_coordinators",
+            "workflow_decision_requests",
+            "workflow_decisions",
+            "workflow_delegate_decisions",
+            "workflow_events",
+            "workflow_evidence",
+            "workflow_evidence_history",
+            "workflow_grants",
+            "workflow_plans",
+            "workflow_run_phases",
+            "workflows",
         ]
     );
     drop(statement);
     drop(connection);
 
     let reopened = Storage::open(&database_path).expect("migration should be idempotent");
-    assert_eq!(reopened.schema_version().expect("version should load"), 4);
+    assert_eq!(reopened.schema_version().expect("version should load"), 11);
 }
 
 #[test]

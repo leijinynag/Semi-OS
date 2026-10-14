@@ -3,9 +3,7 @@
 :root {
   color: #1d1d1f;
   background: #fff;
-  font-family:
-    Inter, "SF Pro Display", "SF Pro Text", "PingFang SC", "Microsoft YaHei",
-    sans-serif;
+  font-family: Inter, "SF Pro Display", "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   letter-spacing: 0;
   --client-ink: #1d1d1f;
@@ -81,6 +79,50 @@ html[data-surface="assistant"] #root {
   --details-width: min(360px, 32vw);
 }
 
+.workflow-panel {
+  min-width: 0;
+  padding: 18px 20px;
+  border-bottom: 1px solid #ececec;
+}
+.workflow-panel header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workflow-panel header > span {
+  flex-shrink: 0;
+}
+.workflow-items summary > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workflow-items summary > span:last-child {
+  flex-shrink: 0;
+}
+.workflow-definition {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px 14px;
+  margin-block: 14px;
+  font-size: 13px;
+}
+.workflow-definition dt {
+  color: #777;
+}
+.workflow-definition dd {
+  margin: 0;
+}
+.workflow-items {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+.workflow-items > li {
+  padding-block: 12px;
+}
+.workflow-items summary {
+  cursor: pointer;
+  font-size: 13px;
+}
 .client-details-drawer {
   position: absolute;
   inset: 0 0 0 auto;
@@ -92,7 +134,9 @@ html[data-surface="assistant"] #root {
   box-shadow: -6px 0 24px #00000008;
   transform: translateX(100%);
   visibility: hidden;
-  transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 280ms;
+  transition:
+    transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 280ms;
 }
 
 .has-details .client-details-drawer {
@@ -234,7 +278,9 @@ html[data-surface="assistant"] #root {
   border: 1px solid #eeeeef;
   border-radius: 8px;
   background: #fff;
-  box-shadow: 0 8px 28px #0000000a, 0 2px 6px #00000005;
+  box-shadow:
+    0 8px 28px #0000000a,
+    0 2px 6px #00000005;
 }
 
 .client-context-head > span {
@@ -419,7 +465,9 @@ html[data-surface="assistant"] #root {
   height: 2px;
   flex: 0 0 auto;
   background: #d2d2d5;
-  transition: width 160ms ease, background 160ms ease;
+  transition:
+    width 160ms ease,
+    background 160ms ease;
 }
 
 .conversation-tick:hover span,
@@ -436,7 +484,10 @@ html[data-surface="assistant"] #root {
 .conversation-jump-preview {
   position: absolute;
   left: 24px;
-  width: min(400px, calc(100vw - var(--client-left-width) - var(--client-right-width) - var(--details-width) - 76px));
+  width: min(
+    400px,
+    calc(100vw - var(--client-left-width) - var(--client-right-width) - var(--details-width) - 76px)
+  );
   padding: 8px;
   border: 1px solid #e4e4e7;
   border-radius: 8px;
@@ -1120,9 +1171,21 @@ html[data-surface="assistant"] #root {
   font-size: 13px;
 }
 .session-context-menu button:hover,
-.session-context-menu button:focus-visible { background: #f2f2f2; outline: none; }
-.session-dialog h2 { margin: 0 0 24px; font-size: 18px; font-weight: 600; }
-.session-name-label { display: grid; gap: 8px; font-size: 12px; color: #666; }
+.session-context-menu button:focus-visible {
+  background: #f2f2f2;
+  outline: none;
+}
+.session-dialog h2 {
+  margin: 0 0 24px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.session-name-label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: #666;
+}
 .session-name-label input {
   width: 100%;
   padding: 11px 12px;
@@ -1132,6 +1195,30 @@ html[data-surface="assistant"] #root {
   color: #171717;
   font-size: 14px;
 }
-.session-name-label input:focus { outline: 2px solid #aaa; outline-offset: 2px; }
-.session-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
-.session-delete-copy { font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.session-name-label input:focus {
+  outline: 2px solid #aaa;
+  outline-offset: 2px;
+}
+.session-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+.session-delete-copy {
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.workflow-dependencies {
+  display: grid;
+  gap: 6px;
+  padding-block: 12px;
+}
+.workflow-dependency {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}

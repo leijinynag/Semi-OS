@@ -4,6 +4,12 @@ use thiserror::Error;
 /// 存储层错误保留稳定语义，Host 不应依赖 SQLite 的具体错误字符串做控制流。
 #[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("rpc request identity conflicts with an existing receipt")]
+    RpcConflict,
+    #[error("rpc result requires reconciliation before dispatch")]
+    RpcReconciliation,
+    #[error("workflow rejected: {0}")]
+    InvalidWorkflow(String),
     #[error("sqlite operation failed: {0}")]
     Sqlite(#[from] SqliteError),
     #[error("json serialization failed: {0}")]
