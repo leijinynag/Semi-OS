@@ -1118,7 +1118,8 @@
   - 最终质量验证：完整 `pnpm check` 通过，覆盖 workspace 命令检查、
     协议生成一致性、Prettier/Rust fmt、TypeScript、ESLint、Clippy、
     JS/Rust 测试、JS/Rust 构建和 `git diff --check`。
-    前端构建仍有大 chunk 提示，不影响本轮门禁通过；本轮未提交、未 push。
+    前端构建仍有大 chunk 提示，不影响本轮门禁通过；提交：
+    `1a06024`。
 
 ## MVP 之后暂缓
 
