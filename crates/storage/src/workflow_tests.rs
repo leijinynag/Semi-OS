@@ -15,13 +15,59 @@ fn plan() -> WorkflowPlan {
 fn approved() -> (Storage, WorkflowPlan, String) {
     let mut db = Storage::open_in_memory().unwrap();
     let plan = plan();
+    let (plan, digest) = approve_plan(&mut db, plan);
+    (db, plan, digest)
+}
+
+fn approve_plan(db: &mut Storage, plan: WorkflowPlan) -> (WorkflowPlan, String) {
     let digest = format!("sha256:{}", "a".repeat(64));
     db.create_client_session(&plan.session_id, "fixture", 1)
         .unwrap();
     db.save_workflow_plan(&plan, &digest, 1).unwrap();
     db.decide_workflow(&plan.workflow_id, 1, &digest, "approved", 2)
         .unwrap();
-    (db, plan, digest)
+    (plan, digest)
+}
+
+#[test]
+fn custom_no_progress_budget_is_used_by_background_coordinator() {
+    let mut plan = plan();
+    plan.execution_budget.max_no_progress_turns = 1;
+    let mut db = Storage::open_in_memory().unwrap();
+    approve_plan(&mut db, plan.clone());
+    let id = &plan.workflow_id;
+    let claim = db.claim_workflow(id, "owner", 3).unwrap();
+    let cp = WorkflowCheckpoint {
+        session_id: format!("coordinator_{id}"),
+        sequence: 1,
+        data: Default::default(),
+    };
+    db.finish_workflow_claim(id, "owner", claimed_sequence(&claim), &cp, false, 4)
+        .unwrap();
+    assert_eq!(
+        db.load_workflow(id).unwrap().unwrap()["background"]["coordinator"]["executionStatus"],
+        "needs_user"
+    );
+}
+
+#[test]
+fn legacy_checkpoint_without_fingerprint_uses_durable_events_as_progress() {
+    let (mut db, plan, _) = approved();
+    let id = &plan.workflow_id;
+    let claim = db.claim_workflow(id, "owner", 3).unwrap();
+    db.record_workflow_event(id, "run.completed", "旧检查点兼容进展", 4)
+        .unwrap();
+    let cp = WorkflowCheckpoint {
+        session_id: format!("coordinator_{id}"),
+        sequence: 1,
+        data: Default::default(),
+    };
+    db.finish_workflow_claim(id, "owner", claimed_sequence(&claim), &cp, true, 5)
+        .unwrap();
+    assert_eq!(
+        db.load_workflow(id).unwrap().unwrap()["background"]["coordinator"]["noProgress"],
+        0
+    );
 }
 #[test]
 fn background_claim_is_single_owner_idempotent_and_stale_lease_needs_reconciliation() {
@@ -340,6 +386,16 @@ fn independent_review_and_three_reworks_are_persisted_without_self_attestation()
     review.work_item_id = "review".into();
     review.role = semi_os_protocol::WorkRole::Review;
     review.dependencies = vec!["implement".into()];
+    review.capabilities = Some(vec![
+        semi_os_protocol::Capability::ReadRepo,
+        semi_os_protocol::Capability::ReadFiles,
+        semi_os_protocol::Capability::ReadEvidence,
+    ]);
+    review.evidence = Some(semi_os_protocol::EvidenceRequirement {
+        revision: true,
+        tests: false,
+        independent_review: true,
+    });
     plan.work_items.push(review);
     plan.version = 2;
     db.refine_workflow_plan(&plan, &digest, 7).unwrap();
@@ -493,6 +549,16 @@ fn verified_integration_requires_real_artifact_and_independent_current_revision_
     review.work_item_id = "review".into();
     review.role = semi_os_protocol::WorkRole::Review;
     review.dependencies = vec!["integrate".into()];
+    review.capabilities = Some(vec![
+        semi_os_protocol::Capability::ReadRepo,
+        semi_os_protocol::Capability::ReadFiles,
+        semi_os_protocol::Capability::ReadEvidence,
+    ]);
+    review.evidence = Some(semi_os_protocol::EvidenceRequirement {
+        revision: true,
+        tests: false,
+        independent_review: true,
+    });
     plan.work_items.extend([integrate, review]);
     plan.version = 2;
     db.refine_workflow_plan(&plan, &digest, 6).unwrap();

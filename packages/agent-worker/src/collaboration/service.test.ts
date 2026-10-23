@@ -4,7 +4,7 @@ import { CollaborationService } from "./service.ts";
 import { parseWorkflowPlan, type AgentRun, type WorkflowSnapshot } from "@semi-os/protocol";
 import type { ProviderStart, CodingProviderPort } from "./provider.ts";
 
-function fixture(steer = true, healthTimeoutMs = 120_000) {
+function fixture(steer = true, healthTimeoutMs = 120_000, multi = false) {
   const snapshot: WorkflowSnapshot = {
     plan: parseWorkflowPlan({
       workflowId: "workflow",
@@ -33,12 +33,16 @@ function fixture(steer = true, healthTimeoutMs = 120_000) {
     runs: [],
     events: [],
   };
+  const second = structuredClone(snapshot);
+  second.plan.workflowId = "workflow2";
+  second.plan.executionBudget.maxParallelRuns = 1;
+  const snapshots = multi ? [snapshot, second] : [snapshot];
   const starts: ProviderStart[] = [];
   let allowed = true;
   let stopped = 0;
   const events: string[] = [];
   const host: CollaborationService["host"] = {
-    list: async () => [structuredClone(snapshot)],
+    list: async () => snapshots.map((item) => structuredClone(item)),
     authorize: async () => {
       if (!allowed) throw new Error("revoked");
     },
@@ -47,9 +51,11 @@ function fixture(steer = true, healthTimeoutMs = 120_000) {
       if (operation === "run") {
         const run = structuredClone(value) as unknown as AgentRun;
         assert.ok(run.status !== "running" || starts.length < 3);
-        const old = snapshot.runs.findIndex((saved) => saved.runId === run.runId);
-        if (old >= 0) snapshot.runs[old] = run;
-        else snapshot.runs.push(run);
+        const target = snapshots.find((item) => item.plan.workflowId === run.workflowId)!;
+        const old = target.runs.findIndex((saved) => saved.runId === run.runId);
+        if (old >= 0) target.runs[old] = run;
+        else target.runs.push(run);
+        return JSON.parse(JSON.stringify(target));
       }
       return JSON.parse(JSON.stringify(snapshot));
     },
@@ -97,6 +103,7 @@ function fixture(steer = true, healthTimeoutMs = 120_000) {
   return {
     service,
     snapshot,
+    second,
     starts,
     events,
     revoke: () => {
@@ -124,6 +131,45 @@ test("only two children start; third waits for persisted completion and gets its
   await tick();
   assert.equal(f.starts.length, 3);
   assert.equal(f.snapshot.runs[0]?.revision, "b".repeat(40));
+  await f.service.dispose();
+});
+
+test("global concurrency and per-workflow budget do not block another workflow", async () => {
+  const f = fixture(true, 120_000, true);
+  const signal = new AbortController().signal;
+  await f.service.dispatch("session", "workflow2", "a", signal);
+  await f.service.dispatch("session", "workflow2", "b", signal);
+  await f.service.dispatch("session", "workflow", "a", signal);
+  await f.service.dispatch("session", "workflow", "b", signal);
+  await tick();
+  assert.equal(f.starts.length, 2);
+  assert.equal(f.second.runs.filter((run) => run.status === "running").length, 1);
+  assert.equal(f.snapshot.runs.filter((run) => run.status === "running").length, 1);
+
+  await f.service.stopWorkflow("workflow2");
+  await tick();
+  assert.equal(f.starts.length, 3);
+  assert.equal(f.snapshot.runs.filter((run) => run.status === "running").length, 2);
+  assert.ok(f.second.runs.every((run) => run.status === "cancelled"));
+  await f.service.dispose();
+});
+
+test("stopping queued work does not release an active slot in another workflow", async () => {
+  const f = fixture(true, 120_000, true);
+  const signal = new AbortController().signal;
+  await f.service.dispatch("session", "workflow", "a", signal);
+  await f.service.dispatch("session", "workflow", "b", signal);
+  await f.service.dispatch("session", "workflow2", "a", signal);
+  await tick();
+  assert.equal(f.starts.length, 2);
+  await f.service.stopWorkflow("workflow2");
+  await f.service.dispatch("session", "workflow2", "b", signal);
+  await tick();
+  assert.equal(f.starts.length, 2);
+  f.starts[0]!.emit({ kind: "completed", summary: "done" });
+  await tick();
+  await tick();
+  assert.equal(f.starts.length, 3);
   await f.service.dispose();
 });
 
@@ -174,7 +220,17 @@ test("idle health checks notify once without restarting or marking failure", asy
 });
 test("read-only completion cannot attest a changed workspace", async () => {
   const f = fixture();
+  f.snapshot.plan.authorizedCapabilities = [
+    ...f.snapshot.plan.authorizedCapabilities,
+    "read:evidence",
+  ];
   f.snapshot.plan.workItems[0]!.role = "review";
+  f.snapshot.plan.workItems[0]!.capabilities = ["read:repo", "read:files", "read:evidence"];
+  f.snapshot.plan.workItems[0]!.evidence = {
+    revision: true,
+    tests: false,
+    independentReview: false,
+  };
   await f.service.dispatch("session", "workflow", "a", new AbortController().signal);
   await tick();
   f.starts[0]!.emit({ kind: "completed", summary: "review done" });

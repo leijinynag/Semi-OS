@@ -8,7 +8,9 @@ import {
   parseIntegrationResult,
   parseReviewFinding,
   parseWorkflowApplication,
-  isWritingRole,
+  hasCapability,
+  isIntegrationWorkItem,
+  isWritingWorkItem,
   type AgentRun,
   type CodingProvider,
   type WorkflowSnapshot,
@@ -52,12 +54,14 @@ const providers: Record<CodingProvider, () => CodingProviderPort> = {
   codex: () => new CodexCodingProvider(),
 };
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as JsonValue;
+const MAX_ACTIVE_CHILDREN = 2;
 
 /** 仅调度主 Pi 已派发的工作项；资源释放不创建新任务，不自行调用模型决定下一步。 */
 export class CollaborationService {
   readonly #executions = new Map<string, Execution>();
   readonly #queue: Execution[] = [];
   #active = 0;
+  readonly #activeByWorkflow = new Map<string, number>();
   #disposed = false;
   readonly host: Pick<WorkflowHost, "list" | "authorize" | "request">;
   readonly policy: Pick<ResearchHost, "authorize">;
@@ -206,10 +210,20 @@ export class CollaborationService {
   }
 
   #drain(): void {
-    while (!this.#disposed && this.#active < 2 && this.#queue.length) {
-      const execution = this.#queue.shift()!;
+    // 计划预算约束单个工作流；全局名额避免多个后台工作流一起耗尽本机资源。
+    while (!this.#disposed && this.#active < MAX_ACTIVE_CHILDREN && this.#queue.length) {
+      const index = this.#queue.findIndex((execution) => {
+        const limit = execution.snapshot.plan.executionBudget.maxParallelRuns;
+        return (this.#activeByWorkflow.get(execution.run.workflowId) ?? 0) < limit;
+      });
+      if (index < 0) return;
+      const execution = this.#queue.splice(index, 1)[0]!;
       if (execution.abort.signal.aborted) continue;
       this.#active++;
+      this.#activeByWorkflow.set(
+        execution.run.workflowId,
+        (this.#activeByWorkflow.get(execution.run.workflowId) ?? 0) + 1,
+      );
       execution.active = true;
       // 生命周期由明确终态释放，不能把一次工具调用返回视为子 Agent 已结束。
       execution.starting = this.#start(execution)
@@ -254,7 +268,8 @@ export class CollaborationService {
     const revisions = dependencies
       .map((run) => run.revision)
       .filter((value): value is string => !!value);
-    if (revisions.length > 1 && new Set(revisions).size > 1 && item.role !== "integration") {
+    const integration = isIntegrationWorkItem(item);
+    if (revisions.length > 1 && new Set(revisions).size > 1 && !integration) {
       throw new NeedsUserError("多个依赖成果需先安排独立整合工作项");
     }
     // 创建 worktree 也是副作用；先记回执，崩溃后不能重新创建空现场掩盖成果。
@@ -266,7 +281,7 @@ export class CollaborationService {
     const workspace = await this.workspaces.create(
       snapshot.plan,
       run.runId,
-      execution.resume?.revision ?? (item.role === "integration" ? undefined : revisions[0]),
+      execution.resume?.revision ?? (integration ? undefined : revisions[0]),
     );
     abort.signal.throwIfAborted();
     Object.assign(run, {
@@ -276,7 +291,7 @@ export class CollaborationService {
     });
     run.status = "running";
     await this.#save(execution);
-    if (item.role === "integration") {
+    if (integration) {
       if (!snapshot.plan.authorizedActions.includes("integrate")) throw new Error("计划未授权整合");
       const integrated = await this.workspaces.integrate(workspace.path, revisions);
       execution.integrationCommits = revisions;
@@ -331,18 +346,18 @@ export class CollaborationService {
     abort.signal.throwIfAborted();
     provider.start({
       cwd: workspace.path,
-      writing: isWritingRole(item.role),
+      writing: isWritingWorkItem(item),
       sessionId: execution.resume?.sessionId,
       prompt: [
         `只执行已登记工作项：${item.title}\n${item.objective}`,
         `范围：${snapshot.plan.scope.join("；")}\n验收：${item.acceptance.join("；")}`,
         `产出：${item.outputs.join("；")}`,
-        `角色：${item.role}。不要提交、push、启动协作者或改变源仓库。`,
+        `能力：${item.capabilities.join(", ")}；证据要求：${JSON.stringify(item.evidence)}。不要提交、push、启动协作者或改变源仓库。`,
         execution.resume
           ? `这是续接会话的新执行尝试。以前路径不再可写；当前工作区仅为 ${workspace.path}，请先核对已有成果，不重复可能生效的操作。`
           : "",
-        isWritingRole(item.role)
-          ? "只在当前隔离工作区修改。"
+        isWritingWorkItem(item)
+          ? `只在当前隔离工作区修改；隔离要求为 ${item.isolation}。`
           : "只读调查/审查；允许沙箱内的只读文件检查命令，禁止写入、网络操作及提权执行。",
         `依赖结果：${dependencies.map((run) => `${run.workItemId}: ${run.summary ?? ""} (${run.revision ?? "无提交"})`).join("\n")}`,
         "完成时说明已做工作、验证证据及未解决问题；不要输出内部推理。",
@@ -548,7 +563,7 @@ export class CollaborationService {
       }
       const read = decision.risk === "read";
       const write = ["write", "Write", "edit", "Edit", "file_change"].includes(request.tool);
-      if (!read && !isWritingRole(item.role)) return false;
+      if (!read && !isWritingWorkItem(item)) return false;
       run.permission = {
         requestId: request.requestId,
         tool: request.tool,
@@ -652,8 +667,9 @@ export class CollaborationService {
             (item) => item.workItemId === run.workItemId,
           )!;
           if (
-            isWritingRole(item.role) &&
-            execution.snapshot.plan.authorizedActions.includes("local_commit")
+            isWritingWorkItem(item) &&
+            execution.snapshot.plan.authorizedActions.includes("local_commit") &&
+            hasCapability(item, "git:commit:local")
           ) {
             run.revision = await this.workspaces.deliver(
               run.workspace,
@@ -668,7 +684,9 @@ export class CollaborationService {
               if (remaining.conflict)
                 throw new NeedsUserError("后续整合仍有冲突，工作区保留，需继续处理");
             }
-          } else if (!isWritingRole(item.role)) {
+          } else if (isWritingWorkItem(item)) {
+            throw new NeedsUserError("工作项未授权本地提交，成果工作区已保留，需重新批准");
+          } else if (!isWritingWorkItem(item)) {
             const revision = await this.workspaces.revision(run.workspace);
             if (revision !== run.baselineCommit)
               throw new NeedsUserError("只读工作区发生变化，不能作为审查证据");
@@ -705,7 +723,13 @@ export class CollaborationService {
       await execution.provider?.stop();
     } finally {
       this.#executions.delete(execution.run.runId);
-      if (execution.active) this.#active = Math.max(0, this.#active - 1);
+      if (execution.active) {
+        this.#active--;
+        const activeForWorkflow = (this.#activeByWorkflow.get(execution.run.workflowId) ?? 0) - 1;
+        if (activeForWorkflow <= 0) this.#activeByWorkflow.delete(execution.run.workflowId);
+        else this.#activeByWorkflow.set(execution.run.workflowId, activeForWorkflow);
+        execution.active = false;
+      }
       this.#drain();
     }
   }
@@ -803,7 +827,7 @@ export class CollaborationService {
       !run?.workspace ||
       !run.revision ||
       !snapshot.plan.workItems.some(
-        (item) => item.workItemId === run.workItemId && item.role === "integration",
+        (item) => item.workItemId === run.workItemId && isIntegrationWorkItem(item),
       )
     )
       throw new Error("测试需使用当前已交付的整合工作区");

@@ -157,7 +157,7 @@ pub fn save_source(storage: &mut Storage, source: &Value) -> Result<(), String> 
 pub fn save_report(storage: &mut Storage, report: &Value) -> Result<(), String> {
     let task = report["taskId"].as_str().ok_or("missing report task")?;
     let sources = storage
-        .load_research_sources(task)
+        .load_research_report_sources(task)
         .map_err(|e| e.to_string())?;
     if report["summary"].as_str().is_none() || report["limitations"].as_array().is_none() {
         return Err("invalid report".into());
@@ -187,10 +187,19 @@ pub fn save_report(storage: &mut Storage, report: &Value) -> Result<(), String> 
                     })
             });
             if !found {
-                return Err("citation is not collected in this task".into());
+                return Err(
+                    "citation is not collected in this task or its earlier session turns".into(),
+                );
             }
         }
     }
+    // 立即汇报可能只使用同会话已有证据，没有本轮工具调用；有效报告仍须有
+    // 可归档的 TaskRun，不能为了通过外键而丢掉插话后的最终结论。
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    ensure_task(storage, task, now)?;
     storage
         .save_research_report(task, report)
         .map_err(|e| e.to_string())
@@ -439,6 +448,67 @@ mod tests {
         report["claims"][0]["citations"][0]["quoteId"] = json!("q1");
         save_report(&mut storage, &report).unwrap();
         assert!(storage.load_research_report("task_r").unwrap().is_some());
+    }
+
+    #[test]
+    fn follow_up_report_reuses_only_earlier_evidence_in_its_host_owned_session() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        storage.create_client_session("session_a", "A", 1).unwrap();
+        storage.create_client_session("session_b", "B", 1).unwrap();
+        for (request, task, session, time) in [
+            ("req_a", "task_a", "session_a", 2),
+            ("req_follow", "task_follow", "session_a", 3),
+            ("req_b", "task_b", "session_b", 4),
+        ] {
+            storage
+                .save_conversation(request, &json!({"sessionId":session,"taskId":task}), time)
+                .unwrap();
+        }
+        let source = json!({"sourceId":"s1","taskId":"task_a","originalUrl":"https://a.test","finalUrl":"https://a.test","title":"A","collectedAtMs":2,"status":"collected","artifactId":"a1","digest":format!("sha256:{:x}", Sha256::digest("证据".as_bytes())),"text":"证据","quotes":[{"quoteId":"q1","start":0,"end":2,"text":"证据"}]});
+        save_source(&mut storage, &source).unwrap();
+        let mut report = json!({"taskId":"task_follow","summary":"已查到","claims":[{"text":"结论","citations":[{"sourceId":"s1","quoteId":"q1"}]}],"limitations":[]});
+        save_report(&mut storage, &report).unwrap();
+        assert!(storage
+            .load_research_report("task_follow")
+            .unwrap()
+            .is_some());
+        assert!(
+            storage
+                .load_research_archive()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["id"] == "task_follow"
+                    && entry["sources"][0]["taskId"] == "task_a")
+        );
+        report["taskId"] = json!("task_b");
+        assert!(save_report(&mut storage, &report).is_err());
+        report["taskId"] = json!("task_unbound");
+        assert!(save_report(&mut storage, &report).is_err());
+        report["taskId"] = json!("task_follow");
+        report["claims"][0]["citations"][0]["quoteId"] = json!("fake");
+        assert!(save_report(&mut storage, &report).is_err());
+        storage
+            .save_conversation(
+                "req_future",
+                &json!({"sessionId":"session_a","taskId":"task_future"}),
+                5,
+            )
+            .unwrap();
+        // 旧轮次迟到保存不能把新轮次变成它的“较早证据”。
+        storage
+            .save_conversation(
+                "req_follow",
+                &json!({"sessionId":"session_a","taskId":"task_follow"}),
+                6,
+            )
+            .unwrap();
+        let mut future_source = source;
+        future_source["taskId"] = json!("task_future");
+        future_source["sourceId"] = json!("s_future");
+        future_source["artifactId"] = json!("a_future");
+        save_source(&mut storage, &future_source).unwrap();
+        report["claims"][0]["citations"][0] = json!({"sourceId":"s_future","quoteId":"q1"});
+        assert!(save_report(&mut storage, &report).is_err());
     }
 
     #[test]

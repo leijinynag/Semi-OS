@@ -23,6 +23,14 @@ pub fn validate_text(text: &str) -> Result<(), String> {
 }
 
 impl TextInputRelay {
+    pub fn ensure_ready(&self) -> Result<(), String> {
+        if self.ready {
+            Ok(())
+        } else {
+            Err("助手尚未就绪，请稍后再试".into())
+        }
+    }
+
     pub fn ready(&mut self) {
         self.ready = true;
     }

@@ -192,7 +192,7 @@ Input: the user asks Semi-OS to research a topic or question.
 
 Expected behavior:
 
-1. begin with a meaningful stage prompt when execution starts, without a fixed acknowledgement;
+1. display execution progress inline in the conversation, without routine spoken stage prompts;
 2. search multiple relevant websites using the browser tool set;
 3. record source URLs, extracted facts and failed or blocked sources;
 4. synthesize the findings, distinguish facts from uncertainty and cite the
@@ -255,7 +255,7 @@ proven reliable.
 - memory retrieval alone does not count as task complexity;
 - task progress is derived from domain events and receipts, not parsed from
   assistant prose;
-- every execution scenario has meaningful spoken progress and a final voice
+- every execution scenario has visible progress, spoken confirmations/errors when needed and a final voice
   response;
 - the client allows manual personality editing and manual user-preference
   entry;
@@ -494,6 +494,19 @@ Host 回执确认请求已交给 Worker 传输后才清空未编辑的草稿；�
 不是发送成功的前提。失败保留草稿，接收结果未知时提示核对、不自动重发。
 消息上限跨 JS/Rust 按 64000 UTF-16 单元统一校验；历史按时间正序展示，
 靠近底部时跟随新内容，向上阅读时不强行滚动。
+
+调研报告的引用默认限于当前 TaskRun；插话生成新任务时，可使用 Host 已
+保存的同一客户端会话较早轮次证据。引用必须匹配已采集 sourceId/quoteId，
+跨会话与未来轮次不可复用，Artifact 继续按原任务读取。确认通知与授权决定
+各用独立稳定 RPC 身份，避免出站去重账本吞掉最终审批。浏览器动作整体有界，
+超时关闭页面并记录失败；正文原子快照不因广告等页外变化而被错误拒绝。
+
+对话主区域按 `taskId` 展示执行过程，采用 BeUI Registry 的 AgentActivity、
+ToolResult、ToolApproval 与 Citations。Host 先持久化再发送刷新通知，UI 从
+TaskRun、事件、回执和来源构建只读投影，不解析模型散文、不执行任意 JSX。
+`callId` 用幂等键关联 `attemptId`，不按工具名猜测。批准只表示决定送达，
+不是工具成功；无回执的已暂停调用显示待核对，失败来源保留原因。普通搜索、
+阅读等进度不再 TTS 播报，确认、错误反馈与最终答案保留原语音路径。
 
 客户端 Session 不等同于单轮输入或 TaskRun。Host 的 SQLite 保存会话列表、
 空会话及唯一 active 选择；普通文字/语音只追加轮次，手动新建才增加会话。

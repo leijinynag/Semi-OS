@@ -70,7 +70,7 @@ This file records confirmed product decisions separately from proposals.
 | Native automation           | macOS first; semantic accessibility lookup, screenshot/vision fallback                                                                                                    |
 | Action granularity          | Fresh observation, one atomic action, structured verification                                                                                                             |
 | Voice trigger               | Push-to-talk in MVP; reserve an automatic wake/VAD branch                                                                                                                 |
-| Voice response              | No universal acknowledgement; meaningful stage prompts and the first complete answer sentence are spoken                                                                  |
+| Voice response              | No universal acknowledgement or routine stage narration; inline execution UI, spoken confirmations/errors and final answers                                               |
 | Speech providers            | Cloud-first behind STT/TTS provider interfaces; local providers can replace them                                                                                          |
 | Interruption                | Pause/abort current work and inject steering into the continued Pi session                                                                                                |
 | Floating UI                 | Visible only while hotkey is held, task is running, or confirmation is required                                                                                           |
@@ -277,6 +277,19 @@ This file records confirmed product decisions separately from proposals.
   健康检查只生成一次无活动事件并通知主 Pi，不以轮询模型或自动重启解决卡住。
   Provider 失败仅映射脱敏类别，不转发原始 errors/result 或认定所有失败都是认证问题。
 - 4A 已推送；4B 按八个交付点逐块实现、记录验收，未经用户 review 批准不提交。
+
+## 2026-10-23：调研等待、审批回传与插话证据
+
+- 同一授权的确认通知与最终决定使用不同、可稳定重试的 RPC requestId；
+  operationId 继续关联原始授权，不改变 Pi 原生工具的等待与继续机制。
+- 浏览器启动和单动作分别有界；动作预算覆盖导航、条件等待与页面读取。
+  超时关闭受控页面，采集失败保留来源原因，不在后台继续操作。
+- 正文与页面身份原子读取，广告或时钟变化仍使动作引用过期，但不否定
+  已采集的正文。简单查询先满足问题，不将 3–5 个来源作为硬性数量门槛。
+- 插话后的报告可引用 Host 已记录的同一会话较早轮次证据；不得跨会话、
+  引用未来轮次或伪造片段。来源及 Artifact 保留原任务身份。
+- 用户明确要求立即汇报时，Pi 应优先使用已有证据并说明限制；不新增
+  分类模型、关键词路由或第二套 Agent Loop。上述行为需回归与原生验收。
 
 ## Explicitly deferred
 

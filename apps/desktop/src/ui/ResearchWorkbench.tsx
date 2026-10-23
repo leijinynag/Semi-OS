@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { motion } from "motion/react";
 import {
   AgentIcon,
   CollapseLeftIcon,
@@ -57,6 +58,98 @@ interface WorkerMessage {
   direction: string;
   kind: string;
   payload: Record<string, unknown>;
+}
+
+function statusFor(
+  workflow: ReturnType<typeof useWorkflows>["workflows"][number] | undefined,
+  confirmation: boolean,
+): { label: string; tone: "idle" | "active" | "attention" | "complete"; detail: string } {
+  if (confirmation)
+    return { label: "需要确认", tone: "attention", detail: "有一个外部操作等待你的决定" };
+  if (!workflow) return { label: "准备就绪", tone: "idle", detail: "等待新的任务" };
+  if (workflow.status === "awaiting_approval")
+    return { label: "待批准", tone: "attention", detail: "计划已经生成，等待你的确认" };
+  if (workflow.background?.coordinator.executionStatus === "needs_user")
+    return {
+      label: "待处理",
+      tone: "attention",
+      detail: workflow.background.coordinator.reason ?? "需要你的输入",
+    };
+  if (workflow.runs.some((run) => run.status === "running"))
+    return {
+      label: "执行中",
+      tone: "active",
+      detail: `${workflow.runs.filter((run) => run.status === "running").length} 个执行单元正在工作`,
+    };
+  if (workflow.runs.some((run) => run.status === "failed"))
+    return { label: "有失败", tone: "attention", detail: "部分执行单元需要检查" };
+  if (
+    workflow.status === "cancelled" ||
+    workflow.status === "rejected" ||
+    workflow.status === "paused"
+  )
+    return { label: "已暂停", tone: "idle", detail: "任务没有继续执行" };
+  if (
+    workflow.status === "approved" &&
+    workflow.runs.length > 0 &&
+    workflow.runs.every((run) => ["completed", "cancelled"].includes(run.status))
+  )
+    return { label: "已完成", tone: "complete", detail: "任务执行结果已经返回" };
+  return { label: "准备中", tone: "active", detail: "正在准备任务上下文" };
+}
+
+/** Dynamic Island 只消费 Host 的结构化快照，视觉状态不参与任务语义判断。 */
+function AgentStatusIsland({
+  workflow,
+  current,
+  confirmation,
+  onOpenDetails,
+}: {
+  workflow: ReturnType<typeof useWorkflows>["workflows"][number] | undefined;
+  current: ResearchTask | undefined;
+  confirmation: boolean;
+  onOpenDetails: () => void;
+}) {
+  const status = statusFor(workflow, confirmation);
+  const title = workflow?.plan.title ?? current?.label ?? "Semi-OS";
+  const sourceCount = current?.sources.length ?? 0;
+  const detail =
+    status.tone === "active" && current?.steps.at(-1) ? current.steps.at(-1) : status.detail;
+
+  return (
+    <motion.button
+      type="button"
+      className={`status-island is-${status.tone}`}
+      layout
+      transition={{ layout: { type: "spring", stiffness: 420, damping: 34 } }}
+      onClick={onOpenDetails}
+      aria-label={`打开任务详情：${title}`}
+    >
+      <span className="status-island-mark" aria-hidden="true">
+        <motion.span
+          className="status-island-core"
+          animate={
+            status.tone === "active"
+              ? { scale: [1, 1.22, 1], opacity: [0.72, 1, 0.72] }
+              : { scale: 1, opacity: 0.9 }
+          }
+          transition={
+            status.tone === "active"
+              ? { duration: 1.6, repeat: Infinity, ease: "easeInOut" }
+              : { duration: 0.2 }
+          }
+        />
+      </span>
+      <span className="status-island-copy">
+        <span className="status-island-title">{title}</span>
+        <span className="status-island-detail">{detail}</span>
+      </span>
+      <span className="status-island-meta">
+        <span className="status-island-label">{status.label}</span>
+        {sourceCount > 0 && <span className="status-island-count">{sourceCount} 来源</span>}
+      </span>
+    </motion.button>
+  );
 }
 
 /** 工作台展示 Host 已持久化的来源和结构化事件，不把模型散文解析成成功状态。 */
@@ -266,17 +359,35 @@ export function ResearchWorkbench() {
             steps: [...task.steps, String(payload.label)],
           }));
         } else if (message.kind === "research.report" && typeof payload.taskId === "string") {
-          update(payload.taskId, (task) => ({
+          const taskId = payload.taskId;
+          update(taskId, (task) => ({
             ...task,
             label: "报告已保存",
             report: payload as unknown as Report,
           }));
+          // 插话报告可复用同会话旧轮次证据，按 Host 校验后的集合补齐来源；
+          // 不修改当前选择，迟到查询只更新其所属任务且不覆盖实时来源。
+          void invoke<Source[]>("get_research_sources", { taskId })
+            .then((sources) =>
+              update(taskId, (task) => ({
+                ...task,
+                sources: [
+                  ...sources.filter(
+                    (source) => !task.sources.some((item) => item.sourceId === source.sourceId),
+                  ),
+                  ...task.sources,
+                ],
+              })),
+            )
+            .catch(() => {
+              if (active) setError("报告来源读取失败，请重新打开客户端重试");
+            });
         } else if (message.kind === "research.receipt" && typeof payload.taskId === "string") {
           update(payload.taskId, (task) => ({
             ...task,
             steps: [
               ...task.steps,
-              `${String(payload.toolName)} · ${String(payload.status)} · ${String(payload.outputSummary)}`,
+              `${String(payload.toolName)} · ${String(payload.status)}${typeof payload.outputSummary === "string" ? ` · ${payload.outputSummary}` : ""}`,
             ],
           }));
         }
@@ -375,16 +486,6 @@ export function ResearchWorkbench() {
         setArtifact({ title: source.title, text: text ?? "正文不可用" });
     } catch {
       if (generation === selectionGeneration.current) setError("正文读取失败");
-    }
-  }
-  async function confirmAction(approved: boolean) {
-    if (!confirmation) return;
-    const operationId = confirmation.operationId;
-    try {
-      await invoke("confirm_research_action", { operationId, approved });
-      setConfirmations((items) => items.filter((item) => item.operationId !== operationId));
-    } catch {
-      setError("确认已失效");
     }
   }
   function resizePanel(event: ReactPointerEvent<HTMLDivElement>) {
@@ -507,35 +608,17 @@ export function ResearchWorkbench() {
             </p>
           )}
           <ConversationPanel sessionId={activeSessionId} onTaskChange={selectConversationTask} />
-          {confirmation && (
-            <section className="client-confirmation" role="alertdialog" aria-label="确认外部操作">
-              <div>
-                <strong>{confirmation.value.toolName}</strong>
-                <p>此操作可能影响外部应用。</p>
-              </div>
-              <div className="client-confirmation-actions">
-                <button className="client-subtle-button" onClick={() => void confirmAction(false)}>
-                  拒绝
-                </button>
-                <button className="client-dark-button" onClick={() => void confirmAction(true)}>
-                  确认
-                </button>
-              </div>
-            </section>
-          )}
         </article>
         <aside className="client-context" aria-label="上下文">
           <header className="client-context-head">
-            <span>{workflow?.plan.title ?? (current ? current.label : "上下文")}</span>
+            <span className="context-eyebrow">任务状态</span>
           </header>
-          {current?.steps.length ? <p className="context-preview">{current.steps.at(-1)}</p> : null}
-          {workflow && (
-            <p className="context-preview">
-              {workflow.status === "awaiting_approval"
-                ? "计划待批准"
-                : `${workflow.runs.filter((run) => run.status === "running").length} 个活跃工位`}
-            </p>
-          )}
+          <AgentStatusIsland
+            workflow={workflow}
+            current={current}
+            confirmation={Boolean(confirmation)}
+            onOpenDetails={() => setDetailsOpen(true)}
+          />
           {workflowNotice && (
             <div role="status" className="context-preview">
               <button
@@ -575,19 +658,26 @@ export function ResearchWorkbench() {
             aria-controls="research-details"
             onClick={() => setDetailsOpen((value) => !value)}
           >
-            更多
+            查看详情
           </button>
         </aside>
         <footer className="command-composer research-composer chat-composer">
-          <TextComposer key={activeSessionId} disabled={changingSession || !activeSessionId} />
+          <TextComposer
+            key={activeSessionId}
+            disabled={changingSession || !activeSessionId}
+            voiceEnabled={voiceSettings?.enabled}
+          />
         </footer>
       </section>
       {/* 抽屉占据真实布局空间，展开时推开工作台，不遮挡对话与确认入口。 */}
-      <aside
+      <motion.aside
         id="research-details"
         className="client-details-drawer"
         aria-label="完整资料"
         inert={!detailsOpen}
+        initial={false}
+        animate={{ x: detailsOpen ? 0 : "100%", opacity: detailsOpen ? 1 : 0.65 }}
+        transition={{ type: "spring", stiffness: 360, damping: 34, mass: 0.8 }}
       >
         <header className="client-details-head">
           <strong>资料</strong>
@@ -694,7 +784,7 @@ export function ResearchWorkbench() {
             </section>
           )}
         </div>
-      </aside>
+      </motion.aside>
       <button
         className="client-icon-button client-mobile-settings"
         aria-label="设置"

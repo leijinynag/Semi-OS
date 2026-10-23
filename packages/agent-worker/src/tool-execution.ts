@@ -7,6 +7,7 @@ import type {
   ToolExecutionReceipt,
   ToolExecutionResult,
 } from "@semi-os/tool-sdk";
+import { normalizeToolContract } from "@semi-os/tool-sdk";
 
 export interface ToolAttemptIdentity {
   taskId: string;
@@ -46,9 +47,7 @@ export class ToolExecutionError extends Error {
 }
 
 export function digestToolInput(input: JsonObject): string {
-  return `sha256:${createHash("sha256")
-    .update(JSON.stringify(input))
-    .digest("hex")}`;
+  return `sha256:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
 }
 
 function errorMessage(error: unknown): string {
@@ -71,10 +70,7 @@ function terminalReceipt(
   input: ExecuteProductToolInput,
   context: ToolExecutionContext,
   finishedAtMs: number,
-  fields: Pick<
-    ToolExecutionReceipt,
-    "status" | "resultType" | "outputSummary" | "verification"
-  >,
+  fields: Pick<ToolExecutionReceipt, "status" | "resultType" | "outputSummary" | "verification">,
 ): ToolExecutionReceipt {
   return {
     ...input.identity,
@@ -110,15 +106,24 @@ export async function executeProductTool(
     startedAtMs: input.now(),
   };
 
-  if (
-    input.policyDecision !== "auto" &&
-    input.policyDecision !== "approved"
-  ) {
+  if (input.policyDecision !== "auto" && input.policyDecision !== "approved") {
     const needsUser = input.policyDecision === "confirmation_required";
     const message = `tool execution is not authorized: ${input.tool.name} (${input.policyDecision})`;
     const receipt = terminalReceipt(input, context, input.now(), {
       status: needsUser ? "needs_user" : "failed",
       resultType: needsUser ? "needs_user" : "failure",
+      outputSummary: message,
+      verification: errorVerification("policy", message),
+    });
+    throw new ToolExecutionError(message, receipt);
+  }
+
+  const contract = normalizeToolContract(input.tool);
+  if (contract.reversibility === "irreversible" && input.policyDecision !== "approved") {
+    const message = `irreversible tool requires Host approval: ${input.tool.name}`;
+    const receipt = terminalReceipt(input, context, input.now(), {
+      status: "needs_user",
+      resultType: "needs_user",
       outputSummary: message,
       verification: errorVerification("policy", message),
     });
@@ -132,10 +137,16 @@ export async function executeProductTool(
     await input.beforeExecute?.(input.signal);
     input.signal.throwIfAborted();
   } catch (error) {
-    throw new ToolExecutionError(errorMessage(error), terminalReceipt(input, context, input.now(), {
-      status: "failed", resultType: "failure", outputSummary: errorMessage(error),
-      verification: errorVerification("policy", error),
-    }), error);
+    throw new ToolExecutionError(
+      errorMessage(error),
+      terminalReceipt(input, context, input.now(), {
+        status: "failed",
+        resultType: "failure",
+        outputSummary: errorMessage(error),
+        verification: errorVerification("policy", error),
+      }),
+      error,
+    );
   }
   try {
     result = await input.tool.execute(input.input, context);
@@ -150,12 +161,39 @@ export async function executeProductTool(
     throw new ToolExecutionError(errorMessage(error), receipt, error);
   }
 
+  // 旧工具没有显式 contract 时，normalizeToolContract 仍会按风险推导出
+  // “变更必须验证”。必须使用规范化结果，否则迁移期的旧工具会绕过这个门禁。
+  if (
+    contract.verification.required &&
+    contract.verification.method === "none" &&
+    contract.mutation.kind !== "none"
+  ) {
+    const message = `tool contract does not define verification: ${input.tool.name}`;
+    const receipt = {
+      ...terminalReceipt(input, context, input.now(), {
+        status: "unknown",
+        resultType: "unknown",
+        outputSummary: result.outputSummary,
+        verification: errorVerification("verify", message),
+      }),
+      artifacts: result.artifacts ?? [],
+    };
+    throw new ToolExecutionError(message, receipt);
+  }
+
   try {
     const verification = await input.tool.verify(input.input, result, context);
     const succeeded = verification.status === "passed";
     const receipt = {
       ...terminalReceipt(input, context, input.now(), {
-        status: result.resultType === "failure" ? "failed" : result.resultType === "needs_user" ? "needs_user" : succeeded ? "succeeded" : "unknown",
+        status:
+          result.resultType === "failure"
+            ? "failed"
+            : result.resultType === "needs_user"
+              ? "needs_user"
+              : succeeded
+                ? "succeeded"
+                : "unknown",
         resultType: result.resultType ?? (succeeded ? "success" : "unknown"),
         outputSummary: result.outputSummary,
         verification,

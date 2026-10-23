@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, resolve, sep } from "node:path";
 import {
   createAgentSession,
@@ -14,16 +15,8 @@ import {
   type ToolDefinition as PiToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai/compat";
-import type {
-  PolicyDecision,
-  ToolRiskLevel,
-  VerificationRecord,
-} from "@semi-os/shared";
-import type {
-  JsonObject,
-  ToolDefinition,
-  ToolExecutionReceipt,
-} from "@semi-os/tool-sdk";
+import type { PolicyDecision, ToolRiskLevel, VerificationRecord } from "@semi-os/shared";
+import type { JsonObject, ToolDefinition, ToolExecutionReceipt } from "@semi-os/tool-sdk";
 import { Type } from "typebox";
 import {
   AgentRuntimeStateError,
@@ -89,12 +82,8 @@ export interface PiAgentRuntimeOptions {
   model?: Model<any>;
   baseToolNames?: readonly string[];
   sessionDir?: string;
-  createSessionManager?: (
-    input: CreatePiSessionManagerInput,
-  ) => SessionManager;
-  createResourceLoader?: (
-    input: CreatePiResourceLoaderInput,
-  ) => ResourceLoader;
+  createSessionManager?: (input: CreatePiSessionManagerInput) => SessionManager;
+  createResourceLoader?: (input: CreatePiResourceLoaderInput) => ResourceLoader;
   resolvePolicyDecision?: (
     tool: ToolPolicySubject,
     input: JsonObject,
@@ -265,11 +254,7 @@ async function expectedNativeFileContent(
       }
       const oldText = "oldText" in edit ? edit.oldText : undefined;
       const newText = "newText" in edit ? edit.newText : undefined;
-      if (
-        typeof oldText !== "string" ||
-        oldText.length === 0 ||
-        typeof newText !== "string"
-      ) {
+      if (typeof oldText !== "string" || oldText.length === 0 || typeof newText !== "string") {
         return undefined;
       }
       const start = original.indexOf(oldText);
@@ -310,9 +295,7 @@ function checkpointSessionFile(checkpoint?: AgentCheckpoint): string | undefined
   }
   const sessionFile = checkpoint.data.runtimeSessionFile;
   if (typeof sessionFile !== "string" || sessionFile.length === 0) {
-    throw new AgentRuntimeStateError(
-      "Pi checkpoint is missing a persisted runtime session file",
-    );
+    throw new AgentRuntimeStateError("Pi checkpoint is missing a persisted runtime session file");
   }
   return sessionFile;
 }
@@ -332,15 +315,9 @@ export class PiAgentRuntime extends EventedAgentRuntime {
   readonly #model?: Model<any>;
   readonly #baseToolNames: readonly string[];
   readonly #sessionDir?: string;
-  readonly #createSessionManager: (
-    input: CreatePiSessionManagerInput,
-  ) => SessionManager;
-  readonly #createResourceLoader: (
-    input: CreatePiResourceLoaderInput,
-  ) => ResourceLoader;
-  readonly #resolvePolicyDecision: NonNullable<
-    PiAgentRuntimeOptions["resolvePolicyDecision"]
-  >;
+  readonly #createSessionManager: (input: CreatePiSessionManagerInput) => SessionManager;
+  readonly #createResourceLoader: (input: CreatePiResourceLoaderInput) => ResourceLoader;
+  readonly #resolvePolicyDecision: NonNullable<PiAgentRuntimeOptions["resolvePolicyDecision"]>;
   #session?: AgentSession;
   #sessionManager?: SessionManager;
   #unsubscribe?: () => void;
@@ -380,12 +357,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     this.#now = options.now ?? Date.now;
     this.#createSession = options.createSession ?? createAgentSession;
     this.#model = options.model;
-    this.#baseToolNames = options.baseToolNames ?? [
-      "read",
-      "bash",
-      "edit",
-      "write",
-    ];
+    this.#baseToolNames = options.baseToolNames ?? ["read", "bash", "edit", "write"];
     this.#sessionDir = options.sessionDir;
     this.#createSessionManager =
       options.createSessionManager ??
@@ -406,24 +378,30 @@ export class PiAgentRuntime extends EventedAgentRuntime {
           extensionFactories: [input.extension],
           additionalSkillPaths: [...(options.additionalSkillPaths ?? [])],
           systemPrompt: options.systemPrompt,
-          ...(options.isolatedResources ? {
-            // 资源发现不读取个人 packages 配置；模型认证由官方模型运行时独立读取。
-            settingsManager: SettingsManager.inMemory(),
-            noContextFiles: true,
-            noExtensions: true,
-            noSkills: true,
-            noPromptTemplates: true,
-            noThemes: true,
-            // 显式空数组阻止 SDK 自动发现 APPEND_SYSTEM.md。
-            appendSystemPrompt: [],
-            // 包资源也可能带 skills/prompts，最后按显式内置路径收口。
-            skillsOverride: (result) => ({ ...result, skills: result.skills.filter((skill) =>
-              (options.additionalSkillPaths ?? []).some((path) => {
-                const root = resolve(path);
-                return skill.filePath === root || skill.filePath.startsWith(root + sep);
-              })) }),
-            promptsOverride: () => ({ prompts: [], diagnostics: [] }),
-          } : {}),
+          ...(options.isolatedResources
+            ? {
+                // 资源发现不读取个人 packages 配置；模型认证由官方模型运行时独立读取。
+                settingsManager: SettingsManager.inMemory(),
+                noContextFiles: true,
+                noExtensions: true,
+                noSkills: true,
+                noPromptTemplates: true,
+                noThemes: true,
+                // 显式空数组阻止 SDK 自动发现 APPEND_SYSTEM.md。
+                appendSystemPrompt: [],
+                // 包资源也可能带 skills/prompts，最后按显式内置路径收口。
+                skillsOverride: (result) => ({
+                  ...result,
+                  skills: result.skills.filter((skill) =>
+                    (options.additionalSkillPaths ?? []).some((path) => {
+                      const root = resolve(path);
+                      return skill.filePath === root || skill.filePath.startsWith(root + sep);
+                    }),
+                  ),
+                }),
+                promptsOverride: () => ({ prompts: [], diagnostics: [] }),
+              }
+            : {}),
         }));
     this.#resolvePolicyDecision =
       options.resolvePolicyDecision ??
@@ -437,10 +415,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     if (this.#session) {
       throw new AgentRuntimeStateError("runtime session has already started");
     }
-    if (
-      input.checkpoint &&
-      input.checkpoint.sessionId !== input.sessionId
-    ) {
+    if (input.checkpoint && input.checkpoint.sessionId !== input.sessionId) {
       throw new AgentRuntimeStateError(
         "checkpoint product session does not match requested session",
       );
@@ -464,10 +439,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       model: this.#model,
       customTools,
       // tools 决定 Session 初始可见集合；自定义工具仍需先通过 customTools 注册。
-      tools: [
-        ...this.#baseToolNames,
-        ...input.tools.map((tool) => tool.name),
-      ],
+      tools: [...this.#baseToolNames, ...input.tools.map((tool) => tool.name)],
       resourceLoader,
       sessionManager,
     });
@@ -552,10 +524,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     }
     // 动态注入只管理 Semi-OS 自定义工具；Pi 原生文件/终端工具属于 Runtime
     // 基线能力，不能因一次 Skill 或权限刷新被意外清空。
-    session.setActiveToolsByName([
-      ...this.#baseToolNames,
-      ...tools.map((tool) => tool.name),
-    ]);
+    session.setActiveToolsByName([...this.#baseToolNames, ...tools.map((tool) => tool.name)]);
   }
 
   async checkpoint(): Promise<AgentCheckpoint> {
@@ -618,21 +587,27 @@ export class PiAgentRuntime extends EventedAgentRuntime {
         if (!taskId) {
           throw new AgentRuntimeStateError("tool executed without an active task");
         }
-        const effectiveSignal = signal ? AbortSignal.any([signal, this.#operation.signal]) : this.#operation.signal;
+        const effectiveSignal = signal
+          ? AbortSignal.any([signal, this.#operation.signal])
+          : this.#operation.signal;
         let riskLevel = tool.riskLevel;
         // 观察失败时不能降级；仍进入执行器生成可审计的拒绝/失败回执。
-        try { riskLevel = await tool.resolveRisk?.(input, effectiveSignal) ?? tool.riskLevel; }
-        catch { /* 保守保留静态风险，取消由统一执行器生成动作前回执。 */ }
+        try {
+          riskLevel = (await tool.resolveRisk?.(input, effectiveSignal)) ?? tool.riskLevel;
+        } catch {
+          /* 保守保留静态风险，取消由统一执行器生成动作前回执。 */
+        }
         let policyDecision: PolicyDecision;
         try {
-          policyDecision = this.#uncertainTasks.has(taskId) && riskLevel !== "read"
-          ? "confirmation_required"
-          : await this.#resolvePolicyDecision(
-          { ...tool, riskLevel },
-          input,
-          taskId,
-          effectiveSignal,
-        );
+          policyDecision =
+            this.#uncertainTasks.has(taskId) && riskLevel !== "read"
+              ? "confirmation_required"
+              : await this.#resolvePolicyDecision(
+                  { ...tool, riskLevel },
+                  input,
+                  taskId,
+                  effectiveSignal,
+                );
         } catch {
           // Host 不可用或确认被取消时不能进入动作，仍需审计此次尝试。
           policyDecision = "rejected";
@@ -657,9 +632,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
           return {
             // 返回给 Pi 的 content 只供 Agent 继续推理；details 中的 receipt
             // 是结构化证据，不能被模型文本替代。
-            content: [
-              { type: "text", text: JSON.stringify(executed.result.output) },
-            ],
+            content: [{ type: "text", text: JSON.stringify(executed.result.output) }],
             details: { receipt: executed.receipt },
           };
         } catch (error) {
@@ -678,7 +651,9 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     const attemptNumber = ++this.#sequence;
     return {
       taskId,
-      attemptId: `attempt_pi_${attemptNumber}`,
+      // SQLite 的 attempt_id 全局唯一；序号只表示当前 Runtime 内的次序，
+      // 不能跨会话或 Worker 重启充当主键，否则新回执会覆盖历史工具记录。
+      attemptId: `attempt_pi_${randomUUID().replaceAll("-", "")}`,
       attemptNumber,
       // 同一 TaskRun 内以 Pi call ID 构造稳定幂等键，供 Host 去重和恢复对账。
       idempotencyKey: `${taskId}:${toolCallId}`,
@@ -724,14 +699,10 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       let policyDecision: PolicyDecision = "rejected";
       try {
         if (!this.#operation.signal.aborted) {
-          policyDecision = this.#uncertainTasks.has(taskId) && riskLevel !== "read"
-            ? "confirmation_required"
-            : await this.#resolvePolicyDecision(
-                subject,
-                input,
-                taskId,
-                this.#operation.signal,
-              );
+          policyDecision =
+            this.#uncertainTasks.has(taskId) && riskLevel !== "read"
+              ? "confirmation_required"
+              : await this.#resolvePolicyDecision(subject, input, taskId, this.#operation.signal);
         }
       } catch {
         policyDecision = "rejected";
@@ -794,14 +765,12 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       // read 无持久副作用，执行错误可确定为 failed；其余工具需要按不确定结果处理。
       const uncertain = attempt.riskLevel !== "read";
       const verification = event.isError
-        ? {
+        ? ({
             status: uncertain ? "inconclusive" : "failed",
             method: "pi_native_result",
             summary: "Pi native tool reported an execution error",
-            evidence: [
-              { kind: "pi_tool_result", reference: event.toolCallId },
-            ],
-          } satisfies VerificationRecord
+            evidence: [{ kind: "pi_tool_result", reference: event.toolCallId }],
+          } satisfies VerificationRecord)
         : await verifyNativeTool(
             this.#cwd ?? process.cwd(),
             event.toolName,
@@ -832,16 +801,11 @@ export class PiAgentRuntime extends EventedAgentRuntime {
    */
   #nativeReceipt(
     toolCallId: string,
-    fields: Pick<
-      ToolExecutionReceipt,
-      "status" | "resultType" | "outputSummary" | "verification"
-    >,
+    fields: Pick<ToolExecutionReceipt, "status" | "resultType" | "outputSummary" | "verification">,
   ): ToolExecutionReceipt {
     const attempt = this.#nativeAttempts.get(toolCallId);
     if (!attempt) {
-      throw new AgentRuntimeStateError(
-        `native tool attempt is unavailable: ${toolCallId}`,
-      );
+      throw new AgentRuntimeStateError(`native tool attempt is unavailable: ${toolCallId}`);
     }
     const finishedAtMs = this.#now();
     return {
@@ -886,13 +850,19 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       // Pi 会在自动重试之前发 agent_end；不能提前关闭语音事件入口。
       if (event.willRetry) return;
       const lastAssistant = event.messages.findLast((message) => message.role === "assistant");
-      if (lastAssistant?.role === "assistant" &&
-          (lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted")) {
+      if (
+        lastAssistant?.role === "assistant" &&
+        (lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted")
+      ) {
         // 主动暂停由 VoiceLoop 的代际门过滤；非预期中止必须显式报错，
         // 不能把空响应保存成成功。原始供应商错误不进入用户界面。
-        this.publish({ kind: "runtime.error", message: lastAssistant.stopReason === "aborted"
-          ? "模型回复被中止，请重试。"
-          : "模型请求失败，请重试。" });
+        this.publish({
+          kind: "runtime.error",
+          message:
+            lastAssistant.stopReason === "aborted"
+              ? "模型回复被中止，请重试。"
+              : "模型请求失败，请重试。",
+        });
         return;
       }
       // turn.completed 只表示 Pi 本轮结束，不代表所有工具均已验证成功。

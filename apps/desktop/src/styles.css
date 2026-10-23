@@ -1,6 +1,22 @@
 @import "tailwindcss";
 
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-destructive: #b53645;
+}
+
 :root {
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --muted: #f3f4f5;
+  --muted-foreground: #73747b;
+  --border: #e5e6ea;
+  --ring: #878b94;
   color: #1d1d1f;
   background: #fff;
   font-family: Inter, "SF Pro Display", "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -12,6 +28,67 @@
   --client-line: #e8e8eb;
   --client-white: #fff;
   --client-panel: #fafafa;
+}
+
+.turn-execution {
+  min-width: 0;
+  margin: 12px 0 20px;
+  padding-left: 12px;
+  border-left: 1px solid var(--client-line);
+}
+.execution-results {
+  display: grid;
+  gap: 2px;
+}
+.execution-receipt {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.execution-receipt dt {
+  color: var(--client-muted);
+}
+.execution-receipt dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.execution-approval {
+  margin: 12px 0;
+}
+/* 现有未分层的 button 继承规则会覆盖上游 Tailwind 文字色，仅在审批区修正对比度。 */
+.execution-approval .tool-approval-allow {
+  color: var(--background);
+}
+.execution-source-failure {
+  color: #95611d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.execution-source-body {
+  display: block;
+  max-width: 100%;
+  padding: 4px 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--client-muted);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.execution-artifact pre {
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.execution-preview-label {
+  font-size: 11px;
+  color: var(--client-muted);
 }
 
 * {
@@ -130,8 +207,12 @@ html[data-surface="assistant"] #root {
   display: flex;
   flex-direction: column;
   width: min(360px, 32vw);
-  background: #fff;
-  box-shadow: -6px 0 24px #00000008;
+  border-left: 1px solid rgb(20 20 24 / 8%);
+  background: rgb(255 255 255 / 86%);
+  box-shadow:
+    -18px 0 54px rgb(35 35 40 / 7%),
+    -1px 0 0 rgb(255 255 255 / 70%) inset;
+  backdrop-filter: blur(24px) saturate(125%);
   transform: translateX(100%);
   visibility: hidden;
   transition:
@@ -149,14 +230,36 @@ html[data-surface="assistant"] #root {
   align-items: center;
   justify-content: space-between;
   flex: 0 0 56px;
-  padding: 0 20px;
+  padding: 18px 20px;
   font-size: 14px;
+}
+
+.client-details-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.details-kicker,
+.context-eyebrow {
+  color: var(--client-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.client-details-head strong {
+  color: var(--client-ink);
+  font-size: 15px;
+  font-weight: 650;
 }
 
 .client-details-body {
   min-height: 0;
   overflow-y: auto;
   overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: #d7d7da transparent;
 }
 
 .client-details-body .client-artifact {
@@ -179,11 +282,12 @@ html[data-surface="assistant"] #root {
 
 .context-more {
   margin: auto 20px 16px;
-  padding: 6px 0;
+  padding: 8px 0;
   align-self: flex-start;
   color: var(--client-ink);
   background: transparent;
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -272,15 +376,18 @@ html[data-surface="assistant"] #root {
 .client-context {
   align-self: start;
   width: 320px;
-  height: 33%;
+  height: auto;
+  min-height: 184px;
   margin: 16px 16px 0;
   overflow: hidden;
-  border: 1px solid #eeeeef;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid rgb(35 35 40 / 8%);
+  border-radius: 18px;
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 96%), rgb(247 247 249 / 76%)), var(--client-white);
   box-shadow:
-    0 8px 28px #0000000a,
-    0 2px 6px #00000005;
+    0 18px 42px rgb(35 35 40 / 7%),
+    0 2px 8px rgb(35 35 40 / 4%);
+  backdrop-filter: blur(18px) saturate(120%);
 }
 
 .client-context-head > span {
@@ -782,6 +889,134 @@ html[data-surface="assistant"] #root {
 
 .client-context-head {
   flex: 0 0 auto;
+  height: auto;
+  padding: 18px 18px 8px;
+  justify-content: flex-start;
+}
+
+.status-island {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 28px);
+  min-height: 72px;
+  margin: 4px 14px 14px;
+  padding: 12px;
+  border: 1px solid rgb(35 35 40 / 8%);
+  border-radius: 15px;
+  color: var(--client-ink);
+  background: rgb(255 255 255 / 66%);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgb(35 35 40 / 5%);
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.status-island:hover {
+  border-color: rgb(35 35 40 / 14%);
+  background: rgb(255 255 255 / 90%);
+  box-shadow: 0 12px 26px rgb(35 35 40 / 8%);
+  transform: translateY(-1px);
+}
+
+.status-island:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.status-island:focus-visible {
+  outline: 2px solid #77777d;
+  outline-offset: 3px;
+}
+
+.status-island-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 10px;
+  background: #f0f0f2;
+}
+
+.status-island-core {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #8c8c92;
+  box-shadow: 0 0 0 5px rgb(140 140 146 / 13%);
+}
+
+.status-island.is-active .status-island-mark {
+  background: #f1f5ff;
+}
+
+.status-island.is-active .status-island-core {
+  background: #5478c7;
+  box-shadow: 0 0 0 5px rgb(84 120 199 / 15%);
+}
+
+.status-island.is-attention .status-island-mark {
+  background: #fff6e7;
+}
+
+.status-island.is-attention .status-island-core {
+  background: #c47b1f;
+  box-shadow: 0 0 0 5px rgb(196 123 31 / 14%);
+}
+
+.status-island.is-complete .status-island-mark {
+  background: #eef8f1;
+}
+
+.status-island.is-complete .status-island-core {
+  background: #478a61;
+  box-shadow: 0 0 0 5px rgb(71 138 97 / 14%);
+}
+
+.status-island-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.status-island-title,
+.status-island-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-island-title {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.status-island-detail {
+  color: var(--client-muted);
+  font-size: 11px;
+}
+
+.status-island-meta {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  color: var(--client-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.status-island-label {
+  color: var(--client-ink);
+  font-weight: 650;
+}
+
+.status-island-count {
+  color: var(--client-faint);
 }
 
 .context-section {
@@ -954,27 +1189,35 @@ html[data-surface="assistant"] #root {
   color: #a3a3a8;
 }
 
-.command-composer .text-send {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
+.composer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 20px;
   flex: 0 0 auto;
-  place-items: center;
-  padding: 0;
-  border-radius: 5px;
-  color: #fff;
-  background: #252529;
-  cursor: pointer;
 }
 
-.command-composer .text-send:hover {
-  background: #414146;
+/* 为原组件向左展开的胶囊预留空间，不能盖住输入文字。 */
+.composer-voice-slot {
+  width: 80px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
-.text-send:disabled {
-  cursor: default;
-  opacity: 0.4;
+.composer-controls button:focus-visible {
+  outline: 2px solid #5b85c4;
+  outline-offset: 5px;
+}
+
+@media (max-width: 650px) {
+  .text-composer-input {
+    flex-wrap: wrap;
+  }
+  .composer-controls {
+    width: 100%;
+  }
 }
 
 .voice-settings {

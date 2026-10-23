@@ -1,4 +1,4 @@
-use semi_os_protocol::{AuthorizedAction, ToolRiskLevel, WorkRole};
+use semi_os_protocol::{AuthorizedAction, ToolRiskLevel};
 use semi_os_storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -151,7 +151,7 @@ pub fn authorize_operation(
     storage
         .authorize_work_item(id, plan.version, &snapshot.digest, item)
         .map_err(|e| e.to_string())?;
-    let role = plan
+    let work_item = plan
         .work_items
         .iter()
         .find(|work| work.work_item_id == *item)
@@ -168,7 +168,7 @@ pub fn authorize_operation(
         let delegated = cfg!(target_os = "macos")
             && Path::new("/usr/bin/sandbox-exec").is_file()
             && input.get("confinement").and_then(Value::as_str) == Some("macos-seatbelt-v1")
-            && role.role == WorkRole::Integration
+            && work_item.is_integration(&plan.authorized_actions)
             && plan
                 .authorized_actions
                 .contains(&AuthorizedAction::WorkspaceWrite)
@@ -218,7 +218,7 @@ pub fn authorize_operation(
                 delegated: true,
             });
         }
-        if role.role.is_writing()
+        if work_item.is_writing(&plan.authorized_actions)
             && snapshot.status == "approved"
             && grant_matches
             && plan
@@ -294,6 +294,8 @@ mod tests {
 
     #[test]
     fn typed_policy_preserves_grant_scope_and_rejects_stale_operations() {
+        use semi_os_protocol::WorkRole;
+
         let directory = std::env::temp_dir().join(format!(
             "semi-typed-policy-{}-{}",
             std::process::id(),

@@ -204,6 +204,60 @@ fn register_text_input_controller(
 
 /// 文字经 Host 定向交给已有语音控制器；绝不在客户端创建播放器或 Pi 会话。
 #[tauri::command]
+fn control_voice_input(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    action: String,
+) -> Result<(), String> {
+    if window.label() != CLIENT_WINDOW || !matches!(action.as_str(), "start" | "stop" | "cancel") {
+        return Err("不允许的语音操作".into());
+    }
+    state
+        .text_input
+        .lock()
+        .map_err(|_| "relay unavailable")?
+        .ensure_ready()?;
+    if action == "start" {
+        if !state
+            .voice_settings
+            .lock()
+            .map_err(|_| "settings unavailable")?
+            .enabled
+        {
+            return Err("请先在设置中开启语音".into());
+        }
+        show_window(&app, ASSISTANT_WINDOW, false)?;
+        emit_assistant_visibility(&app, true);
+    }
+    app.emit_to(
+        ASSISTANT_WINDOW,
+        "host://voice-input",
+        json!({"action": action}),
+    )
+    .map_err(|_| "无法连接助手窗口".into())
+}
+
+/// 胶囊展示的是实际采集门控，而非模型状态；只有助手可以发布此状态。
+#[tauri::command]
+fn publish_voice_input_state(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    active: bool,
+) -> Result<(), String> {
+    if window.label() != ASSISTANT_WINDOW {
+        return Err("only assistant owns capture state".into());
+    }
+    app.emit_to(
+        CLIENT_WINDOW,
+        "host://voice-input-state",
+        json!({"active": active}),
+    )
+    .map_err(|_| "无法同步录音状态".into())
+}
+
+/// 文字经 Host 定向交给已有语音控制器；绝不在客户端创建播放器或 Pi 会话。
+#[tauri::command]
 async fn submit_text_message(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -761,6 +815,7 @@ fn send_evidence_ack(
 /// 确认只接受 Host 缓存的请求 ID；UI 不能换输入、替换摘要或批量授权。
 #[tauri::command]
 fn confirm_research_action(
+    app: tauri::AppHandle,
     state: State<'_, Arc<DesktopState>>,
     operation_id: String,
     approved: bool,
@@ -804,7 +859,49 @@ fn confirm_research_action(
             Err("用户拒绝此操作".into())
         }
     })();
-    send_evidence_ack(&state, &message, result)
+    let sent = send_evidence_ack(&state, &message, result);
+    // 决定已消费，无论传输是否成功都撤下旧按钮；不允许盲目重发授权。
+    let _ = app.emit("host://research-confirmation-expired", &operation_id);
+    sent
+}
+
+#[tauri::command]
+fn get_task_execution(
+    state: State<'_, Arc<DesktopState>>,
+    task_id: String,
+) -> Result<Value, String> {
+    let snapshot = state
+        .storage
+        .lock()
+        .map_err(|_| "storage unavailable")?
+        .as_ref()
+        .ok_or("storage unavailable")?
+        .load_execution_snapshot(&task_id)
+        .map_err(|error| error.to_string())?;
+    let mut value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+    // 仅返回当前仍有效的批准请求；重开窗口不能把历史授权当作待点击按钮。
+    let confirmations = state
+        .confirmations
+        .lock()
+        .map_err(|_| "confirmation unavailable")?;
+    value["approvals"] =
+        Value::Array(
+            confirmations
+                .values()
+                .filter_map(|message| {
+                    if let Envelope::Event { payload, .. } = message {
+                        (payload["value"]["taskId"] == task_id
+                            && payload["value"]["requestedAtMs"].as_i64().is_some_and(
+                                |requested| unix_time_ms().saturating_sub(requested) < 120_000,
+                            ))
+                        .then(|| payload.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        );
+    Ok(value)
 }
 
 #[tauri::command]
@@ -830,7 +927,7 @@ fn get_research_sources(
         .map_err(|_| "storage unavailable")?
         .as_ref()
         .ok_or("storage unavailable")?
-        .load_research_sources(&task_id)
+        .load_research_report_sources(&task_id)
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
@@ -1525,6 +1622,7 @@ fn main() {
             send_worker_request,
             get_research_sources,
             get_research_archive,
+            get_task_execution,
             get_research_artifact,
             get_research_report,
             get_workflows,
@@ -1550,6 +1648,8 @@ fn main() {
             set_voice_settings,
             get_agent_workspace,
             register_text_input_controller,
+            control_voice_input,
+            publish_voice_input_state,
             submit_text_message,
             acknowledge_text_message
         ])

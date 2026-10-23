@@ -114,6 +114,9 @@ Keep ownership explicit:
   branded states. Icon-only controls need accessible labels and tooltips.
 - Core assistant visuals such as particles, waveforms and the central orb are
   product-owned effects, not icon-library assets.
+- 用户指定的 React Bits 输入控件保留提供的 JavaScript/CSS 源码与依赖，
+  位于 `ui/react-bits/`；允许其内部使用原生 Hugeicons，不扩散到业务组件。
+  业务调用提供 `.d.ts` 类型边界；语音控件不得创建第二个采集器。
 - Keep the desktop assistant and client as separate surfaces with shared
   domain state, not duplicated business logic.
 - UI consumes structured events and snapshots. It must not parse assistant

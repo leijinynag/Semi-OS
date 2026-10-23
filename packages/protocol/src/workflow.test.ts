@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  isIntegrationWorkItem,
+  isWritingWorkItem,
   parseAgentRun,
   parseWorkflowPlan,
   parseWorkflowApplication,
@@ -48,6 +50,39 @@ test("normalizes a plan and preserves provider/role separation", () => {
     topologicalWorkItems(parsed).map((item) => item.workItemId),
     ["implement", "review"],
   );
+  const implementation = parsed.workItems.find((item) => item.workItemId === "implement");
+  assert.ok(implementation);
+  assert.equal(isWritingWorkItem(implementation), true);
+  assert.equal(implementation.isolation, "isolated_worktree");
+  assert.deepEqual(implementation.capabilities, [
+    "read:repo",
+    "read:files",
+    "write:workspace:isolated",
+  ]);
+  const review = parsed.workItems.find((item) => item.workItemId === "review")!;
+  assert.deepEqual(review.evidence, {
+    revision: true,
+    tests: false,
+    independentReview: true,
+  });
+});
+test("explicitly disabled evidence does not inherit legacy review defaults", () => {
+  const raw = plan();
+  const parsed = parseWorkflowPlan({
+    ...raw,
+    workItems: [
+      raw.workItems[0],
+      {
+        ...raw.workItems[1],
+        evidence: { revision: false, tests: false, independentReview: false },
+      },
+    ],
+  });
+  assert.deepEqual(parsed.workItems[1]!.evidence, {
+    revision: false,
+    tests: false,
+    independentReview: false,
+  });
 });
 test("rejects cycles, unknown/duplicate identities and missing authorization", () => {
   const cyclic = plan();
@@ -80,6 +115,108 @@ test("shares the Rust plan fixture and rejects embedded approval", () => {
   );
   assert.equal(parseWorkflowPlan(fixture).workItems.length, 2);
   assert.throws(() => parseWorkflowPlan({ ...fixture, approved: true }), /unexpected/);
+});
+test("accepts explicit capabilities, evidence and execution budget", () => {
+  const explicit = {
+    ...plan(),
+    authorizedActions: ["read", "workspace_write", "local_commit"],
+    authorizedCapabilities: [
+      "read:repo",
+      "read:files",
+      "read:evidence",
+      "write:workspace:isolated",
+      "run:test",
+      "git:commit:local",
+    ],
+    executionBudget: {
+      maxParallelRuns: 4,
+      maxReworkRounds: 5,
+      maxNoProgressTurns: 6,
+    },
+    workItems: [
+      {
+        ...plan().workItems[0],
+        capabilities: ["read:repo", "read:files", "write:workspace:isolated"],
+        isolation: "isolated_worktree",
+        evidence: { revision: true, tests: true, independentReview: false },
+      },
+      {
+        ...plan().workItems[1],
+        role: "integration",
+        capabilities: ["read:repo", "read:files", "read:evidence", "run:test", "git:commit:local"],
+        isolation: "none",
+        evidence: { revision: true, tests: true, independentReview: true },
+      },
+    ],
+  };
+  const parsed = parseWorkflowPlan(explicit);
+  assert.deepEqual(parsed.executionBudget, {
+    maxParallelRuns: 4,
+    maxReworkRounds: 5,
+    maxNoProgressTurns: 6,
+  });
+  assert.equal(isIntegrationWorkItem(parsed.workItems[1]!), true);
+});
+test("rejects invalid capability, isolation and budget combinations", () => {
+  assert.throws(
+    () =>
+      parseWorkflowPlan({
+        ...plan(),
+        workItems: [{ ...plan().workItems[0], capabilities: ["not-a-capability"] }],
+      }),
+    /capabilities/,
+  );
+  assert.throws(
+    () =>
+      parseWorkflowPlan({
+        ...plan(),
+        workItems: [
+          {
+            ...plan().workItems[0],
+            capabilities: ["read:repo", "read:files", "write:workspace:isolated"],
+            isolation: "none",
+          },
+        ],
+      }),
+    /isolated worktree/,
+  );
+  assert.throws(
+    () => parseWorkflowPlan({ ...plan(), executionBudget: { maxParallelRuns: 0 } }),
+    /execution budget/,
+  );
+});
+test("requires integration evidence for the integration capability set", () => {
+  assert.throws(
+    () =>
+      parseWorkflowPlan({
+        ...plan(),
+        authorizedActions: ["read", "workspace_write", "local_commit", "integrate"],
+        authorizedCapabilities: [
+          "read:repo",
+          "read:files",
+          "read:evidence",
+          "write:workspace:isolated",
+          "run:test",
+          "git:commit:local",
+        ],
+        workItems: [
+          {
+            ...plan().workItems[0],
+            role: "integration",
+            capabilities: [
+              "read:repo",
+              "read:files",
+              "read:evidence",
+              "run:test",
+              "git:commit:local",
+            ],
+            isolation: "none",
+            evidence: { revision: true, tests: true, independentReview: false },
+          },
+        ],
+      }),
+    /independent review|capability set/,
+  );
 });
 test("validates actual Provider capabilities without inferring from its name", () => {
   const run = {

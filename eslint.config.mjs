@@ -60,6 +60,22 @@ export default [
     },
   },
   {
+    files: ["apps/desktop/src/ui/react-bits/*.jsx"],
+    languageOptions: {
+      parserOptions: { ecmaFeatures: { jsx: true } },
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        navigator: "readonly",
+        performance: "readonly",
+        requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
+        clearTimeout: "readonly",
+      },
+    },
+    rules: { "no-unused-vars": "off" },
+  },
+  {
     files: ["apps/desktop/src/voice/pcm-worklet.js"],
     languageOptions: {
       globals: {

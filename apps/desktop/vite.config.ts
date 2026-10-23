@@ -1,9 +1,11 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 
 // Tauri 会从固定端口加载开发页面；strictPort 防止前端悄悄换端口后桌面壳白屏。
 export default defineConfig({
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   server: {

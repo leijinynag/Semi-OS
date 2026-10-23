@@ -1,5 +1,5 @@
 import type { CapabilityStatus, ToolRiskLevel } from "@semi-os/shared";
-import type { ToolDefinition } from "./tool.js";
+import { normalizeToolContract, type ToolDefinition } from "./tool.ts";
 
 export interface CapabilitySnapshot {
   key: string;
@@ -23,6 +23,8 @@ export interface ToolAvailability {
   tool: ToolDefinition;
   active: boolean;
   reasons: readonly string[];
+  /** 契约缺失只作为迁移告警，不让旧工具静默失去可用性。 */
+  warnings: readonly string[];
 }
 
 /**
@@ -58,10 +60,18 @@ export class ToolRegistry {
   evaluate(context: ToolActivationContext): readonly ToolAvailability[] {
     return this.list().map((tool) => {
       const reasons: string[] = [];
-      if (
-        tool.supportedPlatforms &&
-        !tool.supportedPlatforms.includes(context.platform)
-      ) {
+      const warnings: string[] = [];
+      const contract = normalizeToolContract(tool);
+      if (!tool.contract?.observation) {
+        warnings.push("contract_observation_undeclared");
+      }
+      if (contract.mutation.kind !== "none" && !tool.contract?.verification) {
+        warnings.push("contract_verification_undeclared");
+      }
+      if (contract.reconciliation === "required" && !tool.reconcile) {
+        warnings.push("contract_reconciliation_unsupported");
+      }
+      if (tool.supportedPlatforms && !tool.supportedPlatforms.includes(context.platform)) {
         reasons.push(`unsupported_platform:${context.platform}`);
       }
       for (const key of tool.requiredCapabilities) {
@@ -73,19 +83,13 @@ export class ToolRegistry {
       if (context.disabledTools?.has(tool.name)) {
         reasons.push("disabled_by_policy");
       }
-      if (
-        context.allowedRiskLevels &&
-        !context.allowedRiskLevels.has(tool.riskLevel)
-      ) {
+      if (context.allowedRiskLevels && !context.allowedRiskLevels.has(tool.riskLevel)) {
         reasons.push(`risk_disallowed:${tool.riskLevel}`);
       }
       if (!context.runtimeHealthy) {
         reasons.push("runtime_unhealthy");
       }
-      if (
-        tool.riskLevel === "local_write" &&
-        !context.workspaceAvailable
-      ) {
+      if (tool.riskLevel === "local_write" && !context.workspaceAvailable) {
         reasons.push("workspace_unavailable");
       }
       if (
@@ -95,7 +99,7 @@ export class ToolRegistry {
       ) {
         reasons.push("not_required_by_active_skill");
       }
-      return { tool, active: reasons.length === 0, reasons };
+      return { tool, active: reasons.length === 0, reasons, warnings };
     });
   }
 

@@ -1,4 +1,4 @@
-use semi_os_protocol::Envelope;
+use semi_os_protocol::{Envelope, EnvelopeContext, RequestId};
 use serde_json::Value;
 
 /// Research/voice 事件的稳定分类。
@@ -76,6 +76,22 @@ fn required_task_id(payload: &Value) -> Result<String, String> {
         .filter(|task| !task.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| "missing task".into())
+}
+
+/// 业务 operationId 关联同一次授权；通知和最终决定是不同 RPC，不能共用
+/// requestId。各阶段使用稳定身份，既允许原样重试，也不会触发出站账本冲突。
+pub fn confirmation_request(operation_id: &str, task_id: &str) -> Envelope {
+    Envelope::Request {
+        protocol_version: 1,
+        request_id: RequestId(format!("{operation_id}_confirmation")),
+        kind: "research.confirmation.required".into(),
+        payload: serde_json::json!({"taskId": task_id}),
+        context: EnvelopeContext {
+            task_id: None,
+            task_run_id: None,
+            trace_id: None,
+        },
+    }
 }
 
 /// 持久化与状态转换不依赖窗口；适配层只发送回执和已验证的 UI 事件。
@@ -156,6 +172,60 @@ mod tests {
                 trace_id: None,
             },
         }
+    }
+
+    #[test]
+    fn confirmation_and_decision_can_both_pass_the_outbound_ledger() {
+        use crate::outbound_rpc::OutboundLedger;
+        let path = std::env::temp_dir().join(format!(
+            "semi-approval-{}-{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let ledger = OutboundLedger::open(&path).unwrap();
+        let notice = confirmation_request("req_policy", "task_1");
+        let decision = Envelope::Request {
+            protocol_version: 1,
+            request_id: RequestId("req_policy".into()),
+            kind: "research.persisted".into(),
+            payload: serde_json::json!({"operationId":"req_policy","ok":true,"error":null}),
+            context: EnvelopeContext {
+                task_id: None,
+                task_run_id: None,
+                trace_id: None,
+            },
+        };
+        for (request, response) in [
+            (&notice, "research.confirmation.announced"),
+            (&decision, "research.acknowledged"),
+        ] {
+            semi_os_protocol::validate_envelope(request).unwrap();
+            assert!(ledger.queue(request).unwrap());
+            ledger.start(request).unwrap();
+            let Envelope::Request { request_id, .. } = request else {
+                unreachable!()
+            };
+            ledger
+                .acknowledge(&Envelope::Response {
+                    protocol_version: 1,
+                    request_id: request_id.clone(),
+                    kind: response.into(),
+                    payload: serde_json::json!({}),
+                    context: EnvelopeContext {
+                        task_id: None,
+                        task_run_id: None,
+                        trace_id: None,
+                    },
+                })
+                .unwrap();
+        }
+        // 已回执通知不可再次执行；现有账本要求显式对账而非重放。
+        assert!(ledger.queue(&notice).is_err());
+        drop(ledger);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

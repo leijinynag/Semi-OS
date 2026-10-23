@@ -664,7 +664,10 @@ impl Storage {
                     && run.revision.as_deref() == Some(&finding.revision)
                     && plan.work_items.iter().any(|item| {
                         item.work_item_id == run.work_item_id
-                            && item.role == semi_os_protocol::WorkRole::Review
+                            && item.normalized_evidence().independent_review
+                            && item
+                                .normalized_capabilities(&plan.authorized_actions)
+                                .contains(&semi_os_protocol::Capability::ReadEvidence)
                     })
             })
         {
@@ -726,7 +729,7 @@ impl Storage {
                     && run.branch.as_deref() == Some(&result.branch)
                     && plan.work_items.iter().any(|item| {
                         item.work_item_id == run.work_item_id
-                            && item.role == semi_os_protocol::WorkRole::Integration
+                            && item.is_integration(&plan.authorized_actions)
                     })
             })
             .ok_or_else(|| invalid("integration requires an owned current revision"))?;
@@ -740,7 +743,13 @@ impl Storage {
             || result.reviews.iter().any(|review| review.revision != result.revision || !runs.iter().any(|run|
                 run.run_id == review.run_id && run.intent_version == plan.intent_version && run.run_id != integration.run_id
                 && run.status == "completed" && run.revision.as_deref() == Some(&result.revision)
-                && plan.work_items.iter().any(|item| item.work_item_id == run.work_item_id && item.role == semi_os_protocol::WorkRole::Review))
+                && plan.work_items.iter().any(|item| {
+                    item.work_item_id == run.work_item_id
+                        && item.normalized_evidence().independent_review
+                        && item
+                            .normalized_capabilities(&plan.authorized_actions)
+                            .contains(&semi_os_protocol::Capability::ReadEvidence)
+                }))
                 || review.finding_ids.iter().any(|id| !snapshot["findings"].as_array().is_some_and(|findings| findings.iter().any(|f| f["findingId"] == *id && f["revision"] == result.revision)))) {
             return Err(invalid("invalid revision-bound integration evidence"));
         }
@@ -795,7 +804,7 @@ impl Storage {
                     && run.revision.as_deref() == Some(&evidence.revision)
                     && plan.work_items.iter().any(|item| {
                         item.work_item_id == run.work_item_id
-                            && item.role == semi_os_protocol::WorkRole::Integration
+                            && item.is_integration(&plan.authorized_actions)
                     })
             })
             .ok_or_else(|| invalid("test requires completed integration revision"))?;
@@ -980,7 +989,7 @@ impl Storage {
         {
             return Err(invalid("workflow cannot start new operations"));
         }
-        if item.role.is_writing() && snapshot["status"] != "approved" {
+        if item.is_writing(&plan.authorized_actions) && snapshot["status"] != "approved" {
             return Err(invalid("implementation requires current user approval"));
         }
         if snapshot["background"]["coordinator"]["executionStatus"] == "needs_user" {

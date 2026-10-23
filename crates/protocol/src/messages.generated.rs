@@ -354,6 +354,8 @@ pub struct PayloadToolReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     pub artifacts: Vec<std::collections::BTreeMap<String, serde_json::Value>>,
 }
@@ -465,6 +467,20 @@ pub struct EventResearchPolicyCancelledPayload {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PayloadExecutionBudget {
+    pub max_parallel_runs: u64,
+    pub max_rework_rounds: u64,
+    pub max_no_progress_turns: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadEvidenceRequirement {
+    pub revision: bool,
+    pub tests: bool,
+    pub independent_review: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PayloadWorkItem {
     pub work_item_id: String,
     pub title: String,
@@ -474,6 +490,12 @@ pub struct PayloadWorkItem {
     pub dependencies: Vec<String>,
     pub outputs: Vec<String>,
     pub acceptance: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<PayloadEvidenceRequirement>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -487,6 +509,10 @@ pub struct PayloadWorkflowPlan {
     pub scope: Vec<String>,
     pub acceptance: Vec<String>,
     pub authorized_actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorized_capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_budget: Option<PayloadExecutionBudget>,
     pub repository: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_commit: Option<String>,

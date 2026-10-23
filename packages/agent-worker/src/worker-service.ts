@@ -36,6 +36,7 @@ import { homedir } from "node:os";
 import { WorkflowCoordinator } from "./collaboration/coordinator.ts";
 import type { AgentRuntimeAdapter } from "./runtime.ts";
 import type { WorkflowSnapshot } from "@semi-os/protocol";
+import { toWirePayload } from "./wire-payload.ts";
 
 interface BufferedVoiceTurn extends Omit<VoiceTurnStartPayload, "action"> {
   requestId: RequestId;
@@ -689,13 +690,15 @@ export class WorkerService {
       createVoiceEvent(
         requestId,
         event.kind,
-        (event.kind.startsWith("voice.")
-          ? {
-              ...event.payload,
-              sessionId: this.#activeSessionId,
-              taskId: this.#activeTaskId,
-            }
-          : event.payload) as JsonValue,
+        toWirePayload(
+          event.kind.startsWith("voice.")
+            ? {
+                ...event.payload,
+                sessionId: this.#activeSessionId,
+                taskId: this.#activeTaskId,
+              }
+            : event.payload,
+        ),
       ),
     );
   }

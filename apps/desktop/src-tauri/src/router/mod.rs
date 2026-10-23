@@ -97,6 +97,11 @@ pub(super) fn handle_research_message(
             now,
         )
         .map_err(|error| error.ui_message().to_string())?;
+        drop(guard);
+        if let Envelope::Event { payload, .. } = message {
+            app.emit("host://task-execution", &payload["taskId"])
+                .map_err(|error| error.to_string())?;
+        }
         return Ok(false);
     }
     if let semi_os_host::research_router::ResearchRoute::Policy { payload } = &route {
@@ -140,17 +145,9 @@ pub(super) fn handle_research_message(
                 .map_err(|_| "worker unavailable")?
                 .as_ref()
                 .ok_or("worker unavailable")?
-                .send(Envelope::Request {
-                    protocol_version: 1,
-                    request_id: RequestId(id.into()),
-                    kind: "research.confirmation.required".into(),
-                    payload: json!({"taskId": task}),
-                    context: EnvelopeContext {
-                        task_id: None,
-                        task_run_id: None,
-                        trace_id: None,
-                    },
-                })?;
+                .send(semi_os_host::research_router::confirmation_request(
+                    id, task,
+                ))?;
         }
         return Ok(true);
     }
@@ -185,6 +182,23 @@ pub(super) fn handle_research_message(
                 .map_err(|error| error.ui_message().to_string())
         }
     };
+    let execution_task = match &route {
+        semi_os_host::research_router::ResearchRoute::Persist { payload, .. } => {
+            payload["value"]["taskId"].as_str()
+        }
+        semi_os_host::research_router::ResearchRoute::Receipt { payload }
+        | semi_os_host::research_router::ResearchRoute::Progress { payload } => {
+            payload["taskId"].as_str()
+        }
+        _ => None,
+    };
+    // 只通知 Host 已接受的事实；WebView 随后读取持久投影，不消费未落盘的 Worker 结果。
+    if result.is_ok() {
+        if let Some(task) = execution_task {
+            app.emit("host://task-execution", task)
+                .map_err(|error| error.to_string())?;
+        }
+    }
     let payload = match route {
         semi_os_host::research_router::ResearchRoute::Persist { payload, .. } => payload,
         semi_os_host::research_router::ResearchRoute::Receipt { payload } => payload,

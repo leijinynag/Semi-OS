@@ -87,7 +87,10 @@ test("missing speech markers preserve only the final post-tool text", async () =
   const tts = new FakeTtsProvider();
   const events: VoiceLoopEvent[] = [];
   const loop = new VoiceLoop({
-    runtime, stt: new FakeSttProvider("查资料"), tts, explicitSpeech: true,
+    runtime,
+    stt: new FakeSttProvider("查资料"),
+    tts,
+    explicitSpeech: true,
     emit: (event) => events.push(event),
   });
   await loop.run(turn());
@@ -99,18 +102,34 @@ test("missing speech markers preserve only the final post-tool text", async () =
   const answer = events.find((event) => event.kind === "voice.answer");
   assert.equal(answer?.kind === "voice.answer" && answer.payload.report, "## 结论\n资料已整理。");
   assert.deepEqual(tts.spoken, ["结论 资料已整理。"]);
-  assert.equal(events.some((event) => event.kind === "voice.error" && event.payload.code === "speech_marker_missing"), false);
+  assert.equal(
+    events.some(
+      (event) => event.kind === "voice.error" && event.payload.code === "speech_marker_missing",
+    ),
+    false,
+  );
   await loop.dispose();
 });
 
 test("empty transcription reports a retryable input error without prompting Pi", async () => {
   const runtime = new VoiceRuntimeFixture();
-  const stt: SttProvider = { async *transcribe() { yield { kind: "stt.silence" }; } };
+  const stt: SttProvider = {
+    async *transcribe() {
+      yield { kind: "stt.silence" };
+    },
+  };
   const events: VoiceLoopEvent[] = [];
-  const loop = new VoiceLoop({ runtime, stt, tts: new FakeTtsProvider(), emit: (event) => events.push(event) });
+  const loop = new VoiceLoop({
+    runtime,
+    stt,
+    tts: new FakeTtsProvider(),
+    emit: (event) => events.push(event),
+  });
   await loop.run(turn());
   assert.equal(runtime.calls.length, 0);
-  assert.ok(events.some((event) => event.kind === "voice.error" && event.payload.code === "stt_empty"));
+  assert.ok(
+    events.some((event) => event.kind === "voice.error" && event.payload.code === "stt_empty"),
+  );
   await loop.dispose();
 });
 
@@ -126,10 +145,7 @@ test("does not acknowledge every input and speaks the first complete sentence", 
   });
 
   await loop.run(turn());
-  assert.deepEqual(runtime.calls, [
-    "start:session_voice",
-    "prompt:整理会议纪要",
-  ]);
+  assert.deepEqual(runtime.calls, ["start:session_voice", "prompt:整理会议纪要"]);
   assert.equal(tts.spoken.length, 0);
   runtime.emit({
     kind: "assistant.text_delta",
@@ -140,13 +156,8 @@ test("does not acknowledge every input and speaks the first complete sentence", 
   runtime.emit({ kind: "assistant.text_delta", text: "说完。" });
   runtime.emit({ kind: "turn.completed", taskId: "task_voice" });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(tts.spoken, [
-    "第一句已经完成。",
-    "第二句还没说完。",
-  ]);
-  assert.ok(
-    events.some((event) => event.kind === "voice.turn.completed"),
-  );
+  assert.deepEqual(tts.spoken, ["第一句已经完成。", "第二句还没说完。"]);
+  assert.ok(events.some((event) => event.kind === "voice.turn.completed"));
 });
 
 test("keeps the same runtime session for follow-up and steering", async () => {
@@ -162,10 +173,7 @@ test("keeps the same runtime session for follow-up and steering", async () => {
   await loop.run(turn("follow_up"));
   await loop.run(turn("steer"));
 
-  assert.equal(
-    runtime.calls.filter((call) => call.startsWith("start:")).length,
-    1,
-  );
+  assert.equal(runtime.calls.filter((call) => call.startsWith("start:")).length, 1);
   assert.ok(runtime.calls.includes("follow-up:继续补充"));
   assert.ok(runtime.calls.includes("steer:继续补充"));
 });
@@ -244,9 +252,7 @@ test("ignores late runtime events after interruption", async () => {
 
   assert.equal(tts.spoken.includes("不应播出的旧回复。"), false);
   assert.equal(
-    events
-      .filter((event) => event.kind === "voice.state")
-      .at(-1)?.payload.state,
+    events.filter((event) => event.kind === "voice.state").at(-1)?.payload.state,
     "interrupted",
   );
 });
@@ -256,19 +262,35 @@ test("streaming report markers are not spoken and Host persistence precedes comp
   const tts = new FakeTtsProvider();
   const events: VoiceLoopEvent[] = [];
   let resolveSave!: () => void;
-  const saving = new Promise<void>((resolve) => { resolveSave = resolve; });
+  const saving = new Promise<void>((resolve) => {
+    resolveSave = resolve;
+  });
   const loop = new VoiceLoop({
-    runtime, stt: new FakeSttProvider("资料调研"), tts,
-    emit: (event) => events.push(event), saveReport: async () => saving,
+    runtime,
+    stt: new FakeSttProvider("资料调研"),
+    tts,
+    emit: (event) => events.push(event),
+    saveReport: async () => saving,
   });
   await loop.run(turn());
-  for (const text of ["主要结论。", "[source_", "abc:q1]", "``", "`research-report\n", '{"summary":"结论","claims":[],"limitations":[]}', "```"]) {
+  for (const text of [
+    "主要结论。",
+    "[source_",
+    "abc:q1]",
+    "``",
+    "`research-report\n",
+    '{"summary":"结论","claims":[],"limitations":[]}',
+    "```",
+  ]) {
     runtime.emit({ kind: "assistant.text_delta", text });
   }
   runtime.emit({ kind: "turn.completed", taskId: "task_voice" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(tts.spoken, ["主要结论。"]);
-  assert.equal(events.some((event) => event.kind === "voice.turn.completed"), false);
+  assert.equal(
+    events.some((event) => event.kind === "voice.turn.completed"),
+    false,
+  );
   resolveSave();
   await new Promise((resolve) => setImmediate(resolve));
   const kinds = events.map((event) => event.kind);
@@ -280,10 +302,18 @@ test("only explicit short speech is spoken across split markers", async () => {
   const runtime = new VoiceRuntimeFixture();
   const tts = new FakeTtsProvider();
   const loop = new VoiceLoop({
-    runtime, stt: new FakeSttProvider("调研"), tts, explicitSpeech: true, emit: () => {},
+    runtime,
+    stt: new FakeSttProvider("调研"),
+    tts,
+    explicitSpeech: true,
+    emit: () => {},
   });
   await loop.run(turn());
-  for (const text of ["我先分析资料。<spe", "ech>已查到两个来源。<", "/speech>详细文字不应该朗读。"]) {
+  for (const text of [
+    "我先分析资料。<spe",
+    "ech>已查到两个来源。<",
+    "/speech>详细文字不应该朗读。",
+  ]) {
     runtime.emit({ kind: "assistant.text_delta", text });
   }
   runtime.emit({ kind: "turn.completed", taskId: "task_voice" });
@@ -296,7 +326,11 @@ test("long explicit speech starts at a Chinese pause without reading the report 
   const runtime = new VoiceRuntimeFixture();
   const tts = new FakeTtsProvider();
   const loop = new VoiceLoop({
-    runtime, stt: new FakeSttProvider("调研"), tts, explicitSpeech: true, emit: () => {},
+    runtime,
+    stt: new FakeSttProvider("调研"),
+    tts,
+    explicitSpeech: true,
+    emit: () => {},
   });
   try {
     await loop.run(turn());
@@ -318,7 +352,9 @@ test("long explicit speech starts at a Chinese pause without reading the report 
     runtime.emit({ kind: "turn.completed", taskId: "task_voice" });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(tts.spoken, [clause, "补充结论。"]);
-  } finally { await loop.dispose(); }
+  } finally {
+    await loop.dispose();
+  }
 });
 
 test("latency separates recognition tail, session, sentence and provider first audio", async (context) => {
@@ -340,7 +376,10 @@ test("latency separates recognition tail, session, sentence and provider first a
   runtime.prompt = async (input) => {
     now += 25;
     runtime.emit({ kind: "assistant.text_delta", text: "<speech>这是一句" });
-    assert.equal(events.some((event) => event.kind === "voice.sentence"), false);
+    assert.equal(
+      events.some((event) => event.kind === "voice.sentence"),
+      false,
+    );
     now += 40;
     runtime.emit({ kind: "assistant.text_delta", text: "完整回答。还有一句。" });
     runtime.emit({ kind: "turn.completed", taskId: input.taskId });
@@ -351,14 +390,28 @@ test("latency separates recognition tail, session, sentence and provider first a
       yield { kind: "tts.first_audio_ready", sentenceId };
       yield { kind: "tts.first_audio_ready", sentenceId };
       now += 50;
-      yield { kind: "tts.audio", sentenceId, sequence: 0, data: Uint8Array.of(1, 2), mimeType: "audio/fake" };
+      yield {
+        kind: "tts.audio",
+        sentenceId,
+        sequence: 0,
+        data: Uint8Array.of(1, 2),
+        mimeType: "audio/fake",
+      };
       yield { kind: "tts.completed", sentenceId };
     },
   };
-  const loop = new VoiceLoop({ runtime, stt, tts, explicitSpeech: true, emit: (event) => events.push(event) });
+  const loop = new VoiceLoop({
+    runtime,
+    stt,
+    tts,
+    explicitSpeech: true,
+    emit: (event) => events.push(event),
+  });
   try {
     await loop.run(turn());
-    const timings = events.filter((event) => event.kind === "research.timing").map((event) => event.payload);
+    const timings = events
+      .filter((event) => event.kind === "research.timing")
+      .map((event) => event.payload);
     assert.deepEqual(timings, [
       { stage: "stt.total", durationMs: 120 },
       { stage: "stt.final", durationMs: 20 },
@@ -373,7 +426,9 @@ test("latency separates recognition tail, session, sentence and provider first a
     const chunks = events.filter((event) => event.kind === "voice.audio.chunk");
     assert.equal(chunks.length, 2);
     assert.ok(chunks.every((event) => event.payload.first));
-  } finally { await loop.dispose(); }
+  } finally {
+    await loop.dispose();
+  }
 });
 
 test("latency falls back to real audio without provider readiness and ignores stage speech", async () => {
@@ -381,25 +436,71 @@ test("latency falls back to real audio without provider readiness and ignores st
   const events: VoiceLoopEvent[] = [];
   const tts: TtsProvider = {
     async *synthesize({ sentenceId }) {
-      yield { kind: "tts.audio", sentenceId, sequence: 0, data: Uint8Array.of(1, 2), mimeType: "audio/fake" };
-      yield { kind: "tts.audio", sentenceId, sequence: 1, data: Uint8Array.of(3, 4), mimeType: "audio/fake" };
+      yield {
+        kind: "tts.audio",
+        sentenceId,
+        sequence: 0,
+        data: Uint8Array.of(1, 2),
+        mimeType: "audio/fake",
+      };
+      yield {
+        kind: "tts.audio",
+        sentenceId,
+        sequence: 1,
+        data: Uint8Array.of(3, 4),
+        mimeType: "audio/fake",
+      };
       yield { kind: "tts.completed", sentenceId };
     },
   };
-  const loop = new VoiceLoop({ runtime, stt: new FakeSttProvider("查资料"), tts, emit: (event) => events.push(event) });
+  const loop = new VoiceLoop({
+    runtime,
+    stt: new FakeSttProvider("查资料"),
+    tts,
+    emit: (event) => events.push(event),
+  });
   try {
     await loop.run(turn());
-    runtime.emit({ kind: "tool.requested", callId: "call_search", toolName: "browser_open", input: {} });
+    runtime.emit({
+      kind: "tool.requested",
+      callId: "call_search",
+      toolName: "browser_open",
+      input: {},
+    });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(events.some((event) => event.kind === "research.timing" && event.payload.stage === "speech.first_sentence_ready"), false);
+    assert.equal(
+      events.some(
+        (event) =>
+          event.kind === "research.timing" && event.payload.stage === "speech.first_sentence_ready",
+      ),
+      false,
+    );
     runtime.emit({ kind: "assistant.text_delta", text: "结论已确认。" });
     runtime.emit({ kind: "turn.completed", taskId: "task_voice" });
     await new Promise((resolve) => setImmediate(resolve));
     const timings = events.filter((event) => event.kind === "research.timing");
-    assert.equal(timings.filter((event) => event.payload.stage === "speech.first_sentence_ready").length, 1);
-    assert.equal(timings.filter((event) => event.payload.stage === "tts.answer.first_audio").length, 1);
-    assert.deepEqual(events.filter((event) => event.kind === "voice.audio.chunk").map((event) => event.payload.first), [true, false, true, false]);
-  } finally { await loop.dispose(); }
+    assert.equal(
+      timings.filter((event) => event.payload.stage === "speech.first_sentence_ready").length,
+      1,
+    );
+    assert.equal(
+      timings.filter((event) => event.payload.stage === "tts.answer.first_audio").length,
+      1,
+    );
+    assert.deepEqual(
+      events
+        .filter((event) => event.kind === "voice.audio.chunk")
+        .map((event) => event.payload.first),
+      [true, false],
+    );
+    assert.equal(events.filter((event) => event.kind === "research.progress").length, 1);
+    assert.equal(
+      events.some((event) => event.kind === "voice.sentence" && event.payload.purpose === "stage"),
+      false,
+    );
+  } finally {
+    await loop.dispose();
+  }
 });
 
 test("empty completion and runtime failure cannot silently complete a voice turn", async () => {
@@ -407,8 +508,10 @@ test("empty completion and runtime failure cannot silently complete a voice turn
     const runtime = new VoiceRuntimeFixture();
     const events: VoiceLoopEvent[] = [];
     const loop = new VoiceLoop({
-      runtime, stt: new FakeSttProvider("星期几啊"),
-      tts: new FakeTtsProvider(), emit: (event) => events.push(event),
+      runtime,
+      stt: new FakeSttProvider("星期几啊"),
+      tts: new FakeTtsProvider(),
+      emit: (event) => events.push(event),
     });
     try {
       await loop.run(turn());
@@ -418,8 +521,16 @@ test("empty completion and runtime failure cannot silently complete a voice turn
       runtime.emit({ kind: "turn.completed", taskId: "task_voice" });
       await new Promise((resolve) => setImmediate(resolve));
       assert.ok(events.some((event) => event.kind === "voice.error"));
-      assert.equal(events.some((event) => event.kind === "voice.turn.completed"), false);
-      assert.equal(events.some((event) => event.kind === "voice.answer"), false);
-    } finally { await loop.dispose(); }
+      assert.equal(
+        events.some((event) => event.kind === "voice.turn.completed"),
+        false,
+      );
+      assert.equal(
+        events.some((event) => event.kind === "voice.answer"),
+        false,
+      );
+    } finally {
+      await loop.dispose();
+    }
   }
 });

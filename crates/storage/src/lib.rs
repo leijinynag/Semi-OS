@@ -4,6 +4,7 @@
 //! 与 React 都不能直接打开 SQLite，必须经由后续 Host 的类型化命令访问本模块。
 
 mod error;
+mod execution;
 mod migrations;
 mod models;
 mod outbound_rpc;
@@ -15,6 +16,7 @@ mod workflow_dto;
 mod workflow_queries;
 
 pub use error::{StorageError, StorageResult};
+pub use execution::{ExecutionProgress, ExecutionSnapshot};
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
 };

@@ -75,3 +75,53 @@ test("rejects duplicate tool names", () => {
   registry.register(tool());
   assert.throws(() => registry.register(tool()), /already registered/);
 });
+
+test("normalizes legacy tools and exposes contract migration warnings", () => {
+  const registry = new ToolRegistry();
+  registry.register(
+    tool({
+      name: "legacy_write",
+      riskLevel: "local_write",
+      requiredCapabilities: [],
+    }),
+  );
+  const [availability] = registry.evaluate({
+    platform: "darwin",
+    capabilities: new Map(),
+    workspaceAvailable: true,
+    runtimeHealthy: true,
+  });
+  assert.equal(availability?.active, true);
+  assert.deepEqual(availability?.warnings, [
+    "contract_observation_undeclared",
+    "contract_verification_undeclared",
+    "contract_reconciliation_unsupported",
+  ]);
+});
+
+test("preserves explicitly declared execution semantics", () => {
+  const registry = new ToolRegistry();
+  const registered = tool({
+    contract: {
+      observation: { required: true, freshness: "fresh" },
+      mutation: { kind: "workspace", atomic: true },
+      verification: { required: true, method: "artifact" },
+      reversibility: "partially_reversible",
+      idempotency: "keyed",
+      reconciliation: "required",
+    },
+    reconcile: async () => ({
+      status: "succeeded",
+      summary: "reconciled",
+      verification: passedVerification,
+    }),
+  });
+  registry.register(registered);
+  const [availability] = registry.evaluate({
+    platform: "darwin",
+    capabilities: new Map(),
+    workspaceAvailable: true,
+    runtimeHealthy: true,
+  });
+  assert.deepEqual(availability?.warnings, []);
+});

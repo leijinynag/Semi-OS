@@ -118,7 +118,6 @@ export class VoiceLoop {
   readonly #explicitSpeech: boolean;
   #speechAllowed = false;
   #speechMarker = "";
-  #lastActionLabel = "";
   #answerSpeechQueued = false;
   #supervision?: AbortController;
 
@@ -154,7 +153,6 @@ export class VoiceLoop {
     this.#firstSentenceReady = false;
     this.#speechAllowed = !this.#explicitSpeech;
     this.#speechMarker = "";
-    this.#lastActionLabel = "";
     this.#answerSpeechQueued = false;
     let transcript: string | undefined;
     if ("text" in turn) {
@@ -404,7 +402,7 @@ export class VoiceLoop {
           kind: "research.progress",
           payload: {
             taskId: event.taskId,
-            label: "比较来源",
+            label: "保存报告",
             toolName: "research_report",
             callId: `report_${event.taskId}`,
           },
@@ -418,7 +416,7 @@ export class VoiceLoop {
                 kind: "research.progress",
                 payload: {
                   taskId: event.taskId,
-                  label: "生成结论",
+                  label: "报告已保存",
                   toolName: "research_report",
                   callId: `saved_${event.taskId}`,
                 },
@@ -459,10 +457,8 @@ export class VoiceLoop {
         kind: "research.progress",
         payload: { taskId: this.#taskId!, label, toolName: event.toolName, callId: event.callId },
       });
-      // 同阶段连续分段读取不反复播报，但每次工具事件仍完整进入时间线。
-      if (labels[event.toolName] && this.#lastActionLabel !== label)
-        this.#enqueueSpeech(`${label}。`, "stage");
-      this.#lastActionLabel = label;
+      // 普通过程只进入客户端结构化时间线；不占用语音队列或打断最终回答。
+      // 风险确认仍由 announceConfirmation 单独播报，不能随过程提示一起删除。
     } else if (event.kind === "tool.completed") {
       this.#emit({ kind: "research.receipt", payload: event.receipt });
     } else if (event.kind === "runtime.error") {

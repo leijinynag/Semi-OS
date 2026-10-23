@@ -14,6 +14,25 @@ export type WorkflowStatus =
   | "cancelled"
   | "unknown";
 export type AuthorizedAction = "read" | "workspace_write" | "local_commit" | "integrate";
+export type Capability =
+  | "read:repo"
+  | "read:files"
+  | "read:evidence"
+  | "write:workspace:isolated"
+  | "run:test"
+  | "git:commit:local"
+  | "spawn:peer";
+export type IsolationRequirement = "none" | "isolated_worktree";
+export interface EvidenceRequirement {
+  revision: boolean;
+  tests: boolean;
+  independentReview: boolean;
+}
+export interface ExecutionBudget {
+  maxParallelRuns: number;
+  maxReworkRounds: number;
+  maxNoProgressTurns: number;
+}
 
 /** 提案不可变。批准权只在 Host；角色不是 Provider，换执行者不改变任务的含义。 */
 export interface WorkflowPlan {
@@ -26,6 +45,9 @@ export interface WorkflowPlan {
   scope: string[];
   acceptance: string[];
   authorizedActions: AuthorizedAction[];
+  /** 新授权语义；旧计划由 authorizedActions 规范化得到。 */
+  authorizedCapabilities: Capability[];
+  executionBudget: ExecutionBudget;
   repository: string;
   baselineCommit?: string;
   workItems: WorkItem[];
@@ -39,6 +61,9 @@ export interface WorkItem {
   dependencies: string[];
   outputs: string[];
   acceptance: string[];
+  capabilities: Capability[];
+  isolation: IsolationRequirement;
+  evidence: EvidenceRequirement;
 }
 export interface AgentRun {
   runId: string;
@@ -77,6 +102,116 @@ export interface IntegrationResult {
   status: "unverified" | "conflict" | "verified";
   tests: Array<{ command: string; exitCode: number; revision: string; artifactId: string }>;
   reviews: Array<{ runId: string; revision: string; findingIds: string[] }>;
+}
+
+const CAPABILITIES: readonly Capability[] = [
+  "read:repo",
+  "read:files",
+  "read:evidence",
+  "write:workspace:isolated",
+  "run:test",
+  "git:commit:local",
+  "spawn:peer",
+];
+const DEFAULT_EXECUTION_BUDGET: ExecutionBudget = {
+  maxParallelRuns: 2,
+  maxReworkRounds: 3,
+  maxNoProgressTurns: 3,
+};
+
+export function hasCapability(
+  item: Pick<WorkItem, "capabilities">,
+  capability: Capability,
+): boolean {
+  return item.capabilities.includes(capability);
+}
+
+export function isWritingWorkItem(item: Pick<WorkItem, "capabilities">): boolean {
+  return hasCapability(item, "write:workspace:isolated");
+}
+
+export function isIntegrationWorkItem(item: Pick<WorkItem, "capabilities" | "evidence">): boolean {
+  return (
+    hasCapability(item, "git:commit:local") &&
+    hasCapability(item, "run:test") &&
+    item.evidence.independentReview
+  );
+}
+
+function legacyCapabilities(role: WorkRole, actions: AuthorizedAction[]): Capability[] {
+  const capabilities: Capability[] = ["read:repo", "read:files"];
+  if (role === "research" || role === "review" || role === "verification")
+    capabilities.push("read:evidence");
+  if (role === "implementation" || role === "integration")
+    capabilities.push("write:workspace:isolated");
+  if (role === "integration") {
+    capabilities.push("run:test", "git:commit:local", "read:evidence");
+  }
+  // 旧计划没有工作项能力字段：仅把 local_commit 兼容映射到可写任务。
+  // integrate 本身不能让只读规划/审查任务获得提交能力。
+  if (
+    actions.includes("local_commit") &&
+    (role === "implementation" || role === "integration") &&
+    !capabilities.includes("git:commit:local")
+  )
+    capabilities.push("git:commit:local");
+  return [...new Set(capabilities)];
+}
+
+function legacyEvidence(role: WorkRole): EvidenceRequirement {
+  return {
+    revision: role === "implementation" || role === "integration" || role === "review",
+    tests: role === "integration" || role === "verification",
+    independentReview: role === "integration" || role === "review",
+  };
+}
+
+function normalizeCapabilities(
+  value: unknown,
+  role: WorkRole,
+  actions: AuthorizedAction[],
+): Capability[] {
+  if (value === undefined) return legacyCapabilities(role, actions);
+  const capabilities = list(value, 1) as Capability[];
+  if (
+    new Set(capabilities).size !== capabilities.length ||
+    capabilities.some((capability) => !CAPABILITIES.includes(capability))
+  )
+    invalid("invalid work capabilities");
+  return capabilities;
+}
+
+function parseBudget(value: unknown): ExecutionBudget {
+  if (value === undefined) return { ...DEFAULT_EXECUTION_BUDGET };
+  const raw = object(value);
+  const budget = {
+    maxParallelRuns: boundedPositive(raw.maxParallelRuns, 16),
+    maxReworkRounds: boundedPositive(raw.maxReworkRounds, 100),
+    maxNoProgressTurns: boundedPositive(raw.maxNoProgressTurns, 100),
+  };
+  return budget;
+}
+
+function boundedPositive(value: unknown, maximum: number): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > maximum)
+    invalid("invalid execution budget");
+  return Number(value);
+}
+
+function parseEvidence(value: unknown, role: WorkRole): EvidenceRequirement {
+  if (value === undefined) return legacyEvidence(role);
+  const raw = object(value);
+  if (
+    typeof raw.revision !== "boolean" ||
+    typeof raw.tests !== "boolean" ||
+    typeof raw.independentReview !== "boolean"
+  )
+    invalid("invalid evidence requirements");
+  return {
+    revision: raw.revision,
+    tests: raw.tests,
+    independentReview: raw.independentReview,
+  };
 }
 /** 独立用户授权，绑定源分支/HEAD 与已验证成果；实施计划不能代替此批准。 */
 export interface WorkflowApplication {
@@ -201,6 +336,8 @@ export function parseWorkflowPlan(value: unknown): WorkflowPlan {
     "scope",
     "acceptance",
     "authorizedActions",
+    "authorizedCapabilities",
+    "executionBudget",
     "repository",
     "baselineCommit",
     "workItems",
@@ -208,6 +345,19 @@ export function parseWorkflowPlan(value: unknown): WorkflowPlan {
   if (Object.keys(raw).some((key) => !keys.includes(key))) invalid("unexpected plan field");
   if (!Array.isArray(raw.workItems) || !raw.workItems.length || raw.workItems.length > 100)
     invalid("invalid work items");
+  const authorizedActions = list(raw.authorizedActions, 1) as AuthorizedAction[];
+  if (
+    new Set(authorizedActions).size !== authorizedActions.length ||
+    authorizedActions.some(
+      (action) => !["read", "workspace_write", "local_commit", "integrate"].includes(action),
+    )
+  )
+    invalid("invalid authorized actions");
+  if (
+    !authorizedActions.includes("read") ||
+    (authorizedActions.includes("integrate") && !authorizedActions.includes("local_commit"))
+  )
+    invalid("invalid authorized actions");
   const workItems = raw.workItems.map((value): WorkItem => {
     const item = object(value);
     if (
@@ -222,6 +372,9 @@ export function parseWorkflowPlan(value: unknown): WorkflowPlan {
             "dependencies",
             "outputs",
             "acceptance",
+            "capabilities",
+            "isolation",
+            "evidence",
           ].includes(key),
       )
     )
@@ -234,6 +387,34 @@ export function parseWorkflowPlan(value: unknown): WorkflowPlan {
       invalid("invalid work role");
     if (!["pi", "claude", "codex"].includes(String(item.provider)))
       invalid("invalid coding provider");
+    const capabilities = normalizeCapabilities(
+      item.capabilities,
+      item.role as WorkRole,
+      authorizedActions,
+    );
+    const isolation =
+      item.isolation === undefined
+        ? isWritingWorkItem({ capabilities })
+          ? "isolated_worktree"
+          : "none"
+        : item.isolation;
+    if (isolation !== "none" && isolation !== "isolated_worktree")
+      invalid("invalid isolation requirement");
+    if (isWritingWorkItem({ capabilities }) && isolation !== "isolated_worktree")
+      invalid("writing task requires isolated worktree");
+    const evidence = parseEvidence(item.evidence, item.role as WorkRole);
+    if (
+      evidence.revision &&
+      !isWritingWorkItem({ capabilities }) &&
+      !capabilities.includes("read:evidence")
+    )
+      invalid("revision evidence requires read:evidence or workspace write capability");
+    if (
+      capabilities.includes("git:commit:local") &&
+      capabilities.includes("run:test") &&
+      !evidence.independentReview
+    )
+      invalid("integration capability set requires independent review evidence");
     return {
       workItemId: id(item.workItemId),
       title: text(item.title, 160),
@@ -243,24 +424,31 @@ export function parseWorkflowPlan(value: unknown): WorkflowPlan {
       dependencies: list(item.dependencies).map(id),
       outputs: list(item.outputs, 1),
       acceptance: list(item.acceptance, 1),
+      capabilities,
+      isolation,
+      evidence,
     };
   });
-  const authorizedActions = list(raw.authorizedActions, 1) as AuthorizedAction[];
   if (
-    new Set(authorizedActions).size !== authorizedActions.length ||
-    authorizedActions.some(
-      (action) => !["read", "workspace_write", "local_commit", "integrate"].includes(action),
-    )
-  )
-    invalid("invalid authorized actions");
-  if (
-    !authorizedActions.includes("read") ||
-    (workItems.some((item) => isWritingRole(item.role)) &&
-      !authorizedActions.includes("workspace_write"))
+    workItems.some((item) => isWritingWorkItem(item)) &&
+    !authorizedActions.includes("workspace_write")
   )
     invalid("writing task is outside authorization");
   if (authorizedActions.includes("integrate") && !authorizedActions.includes("local_commit"))
     invalid("integration requires local commit authorization");
+  const authorizedCapabilities =
+    raw.authorizedCapabilities === undefined
+      ? [...new Set(workItems.flatMap((item) => item.capabilities))]
+      : normalizeCapabilities(raw.authorizedCapabilities, "planning", authorizedActions);
+  for (const item of workItems) {
+    if (item.capabilities.some((capability) => !authorizedCapabilities.includes(capability)))
+      invalid("work item capability is outside authorization");
+    if (
+      item.capabilities.includes("git:commit:local") &&
+      !authorizedActions.includes("local_commit")
+    )
+      invalid("local commit capability is outside authorization");
+  }
   const repository = text(raw.repository, 4_096);
   if (!repository.startsWith("/") || repository.includes("\n"))
     invalid("repository must be an absolute local path");
@@ -278,6 +466,8 @@ export function parseWorkflowPlan(value: unknown): WorkflowPlan {
     scope: list(raw.scope, 1),
     acceptance: list(raw.acceptance, 1),
     authorizedActions,
+    authorizedCapabilities,
+    executionBudget: parseBudget(raw.executionBudget),
     repository,
     baselineCommit,
     workItems,

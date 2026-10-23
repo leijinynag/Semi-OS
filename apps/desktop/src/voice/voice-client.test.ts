@@ -5,7 +5,9 @@ import { VoiceClient } from "./voice-client.ts";
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -16,7 +18,13 @@ async function settle() {
 interface Request {
   requestId: string;
   kind: string;
-  payload: { sequence?: number; lastSequence?: number; text?: string; sessionId?: string; cwd?: string };
+  payload: {
+    sequence?: number;
+    lastSequence?: number;
+    text?: string;
+    sessionId?: string;
+    cwd?: string;
+  };
 }
 
 /** 替换设备与 IPC 边界，真实执行控制器和重采样器，不把 Mock 当真人验收。 */
@@ -29,14 +37,20 @@ async function setup(t: TestContext, hold?: { kind: string; promise: Promise<voi
   let denyMicrophone = false;
   const deviceListeners = new Map<string, () => void>();
   class Context {
-    constructor() { contexts.push(this); }
+    constructor() {
+      contexts.push(this);
+    }
     sampleRate = 48_000;
     state = "running";
     destination = {};
     audioWorklet = { async addModule() {} };
-    async resume() { this.state = "running"; }
+    async resume() {
+      this.state = "running";
+    }
     async close() {}
-    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
   }
   class Processor {
     token?: number;
@@ -51,33 +65,54 @@ async function setup(t: TestContext, hold?: { kind: string; promise: Promise<voi
       },
       close() {},
     };
-    constructor() { processors.push(this); }
+    constructor() {
+      processors.push(this);
+    }
     connect() {}
     disconnect() {}
     samples(count = 4800, level = 0.25) {
       if (this.token === undefined) return;
-      this.port.onmessage?.({ data: {
-        kind: "samples", token: this.token, samples: new Float32Array(count).fill(level),
-      } });
+      this.port.onmessage?.({
+        data: {
+          kind: "samples",
+          token: this.token,
+          samples: new Float32Array(count).fill(level),
+        },
+      });
     }
   }
   const globals = {
     window: { crypto: globalThis.crypto },
     AudioContext: Context,
     AudioWorkletNode: Processor,
-    navigator: { mediaDevices: { async getUserMedia() {
-      if (hold?.kind === "getUserMedia") await hold.promise;
-      if (denyMicrophone) throw new Error("microphone denied");
-      const stream = {
-        stopped: 0,
-        getTracks() { return [{ stop() { stream.stopped++; } }]; },
-      };
-      streams.push(stream);
-      return stream;
+    navigator: {
+      mediaDevices: {
+        async getUserMedia() {
+          if (hold?.kind === "getUserMedia") await hold.promise;
+          if (denyMicrophone) throw new Error("microphone denied");
+          const stream = {
+            stopped: 0,
+            getTracks() {
+              return [
+                {
+                  stop() {
+                    stream.stopped++;
+                  },
+                },
+              ];
+            },
+          };
+          streams.push(stream);
+          return stream;
+        },
+        addEventListener(name: string, listener: () => void) {
+          deviceListeners.set(name, listener);
+        },
+        removeEventListener(name: string) {
+          deviceListeners.delete(name);
+        },
+      },
     },
-    addEventListener(name: string, listener: () => void) { deviceListeners.set(name, listener); },
-    removeEventListener(name: string) { deviceListeners.delete(name); },
-    } },
   };
   for (const [key, value] of Object.entries(globals)) {
     originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
@@ -85,24 +120,36 @@ async function setup(t: TestContext, hold?: { kind: string; promise: Promise<voi
   }
   let held = false;
   let activeSessionId = "session_test";
-  mockIPC(async (command, args) => {
-    if (command === "get_voice_settings") return { enabled: true, prewarm: true };
-    if (command === "get_agent_workspace") return "/tmp/semi-os-runtime";
-    if (command === "start_voice_conversation") {
-      if (hold?.kind === command && !held) { held = true; await hold.promise; }
-      return activeSessionId;
-    }
-    if (command === "activate_client_session") {
-      if (hold?.kind === command && !held) { held = true; await hold.promise; }
-      activeSessionId = (args as { sessionId: string }).sessionId;
-      return activeSessionId;
-    }
-    if (command === "send_worker_request") {
-      const request = (args as { envelope: Request }).envelope;
-      requests.push(request);
-      if (request.kind === hold?.kind && !held) { held = true; await hold.promise; }
-    }
-  }, { shouldMockEvents: true });
+  mockIPC(
+    async (command, args) => {
+      if (command === "get_voice_settings") return { enabled: true, prewarm: true };
+      if (command === "get_agent_workspace") return "/tmp/semi-os-runtime";
+      if (command === "start_voice_conversation") {
+        if (hold?.kind === command && !held) {
+          held = true;
+          await hold.promise;
+        }
+        return activeSessionId;
+      }
+      if (command === "activate_client_session") {
+        if (hold?.kind === command && !held) {
+          held = true;
+          await hold.promise;
+        }
+        activeSessionId = (args as { sessionId: string }).sessionId;
+        return activeSessionId;
+      }
+      if (command === "send_worker_request") {
+        const request = (args as { envelope: Request }).envelope;
+        requests.push(request);
+        if (request.kind === hold?.kind && !held) {
+          held = true;
+          await hold.promise;
+        }
+      }
+    },
+    { shouldMockEvents: true },
+  );
   const client = new VoiceClient();
   t.after(async () => {
     client.dispose();
@@ -115,9 +162,17 @@ async function setup(t: TestContext, hold?: { kind: string; promise: Promise<voi
   });
   await client.connect();
   await settle();
-  return { client, requests, streams, processors, contexts,
+  return {
+    client,
+    requests,
+    streams,
+    processors,
+    contexts,
     devicechange: () => deviceListeners.get("devicechange")?.(),
-    denyMicrophone: () => { denyMicrophone = true; } };
+    denyMicrophone: () => {
+      denyMicrophone = true;
+    },
+  };
 }
 
 test("capture and playback own separate reusable audio contexts", async (t) => {
@@ -131,6 +186,23 @@ test("capture and playback own separate reusable audio contexts", async (t) => {
   processors.at(-1)!.samples();
   await client.stop();
   assert.equal(contexts.length, 2, "contexts are reused, not recreated per turn");
+});
+
+test("manual cancellation discards capture and permits the next voice turn", async (t) => {
+  const { client, processors, requests } = await setup(t);
+  await client.start();
+  assert.equal(client.capturing, true);
+  processors[0]!.samples();
+  await client.cancelRecording();
+  assert.equal(client.capturing, false);
+  assert.equal(requests.filter((r) => r.kind === "voice.turn.commit").length, 0);
+  const count = requests.length;
+  await client.cancelRecording();
+  assert.equal(requests.length, count, "idle cancellation must not cancel another task");
+  await client.start();
+  processors[0]!.samples();
+  await client.stop();
+  assertCommittedTurns(requests, 1);
 });
 
 function assertCommittedTurns(requests: Request[], count: number) {
@@ -157,7 +229,10 @@ for (const kind of ["voice.audio.append", "voice.turn.commit"]) {
   test(`next press cannot replace turn identity while ${kind} is pending`, async (t) => {
     const gate = deferred();
     t.after(gate.resolve);
-    const { client, requests, processors, streams } = await setup(t, { kind, promise: gate.promise });
+    const { client, requests, processors, streams } = await setup(t, {
+      kind,
+      promise: gate.promise,
+    });
     await client.start();
     processors[0]!.samples();
     processors[0]!.samples();
@@ -167,7 +242,9 @@ for (const kind of ["voice.audio.append", "voice.turn.commit"]) {
     await settle();
     const nextStart = client.start();
     await settle();
-    const startedBeforeCommit = requests.filter((request) => request.kind === "voice.turn.start").length;
+    const startedBeforeCommit = requests.filter(
+      (request) => request.kind === "voice.turn.start",
+    ).length;
     gate.resolve();
     await Promise.all([firstStop, duplicateStop, nextStart]);
     processors.at(-1)!.samples();
@@ -183,7 +260,8 @@ test("release during Host setup flushes immediately and preserves the short tail
   const gate = deferred();
   t.after(gate.resolve);
   const { client, requests, processors, streams } = await setup(t, {
-    kind: "start_voice_conversation", promise: gate.promise,
+    kind: "start_voice_conversation",
+    promise: gate.promise,
   });
   const start = client.start();
   await settle();
@@ -202,7 +280,8 @@ test("a new short recording is captured even while the previous commit is pendin
   const gate = deferred();
   t.after(gate.resolve);
   const { client, requests, processors, streams } = await setup(t, {
-    kind: "voice.turn.commit", promise: gate.promise,
+    kind: "voice.turn.commit",
+    promise: gate.promise,
   });
   await client.start();
   processors[0]!.samples();
@@ -233,9 +312,12 @@ test("permission denial and an empty quick press never commit an empty turn", as
 
 test("a failed audio send is cleaned up and the following turn starts from sequence zero", async (t) => {
   let reject!: (error: Error) => void;
-  const failure = new Promise<void>((_, fail) => { reject = fail; });
+  const failure = new Promise<void>((_, fail) => {
+    reject = fail;
+  });
   const { client, requests, processors, streams } = await setup(t, {
-    kind: "voice.audio.append", promise: failure,
+    kind: "voice.audio.append",
+    promise: failure,
   });
   await client.start();
   processors[0]!.samples();
@@ -271,7 +353,9 @@ test("idle audio is discarded and disabling voice releases the device", async (t
 test("all-silence capture is distinct from an empty capture and is not committed", async (t) => {
   const { client, requests, processors } = await setup(t);
   let error = "";
-  client.subscribe((snapshot) => { error = snapshot.error ?? ""; });
+  client.subscribe((snapshot) => {
+    error = snapshot.error ?? "";
+  });
   await client.start();
   processors[0]!.samples(4800, 0);
   await client.stop();
@@ -283,7 +367,8 @@ test("disabling voice releases the microphone before a pending network commit fi
   const gate = deferred();
   t.after(gate.resolve);
   const { client, processors, streams } = await setup(t, {
-    kind: "voice.turn.commit", promise: gate.promise,
+    kind: "voice.turn.commit",
+    promise: gate.promise,
   });
   await client.start();
   processors[0]!.samples();
@@ -291,7 +376,11 @@ test("disabling voice releases the microphone before a pending network commit fi
   await settle();
   const disabling = client.configure({ enabled: false, prewarm: true });
   await settle();
-  assert.equal(streams[0]!.stopped, 1, "settings must not wait for network cleanup to release the device");
+  assert.equal(
+    streams[0]!.stopped,
+    1,
+    "settings must not wait for network cleanup to release the device",
+  );
   gate.resolve();
   await Promise.all([stop, disabling]);
 });
@@ -300,7 +389,8 @@ test("disposal prevents buffered audio from being sent after a pending append", 
   const gate = deferred();
   t.after(gate.resolve);
   const { client, processors, requests } = await setup(t, {
-    kind: "voice.audio.append", promise: gate.promise,
+    kind: "voice.audio.append",
+    promise: gate.promise,
   });
   await client.start();
   processors[0]!.samples();
@@ -317,7 +407,10 @@ test("disposal prevents buffered audio from being sent after a pending append", 
 test("three local captures remain independent while the first network commit waits", async (t) => {
   const gate = deferred();
   t.after(gate.resolve);
-  const { client, processors, requests } = await setup(t, { kind: "voice.turn.commit", promise: gate.promise });
+  const { client, processors, requests } = await setup(t, {
+    kind: "voice.turn.commit",
+    promise: gate.promise,
+  });
   await client.start();
   processors[0]!.samples();
   const first = client.stop();
@@ -337,7 +430,10 @@ test("three local captures remain independent while the first network commit wai
 test("pending microphone authorization does not block connect and disposal prevents a late device", async (t) => {
   const gate = deferred();
   t.after(gate.resolve);
-  const { client, streams, processors, requests } = await setup(t, { kind: "getUserMedia", promise: gate.promise });
+  const { client, streams, processors, requests } = await setup(t, {
+    kind: "getUserMedia",
+    promise: gate.promise,
+  });
   assert.equal(streams.length, 0, "connect returns before the permission dialog");
   client.dispose();
   gate.resolve();
@@ -373,13 +469,20 @@ test("text input works with voice disabled and microphone denied without audio r
   assert.equal(text.payload.text, "你好");
   assert.equal(text.payload.sessionId, "session_test");
   assert.equal(text.payload.cwd, "/tmp/semi-os-runtime");
-  assert.ok(!requests.some((request) => ["voice.turn.start", "voice.audio.append", "voice.turn.commit"].includes(request.kind)));
+  assert.ok(
+    !requests.some((request) =>
+      ["voice.turn.start", "voice.audio.append", "voice.turn.commit"].includes(request.kind),
+    ),
+  );
 });
 
 test("pending microphone authorization cannot block a text turn", async (t) => {
   const gate = deferred();
   t.after(gate.resolve);
-  const { client, requests, streams } = await setup(t, { kind: "getUserMedia", promise: gate.promise });
+  const { client, requests, streams } = await setup(t, {
+    kind: "getUserMedia",
+    promise: gate.promise,
+  });
   await client.submitText("无需麦克风");
   assert.equal(streams.length, 0);
   assert.equal(requests.at(-1)?.kind, "voice.text.submit");
@@ -388,10 +491,16 @@ test("pending microphone authorization cannot block a text turn", async (t) => {
 test("late microphone denial and prewarm settings cannot overwrite a text turn", async (t) => {
   const gate = deferred();
   t.after(gate.resolve);
-  const { client, denyMicrophone } = await setup(t, { kind: "getUserMedia", promise: gate.promise });
+  const { client, denyMicrophone } = await setup(t, {
+    kind: "getUserMedia",
+    promise: gate.promise,
+  });
   let state = "";
   let error: string | undefined;
-  client.subscribe((snapshot) => { state = snapshot.state; error = snapshot.error; });
+  client.subscribe((snapshot) => {
+    state = snapshot.state;
+    error = snapshot.error;
+  });
   await client.submitText("文字不依赖麦克风授权");
   denyMicrophone();
   gate.resolve();
@@ -405,7 +514,9 @@ test("late microphone denial and prewarm settings cannot overwrite a text turn",
 
 test("text submission rejects invalid input and propagates transport failure", async (t) => {
   let reject!: (reason: Error) => void;
-  const failure = new Promise<void>((_, fail) => { reject = fail; });
+  const failure = new Promise<void>((_, fail) => {
+    reject = fail;
+  });
   const { client, requests } = await setup(t, { kind: "voice.text.submit", promise: failure });
   await assert.rejects(client.submitText(" \n"));
   await assert.rejects(client.submitText("a".repeat(64_001)));
@@ -444,7 +555,10 @@ test("session switch discards capture and the next text uses the Host-selected s
 test("pending session switch blocks new capture and text until Host activation", async (t) => {
   const gate = deferred();
   t.after(gate.resolve);
-  const { client, requests, processors } = await setup(t, { kind: "activate_client_session", promise: gate.promise });
+  const { client, requests, processors } = await setup(t, {
+    kind: "activate_client_session",
+    promise: gate.promise,
+  });
   const switching = client.switchSession("session_next", "change_1");
   await settle();
   await client.start();
@@ -459,8 +573,13 @@ test("pending session switch blocks new capture and text until Host activation",
 
 test("failed session activation retains Host selection and permits subsequent input", async (t) => {
   let reject!: (error: Error) => void;
-  const failure = new Promise<void>((_, fail) => { reject = fail; });
-  const { client, requests } = await setup(t, { kind: "activate_client_session", promise: failure });
+  const failure = new Promise<void>((_, fail) => {
+    reject = fail;
+  });
+  const { client, requests } = await setup(t, {
+    kind: "activate_client_session",
+    promise: failure,
+  });
   const switching = client.switchSession("session_next", "change_1");
   const rejected = assert.rejects(switching, /expired/);
   await settle();

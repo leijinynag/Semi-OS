@@ -1,6 +1,26 @@
 ---
 name: collaboration
 description: Complex projects that delegate work to local Coding Agents with user-led planning, delegation, review, integration, and verification.
+capabilities:
+  - read:repo
+  - read:evidence
+  - write:workspace:isolated
+  - run:test
+isolation: isolated_worktree
+independence: required
+authorization: user_approved_plan
+successCriteria:
+  - deliverable revision is recorded
+  - tests are saved as evidence
+  - independent review is completed before integration
+budget:
+  maxParallelRuns: 2
+  maxReworkRounds: 3
+  maxNoProgressTurns: 3
+requireUserOn:
+  - scope_change
+  - additional_permission
+  - unresolved_after_three_rework_rounds
 ---
 
 # User-led Collaboration

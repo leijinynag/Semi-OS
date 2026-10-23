@@ -24,6 +24,15 @@ fn validate_claim_events(events: &[WorkflowEventRecord], sequence: i64) -> Stora
     Ok(())
 }
 
+fn checkpoint_fingerprint(checkpoint_json: &str) -> StorageResult<Option<String>> {
+    let checkpoint: WorkflowCheckpoint = serde_json::from_str(checkpoint_json)?;
+    Ok(checkpoint
+        .data
+        .get("progressFingerprint")
+        .and_then(Value::as_str)
+        .map(str::to_owned))
+}
+
 impl Storage {
     /// 单领取者 + 租约，检查点和游标原子提交。超时的在途轮次只能对账，不能重放。
     pub fn claim_workflow(
@@ -167,7 +176,28 @@ impl Storage {
         let meaningful:i64=tx.query_row("SELECT count(*) FROM workflow_events WHERE workflow_id=?1 AND sequence>?2
             AND json_extract(event_json,'$.kind') NOT IN ('run.activity','run.health','coordinator.updated')",
             params![id,sequence],|row|row.get(0))?;
-        let progress = progress && meaningful > 0;
+        let fingerprint_changed = match saved.1.as_deref() {
+            Some(previous) => {
+                match (
+                    checkpoint_fingerprint(previous)?,
+                    checkpoint_fingerprint(&checkpoint_json)?,
+                ) {
+                    // 旧检查点没有指纹时，仍允许持久事件证明进展；没有事件时
+                    // `meaningful > 0` 会阻止模型仅凭 progress=true 绕过保护。
+                    (None, None) => true,
+                    (Some(before), Some(after)) => before != after,
+                    // 新检查点缺失指纹不能覆盖已有的可验证进度标记。
+                    (Some(_), None) => false,
+                    (None, Some(_)) => true,
+                }
+            }
+            None => true,
+        };
+        let progress = progress && meaningful > 0 && fingerprint_changed;
+        let max_no_progress_turns = snapshot["plan"]["executionBudget"]["maxNoProgressTurns"]
+            .as_u64()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| invalid("invalid workflow execution budget"))?;
         let changed=tx.execute("UPDATE workflow_coordinators SET consumed_sequence=?3,checkpoint_json=?4,owner=NULL,lease_until_ms=0,
             no_progress=CASE WHEN ?5 THEN 0 ELSE no_progress+1 END,last_activity_ms=?6
             WHERE workflow_id=?1 AND owner=?2 AND claimed_sequence=?3 AND lease_until_ms>?6",
@@ -175,8 +205,8 @@ impl Storage {
         if changed != 1 {
             return Err(invalid("stale coordinator receipt"));
         }
-        tx.execute("UPDATE workflow_coordinators SET execution_status=CASE WHEN execution_status='needs_user' THEN 'needs_user' WHEN ?3 THEN 'needs_user' WHEN ?2 THEN 'completed' WHEN no_progress>=3 THEN 'needs_user' ELSE 'running' END,
-            reason=CASE WHEN execution_status='needs_user' THEN reason WHEN ?3 THEN '存在未核对的执行结果' WHEN no_progress>=3 AND NOT ?2 THEN '连续三次协调没有实质进展' ELSE NULL END WHERE workflow_id=?1",params![id,completed,unknown])?;
+        tx.execute("UPDATE workflow_coordinators SET execution_status=CASE WHEN execution_status='needs_user' THEN 'needs_user' WHEN ?3 THEN 'needs_user' WHEN ?2 THEN 'completed' WHEN no_progress>=?4 THEN 'needs_user' ELSE 'running' END,
+            reason=CASE WHEN execution_status='needs_user' THEN reason WHEN ?3 THEN '存在未核对的执行结果' WHEN no_progress>=?4 AND NOT ?2 THEN '连续多轮协调没有实质进展' ELSE NULL END WHERE workflow_id=?1",params![id,completed,unknown,max_no_progress_turns])?;
         tx.commit()?;
         self.load_workflow_dto(id)?
             .ok_or_else(|| invalid("missing workflow"))

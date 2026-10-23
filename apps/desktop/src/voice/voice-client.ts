@@ -575,6 +575,17 @@ export class VoiceClient {
     void turn.send.catch(() => {});
   }
 
+  get capturing(): boolean {
+    return this.#capturing !== undefined;
+  }
+
+  /** 滑动取消只丢弃当前录音，不提交转写，也不误取消已经提交的后台任务。 */
+  async cancelRecording(): Promise<void> {
+    if (!this.#capturing) return;
+    this.#capturing.failed = true;
+    await this.stop();
+  }
+
   async stop(): Promise<void> {
     const turn = this.#capturing;
     if (!turn) return this.#lastStop;

@@ -31,6 +31,54 @@ pub enum AuthorizedAction {
     LocalCommit,
     Integrate,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Capability {
+    #[serde(rename = "read:repo")]
+    ReadRepo,
+    #[serde(rename = "read:files")]
+    ReadFiles,
+    #[serde(rename = "read:evidence")]
+    ReadEvidence,
+    #[serde(rename = "write:workspace:isolated")]
+    WriteWorkspaceIsolated,
+    #[serde(rename = "run:test")]
+    RunTest,
+    #[serde(rename = "git:commit:local")]
+    GitCommitLocal,
+    #[serde(rename = "spawn:peer")]
+    SpawnPeer,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IsolationRequirement {
+    #[serde(rename = "none")]
+    #[default]
+    None,
+    #[serde(rename = "isolated_worktree")]
+    IsolatedWorktree,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceRequirement {
+    pub revision: bool,
+    pub tests: bool,
+    pub independent_review: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionBudget {
+    pub max_parallel_runs: u32,
+    pub max_rework_rounds: u32,
+    pub max_no_progress_turns: u32,
+}
+impl Default for ExecutionBudget {
+    fn default() -> Self {
+        Self {
+            max_parallel_runs: 2,
+            max_rework_rounds: 3,
+            max_no_progress_turns: 3,
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkItem {
@@ -42,6 +90,12 @@ pub struct WorkItem {
     pub dependencies: Vec<String>,
     pub outputs: Vec<String>,
     pub acceptance: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<Capability>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationRequirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EvidenceRequirement>,
 }
 /// 与 Node 共享的计划载荷。版本不可覆盖；用户批准独立保存，不能嵌在模型提案中。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +110,10 @@ pub struct WorkflowPlan {
     pub scope: Vec<String>,
     pub acceptance: Vec<String>,
     pub authorized_actions: Vec<AuthorizedAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorized_capabilities: Option<Vec<Capability>>,
+    #[serde(default)]
+    pub execution_budget: ExecutionBudget,
     pub repository: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline_commit: Option<String>,
@@ -157,6 +215,81 @@ impl AgentRun {
     }
 }
 
+fn legacy_capabilities(role: &WorkRole, actions: &[AuthorizedAction]) -> Vec<Capability> {
+    let mut capabilities = vec![Capability::ReadRepo, Capability::ReadFiles];
+    if matches!(
+        role,
+        WorkRole::Research | WorkRole::Review | WorkRole::Verification
+    ) {
+        capabilities.push(Capability::ReadEvidence);
+    }
+    if role.is_writing() {
+        capabilities.push(Capability::WriteWorkspaceIsolated);
+    }
+    if matches!(role, WorkRole::Integration) {
+        capabilities.extend([
+            Capability::RunTest,
+            Capability::GitCommitLocal,
+            Capability::ReadEvidence,
+        ]);
+    }
+    if actions.contains(&AuthorizedAction::LocalCommit)
+        && role.is_writing()
+        && !capabilities.contains(&Capability::GitCommitLocal)
+    {
+        capabilities.push(Capability::GitCommitLocal);
+    }
+    capabilities.sort_by_key(|capability| format!("{capability:?}"));
+    capabilities.dedup();
+    capabilities
+}
+
+fn legacy_evidence(role: &WorkRole) -> EvidenceRequirement {
+    EvidenceRequirement {
+        revision: matches!(
+            role,
+            WorkRole::Implementation | WorkRole::Integration | WorkRole::Review
+        ),
+        tests: matches!(role, WorkRole::Integration | WorkRole::Verification),
+        independent_review: matches!(role, WorkRole::Integration | WorkRole::Review),
+    }
+}
+
+impl WorkItem {
+    pub fn normalized_capabilities(&self, actions: &[AuthorizedAction]) -> Vec<Capability> {
+        match &self.capabilities {
+            Some(capabilities) => capabilities.clone(),
+            None => legacy_capabilities(&self.role, actions),
+        }
+    }
+
+    pub fn is_writing(&self, actions: &[AuthorizedAction]) -> bool {
+        self.normalized_capabilities(actions)
+            .contains(&Capability::WriteWorkspaceIsolated)
+    }
+
+    pub fn is_integration(&self, actions: &[AuthorizedAction]) -> bool {
+        let capabilities = self.normalized_capabilities(actions);
+        capabilities.contains(&Capability::GitCommitLocal)
+            && capabilities.contains(&Capability::RunTest)
+            && self.normalized_evidence().independent_review
+    }
+
+    pub fn normalized_isolation(&self, actions: &[AuthorizedAction]) -> IsolationRequirement {
+        self.isolation.unwrap_or_else(|| {
+            if self.is_writing(actions) {
+                IsolationRequirement::IsolatedWorktree
+            } else {
+                IsolationRequirement::None
+            }
+        })
+    }
+
+    pub fn normalized_evidence(&self) -> EvidenceRequirement {
+        self.evidence.unwrap_or_else(|| legacy_evidence(&self.role))
+    }
+}
+
 /// Host 再次检查边界和无环性，不相信 Worker 已校验的声明。
 pub fn validate_workflow_plan(plan: &WorkflowPlan) -> Result<(), String> {
     fn text(s: &str, max: usize) -> bool {
@@ -208,6 +341,15 @@ pub fn validate_workflow_plan(plan: &WorkflowPlan) -> Result<(), String> {
     if plan.work_items.is_empty() || plan.work_items.len() > 100 {
         return Err("invalid work items".into());
     }
+    if plan.execution_budget.max_parallel_runs == 0
+        || plan.execution_budget.max_parallel_runs > 16
+        || plan.execution_budget.max_rework_rounds == 0
+        || plan.execution_budget.max_rework_rounds > 100
+        || plan.execution_budget.max_no_progress_turns == 0
+        || plan.execution_budget.max_no_progress_turns > 100
+    {
+        return Err("invalid execution budget".into());
+    }
     let items: HashMap<_, _> = plan
         .work_items
         .iter()
@@ -228,8 +370,57 @@ pub fn validate_workflow_plan(plan: &WorkflowPlan) -> Result<(), String> {
         {
             return Err("invalid work item".into());
         }
-        if item.role.is_writing() && !actions.contains(&AuthorizedAction::WorkspaceWrite) {
+        let capabilities = item.normalized_capabilities(actions);
+        if plan
+            .authorized_capabilities
+            .as_ref()
+            .is_some_and(|authorized| {
+                authorized.is_empty()
+                    || capabilities
+                        .iter()
+                        .any(|capability| !authorized.contains(capability))
+            })
+        {
+            return Err("work item capability is outside authorization".into());
+        }
+        if item.capabilities.as_ref().is_some_and(|capabilities| {
+            capabilities.is_empty()
+                || capabilities.len() != capabilities.iter().collect::<HashSet<_>>().len()
+        }) {
+            return Err("invalid work item capabilities".into());
+        }
+        if plan
+            .authorized_capabilities
+            .as_ref()
+            .is_some_and(|authorized| {
+                authorized.len() != authorized.iter().collect::<HashSet<_>>().len()
+            })
+        {
+            return Err("invalid authorized capabilities".into());
+        }
+        let writing = capabilities.contains(&Capability::WriteWorkspaceIsolated);
+        if writing && item.normalized_isolation(actions) != IsolationRequirement::IsolatedWorktree {
+            return Err("writing task requires isolated worktree".into());
+        }
+        if writing && !actions.contains(&AuthorizedAction::WorkspaceWrite) {
             return Err("writing task is outside authorization".into());
+        }
+        if capabilities.contains(&Capability::GitCommitLocal)
+            && !actions.contains(&AuthorizedAction::LocalCommit)
+        {
+            return Err("local commit capability is outside authorization".into());
+        }
+        let evidence = item.normalized_evidence();
+        if evidence.revision && !writing && !capabilities.contains(&Capability::ReadEvidence) {
+            return Err(
+                "revision evidence requires read:evidence or workspace write capability".into(),
+            );
+        }
+        if capabilities.contains(&Capability::RunTest)
+            && capabilities.contains(&Capability::GitCommitLocal)
+            && !evidence.independent_review
+        {
+            return Err("integration capability set requires independent review evidence".into());
         }
     }
     fn visit<'a>(
@@ -292,5 +483,40 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_str(raw).unwrap();
         value["approved"] = true.into();
         assert!(serde_json::from_value::<WorkflowPlan>(value).is_err());
+    }
+
+    #[test]
+    fn explicit_isolation_and_evidence_do_not_inherit_legacy_defaults() {
+        let raw = include_str!("../../../tests/contract/fixtures/workflow-plan.json");
+        let mut value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        value["workItems"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["role"] == "implementation")
+            .unwrap()["isolation"] = "none".into();
+        let plan: WorkflowPlan = serde_json::from_value(value.clone()).unwrap();
+        assert!(validate_workflow_plan(&plan).is_err());
+
+        let writing = value["workItems"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["role"] == "implementation")
+            .unwrap();
+        writing["isolation"] = "isolated_worktree".into();
+        writing["evidence"] = serde_json::json!({
+            "revision": false, "tests": false, "independentReview": false
+        });
+        let plan: WorkflowPlan = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            plan.work_items
+                .iter()
+                .find(|item| item.role == WorkRole::Implementation)
+                .unwrap()
+                .normalized_evidence(),
+            EvidenceRequirement::default()
+        );
+        validate_workflow_plan(&plan).unwrap();
     }
 }

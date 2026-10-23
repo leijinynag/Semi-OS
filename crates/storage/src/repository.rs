@@ -192,7 +192,7 @@ impl Storage {
     pub fn load_research_archive(&self) -> StorageResult<Vec<Value>> {
         let mut statement = self
             .connection
-            .prepare("SELECT DISTINCT task_id FROM research_sources ORDER BY task_id")?;
+            .prepare("SELECT task_id FROM research_sources UNION SELECT task_id FROM research_reports ORDER BY task_id")?;
         let tasks = statement
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -205,7 +205,7 @@ impl Storage {
                     .collect();
                 Ok(serde_json::json!({
                     "id":task, "label":steps.last().map(String::as_str).unwrap_or("资料调研"), "steps":steps,
-                    "sources":self.load_research_sources(&task)?,
+                    "sources":self.load_research_report_sources(&task)?,
                     "report":self.load_research_report(&task)?
                 }))
             })
@@ -270,6 +270,26 @@ impl Storage {
     pub fn load_research_sources(&self, task_id: &str) -> StorageResult<Vec<Value>> {
         let mut statement = self.connection.prepare(
             "SELECT source_json FROM research_sources WHERE task_id=?1 ORDER BY collected_at_ms,source_id",
+        )?;
+        let rows = statement.query_map([task_id], |row| decode_json(row.get(0)?))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 插话产生新 TaskRun，但证据仍属于同一用户会话。只接受 Host 已保存的
+    /// conversation_turns 关联，不能相信模型提供的 sessionId；没有关联时
+    /// 退回严格同任务查询。来源保留原 taskId，Artifact 仍按原任务读取。
+    pub fn load_research_report_sources(&self, task_id: &str) -> StorageResult<Vec<Value>> {
+        let mut statement = self.connection.prepare(
+            "SELECT s.source_json FROM research_sources s
+             WHERE s.task_id=?1 OR EXISTS(
+               SELECT 1 FROM conversation_turns current_turn
+               JOIN conversation_turns earlier_turn
+                 ON earlier_turn.session_id=current_turn.session_id
+               WHERE json_extract(current_turn.conversation_json,'$.taskId')=?1
+                 AND json_extract(earlier_turn.conversation_json,'$.taskId')=s.task_id
+                 AND earlier_turn.rowid<=current_turn.rowid
+             )
+             ORDER BY s.collected_at_ms,s.source_id",
         )?;
         let rows = statement.query_map([task_id], |row| decode_json(row.get(0)?))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
