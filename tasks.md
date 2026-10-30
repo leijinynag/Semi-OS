@@ -1012,15 +1012,15 @@
 - [x] **P5.3 添加自动记忆写入流水线**
   - 低风险的 L2/L3/L5 经 `write_memory` 写入，并沿用作者门禁。秘密、噪音、未过滤转储、无依据身份推断和 L0 压缩摘要会被拒绝且不落库。等价记录不覆盖；冲突新增 Agent 记录并用 contradicts 或 supersedes 指向旧记录，用户行原文保持不变。
   - 证据：`crates/storage/src/memory_access.rs`、`migrations/0015_memory_admission.sql`；`cargo test --locked -p semi-os-storage` 通过。
-  - Commit 点：`feat(memory): add automatic memory writes`
+  - Commit 点：`feat(memory): add automatic memory writes`（`6297618`）
 - [x] **P5.4 添加全文范围检索**
   - `search_memories` 先按用户、工作区、应用、任务和 Skill 过滤，再匹配全文并返回来源。其他仓库、用户、任务、应用和 Skill 的记录不会进入结果，返回条数有上限。
   - 证据：`memory_access.rs` 的范围检索测试；`cargo test --locked -p semi-os-storage` 通过。
-  - Commit 点：`feat(memory): add scoped retrieval`
+  - Commit 点：`feat(memory): add scoped retrieval`（`6297618`）
 - [x] **P5.5 添加渐进式记忆加载**
   - `load_memory_pack` 供 Host 按固定顺序取用：Host 策略、紧凑人格、L1、当前任务 L0，再是项目身份和少量高置信 L2。普通轮次停在基础包。上下文、搜索、L4 和选中的 L5 只在对应阶段出现，超出 token 预算则截断。
   - 证据：`memory_access.rs` 的基础包与截断测试；`cargo test --locked -p semi-os-storage` 通过。
-  - Commit 点：`feat(memory): add progressive loading`
+  - Commit 点：`feat(memory): add progressive loading`（`6297618`）
 - [ ] **P5.6 添加简单 Pi Session 压缩**
   - 在达到阈值后压缩，并保留目标、约束、决定、回执、待办动作、`unknown` 结果和最新 Steering。
   - Commit 点：`feat(memory): add session compaction`
