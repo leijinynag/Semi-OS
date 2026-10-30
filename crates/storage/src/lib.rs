@@ -3,6 +3,7 @@
 //! 正常读取使用当前快照，审计与崩溃恢复使用追加事件和 Checkpoint。Node Worker
 //! 与 React 都不能直接打开 SQLite，必须经由后续 Host 的类型化命令访问本模块。
 
+mod desktop;
 mod error;
 mod execution;
 mod migrations;
@@ -15,6 +16,7 @@ mod workflow_background;
 mod workflow_dto;
 mod workflow_queries;
 
+pub use desktop::DesktopActionRecord;
 pub use error::{StorageError, StorageResult};
 pub use execution::{ExecutionProgress, ExecutionSnapshot};
 pub use models::{

@@ -5,9 +5,4 @@
  * 仍由 Host 通过结构化事件提供给客户端。
  */
 export type AssistantMode =
-  | "idle"
-  | "listening"
-  | "working"
-  | "waiting_confirmation"
-  | "paused"
-  | "cancelled";
+  "idle" | "listening" | "working" | "waiting_confirmation" | "paused" | "cancelled";

@@ -6,6 +6,8 @@ import { EventedAgentRuntime } from "./runtime.ts";
 import { FakeSttProvider, FakeTtsProvider } from "./voice/fake-providers.ts";
 import { VoiceLoop, VoiceSessionMismatchError, type VoiceLoopEvent } from "./voice/voice-loop.ts";
 import { WorkerService, type VoiceLoopPort } from "./worker-service.ts";
+import type { BrowserBackend } from "./browser/browser-backend.ts";
+import type { BrowserObservation } from "./browser/browser-service.ts";
 
 function request(kind: string, payload: JsonValue): RequestEnvelope {
   return {
@@ -16,6 +18,95 @@ function request(kind: string, payload: JsonValue): RequestEnvelope {
     payload,
   };
 }
+
+test("browser resume continues the same running loop and publishes correlated state", async () => {
+  const emitted: Envelope[] = [];
+  const observation: BrowserObservation = {
+    pageId: "page_fixture",
+    originalUrl: "https://example.test",
+    url: "https://example.test",
+    title: "Login",
+    version: 1,
+    elements: [],
+    status: "needs_user",
+  };
+  const unused = async (): Promise<never> => {
+    throw new Error("unexpected operation");
+  };
+  const backend: BrowserBackend = {
+    open: async () => observation,
+    observe: unused,
+    risk: unused,
+    policyEvidence: unused,
+    act: unused,
+    extract: unused,
+    dispose: async () => {},
+    resume: async () => [{ ...observation, status: "ready", version: 2 }],
+  };
+  let runs = 0;
+  let completed = false;
+  const service = new WorkerService({
+    emit: (message) => emitted.push(message),
+    browser: backend,
+    createVoiceLoop: (_emit, _sessionId, waitForBrowser) => ({
+      async run(turn) {
+        runs++;
+        const context = { taskId: turn.taskId, signal: new AbortController().signal };
+        const result = await backend.open("https://example.test", context.signal);
+        const fresh = await waitForBrowser(result, context);
+        completed = fresh.status === "ready";
+      },
+      async interrupt() {},
+      async dispose() {},
+    }),
+  });
+  try {
+    await service.handle(
+      request("voice.text.submit", {
+        sessionId: "session_fixture",
+        taskId: "task_fixture",
+        cwd: "/tmp",
+        text: "读取资料",
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const snapshot = await service.handle(request("browser.session.inspect", {}));
+    assert.equal(snapshot.kind, "browser.session.snapshot");
+    const snapshotState = snapshot.payload as {
+      resumeId: string;
+      sessionId: string;
+      taskId: string;
+    };
+    const state = {
+      resumeId: snapshotState.resumeId,
+      sessionId: snapshotState.sessionId,
+      taskId: snapshotState.taskId,
+    };
+    assert.ok(state.resumeId);
+    const accepted = await service.handle(
+      request("browser.session.resume", { ...state, mode: "takeover" }),
+    );
+    assert.equal(accepted.kind, "browser.session.resume.accepted");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(runs, 1);
+    assert.equal(completed, true);
+    assert.ok(
+      emitted.some(
+        (message) =>
+          message.kind === "browser.session.state" &&
+          message.direction === "event" &&
+          (message.payload as { status: string }).status === "resumed",
+      ),
+    );
+    await assert.rejects(
+      service.handle(request("browser.session.resume", { ...state, mode: "takeover" })),
+      /过期/,
+    );
+  } finally {
+    await service.dispose();
+  }
+});
 
 test("buffers ordered audio and commits one voice turn", async () => {
   const emitted: Envelope[] = [];

@@ -20,14 +20,9 @@ export interface CapabilityDiscoveryResult {
   observedAtMs: number;
 }
 
-async function defaultCommandExists(
-  command: string,
-  env: NodeJS.ProcessEnv,
-): Promise<boolean> {
+async function defaultCommandExists(command: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   const executableNames =
-    process.platform === "win32"
-      ? [command, `${command}.exe`, `${command}.cmd`]
-      : [command];
+    process.platform === "win32" ? [command, `${command}.exe`, `${command}.cmd`] : [command];
   for (const directory of (env.PATH ?? "").split(delimiter).filter(Boolean)) {
     for (const executable of executableNames) {
       try {

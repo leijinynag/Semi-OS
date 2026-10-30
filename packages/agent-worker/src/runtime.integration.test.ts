@@ -17,10 +17,7 @@ const passed: VerificationRecord = {
   evidence: [{ kind: "fixture", reference: "page:title" }],
 };
 
-function fixtureTool(
-  name: string,
-  requiredCapabilities: readonly string[],
-): ToolDefinition {
+function fixtureTool(name: string, requiredCapabilities: readonly string[]): ToolDefinition {
   return {
     name,
     description: `Fixture ${name}`,
@@ -65,10 +62,7 @@ test("filters unavailable tools and runs a verified fake-runtime turn", async ()
   const snapshot = await coordinator.apply({
     platform: "darwin",
     capabilities: new Map([
-      [
-        "browser.playwright",
-        { key: "browser.playwright", status: "available", observedAtMs: 1 },
-      ],
+      ["browser.playwright", { key: "browser.playwright", status: "available", observedAtMs: 1 }],
       [
         "permission.accessibility",
         {
@@ -82,10 +76,12 @@ test("filters unavailable tools and runs a verified fake-runtime turn", async ()
     runtimeHealthy: true,
   });
 
-  assert.deepEqual(snapshot.tools.map((tool) => tool.name), ["browser_open"]);
   assert.deepEqual(
-    snapshot.availability.find((entry) => entry.tool.name === "desktop_click")
-      ?.reasons,
+    snapshot.tools.map((tool) => tool.name),
+    ["browser_open"],
+  );
+  assert.deepEqual(
+    snapshot.availability.find((entry) => entry.tool.name === "desktop_click")?.reasons,
     ["capability_unavailable:permission.accessibility"],
   );
 

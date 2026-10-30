@@ -42,13 +42,17 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; media-src 'self' blob:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; media-src 'self' blob:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
     "macOS": {
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "entitlements": "entitlements.plist",
+      "signingIdentity": "Semi-OS Local Signing"
     }
   }
 }

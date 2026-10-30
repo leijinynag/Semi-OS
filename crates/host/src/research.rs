@@ -15,7 +15,9 @@ pub fn validate_policy(value: &Value) -> Result<(), String> {
     let risk = value["riskLevel"].as_str().ok_or("missing risk")?;
     let evidence = &value["evidence"];
     let expected = match tool {
-        "read" | "browser_extract" | "workflow_observe" | "coding_read" => "read",
+        "read" | "browser_extract" | "workflow_observe" | "coding_read" | "desktop_observe" => {
+            "read"
+        }
         "write"
         | "edit"
         | "workflow_submit_plan"
@@ -396,14 +398,27 @@ pub fn save_receipt(storage: &mut Storage, receipt: &ToolExecutionReceipt) -> Re
     if receipt.policy_decision == PolicyDecision::Approved {
         let approval = receipt.approval.as_ref().ok_or("missing approval")?;
         if approval.payload_digest != receipt.input_digest
-            || !storage
-                .validates_research_approval(
-                    &approval.approval_id,
-                    &receipt.task_id,
-                    &receipt.tool_name,
-                    &receipt.input_digest,
-                )
-                .map_err(|e| e.to_string())?
+            || !(if receipt.tool_name.starts_with("desktop_") {
+                storage
+                    .desktop_approval_matches(
+                        &approval.approval_id,
+                        &receipt.task_id,
+                        &receipt.tool_name,
+                        &receipt.input_digest,
+                        Some(&receipt.attempt_id),
+                        receipt.started_at_ms,
+                    )
+                    .map_err(|e| e.to_string())?
+            } else {
+                storage
+                    .validates_research_approval(
+                        &approval.approval_id,
+                        &receipt.task_id,
+                        &receipt.tool_name,
+                        &receipt.input_digest,
+                    )
+                    .map_err(|e| e.to_string())?
+            })
         {
             return Err("approval does not match current action".into());
         }

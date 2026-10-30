@@ -6,8 +6,7 @@ test("discovers installed commands without executing them", async () => {
   const result = await discoverRuntimeCapabilities({
     platform: "darwin",
     now: () => 42,
-    commandExists: async (command) =>
-      command === "playwright" || command === "codex",
+    commandExists: async (command) => command === "playwright" || command === "codex",
   });
 
   assert.equal(result.snapshots.get("platform.macos")?.status, "available");

@@ -8,6 +8,8 @@ pub enum StorageError {
     RpcConflict,
     #[error("rpc result requires reconciliation before dispatch")]
     RpcReconciliation,
+    #[error("desktop action transition rejected")]
+    InvalidDesktopTransition,
     #[error("workflow rejected: {0}")]
     InvalidWorkflow(String),
     #[error("sqlite operation failed: {0}")]

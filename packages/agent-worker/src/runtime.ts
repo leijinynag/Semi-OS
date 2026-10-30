@@ -1,8 +1,4 @@
-import type {
-  JsonObject,
-  ToolDefinition,
-  ToolExecutionReceipt,
-} from "@semi-os/tool-sdk";
+import type { JsonObject, ToolDefinition, ToolExecutionReceipt } from "@semi-os/tool-sdk";
 
 export interface StartSessionInput {
   sessionId: string;

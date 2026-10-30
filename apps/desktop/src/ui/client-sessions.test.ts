@@ -5,7 +5,12 @@ import { parseClientSessions, validateSessionTitle } from "./client-sessions.ts"
 test("session list requires one active selection and unique identities", () => {
   const session = { sessionId: "session_default", title: "默认会话", createdAtMs: 1, active: true };
   assert.deepEqual(parseClientSessions([session]), [session]);
-  for (const invalid of [[], [session, session], [{ ...session, active: false }], [{ ...session, active: "yes" }]]) {
+  for (const invalid of [
+    [],
+    [session, session],
+    [{ ...session, active: false }],
+    [{ ...session, active: "yes" }],
+  ]) {
     assert.throws(() => parseClientSessions(invalid));
   }
 });

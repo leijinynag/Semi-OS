@@ -66,7 +66,7 @@ This file records confirmed product decisions separately from proposals.
 | Agent loop                  | All meaningful tasks pass through Pi; no separate “simple-task agent”                                                                                                     |
 | Runtime extension           | Prefer Pi SDK/extensions; MCP is a later interoperability layer                                                                                                           |
 | Tools                       | Dynamically expose only tools currently allowed and available                                                                                                             |
-| Browser                     | Playwright first, with a dedicated persistent profile                                                                                                                     |
+| Browser                     | Prefer Ego Lite and its user-visible TaskSpace when installed; use dedicated-profile Playwright only when Ego Lite is not installed                                       |
 | Native automation           | macOS first; semantic accessibility lookup, screenshot/vision fallback                                                                                                    |
 | Action granularity          | Fresh observation, one atomic action, structured verification                                                                                                             |
 | Voice trigger               | Push-to-talk in MVP; reserve an automatic wake/VAD branch                                                                                                                 |
@@ -103,6 +103,37 @@ This file records confirmed product decisions separately from proposals.
 | Answer format               | Required speech with optional Markdown details; simple replies have no duplicate report                                                                                   |
 | Streaming recognition       | Persistent local microphone gate; only final transcription enters Pi; current Fun default retained pending human comparison                                               |
 | Text input                  | Client chat bypasses only capture/STT; uses the same Pi session, tools, confirmations, TTS, playback synchronization and history                                          |
+
+### Browser backend selection
+
+Semi-OS keeps one stable set of bounded browser tools (`browser_open`,
+`browser_click`, `browser_type` and `browser_extract`) while selecting the
+implementation inside the Worker:
+
+- If the Ego Lite application and its `ego-browser` CLI are both detected, Ego
+  is the default. Each Worker browser service owns one uniquely named
+  TaskSpace, so the user can see the Agent's pages and actions in Ego Lite.
+- If Ego Lite is not installed, the Worker falls back to Playwright with a
+  Semi-OS-owned persistent profile.
+- If Ego Lite is installed but its CLI is missing, or if Ego cannot connect,
+  control the Space, or verify an action, the operation fails visibly. It must
+  not silently fall back or replay the action in Playwright because the action
+  may already have taken effect.
+- The Agent does not receive arbitrary browser scripts. Both implementations
+  are behind the same observation-version, risk, approval, verification and
+  source-capture contracts.
+
+### Ego 人工接管恢复
+
+- Ego 保存登录态；遇到限制时交还原 Space，不删除登录状态或新建浏览器。
+- 采用挂起原工具 Promise 的方式保留 Pi 任务栈。用户点击客户端继续后，
+  恢复原 Space，刷新观察再返回原工具；不向新一轮对话重复发送原始动作。
+- Worker 签发一次性接管票据，绑定会话/任务；UI 只能提交票据，
+  不能指定任意 Space。传输接受回执不等于恢复成功，结果以结构化事件为准。
+- 默认 takeover；claim 仅在用户独立明确确认后可用。限制未解除则继续等待，
+  取消/新任务撤销旧票据。旧元素引用与旧审批不能跨人工接管复用。
+- 此状态为 Worker 内存态，重启不自动抢回浏览器；不将 unknown 动作当作
+  可继续的登录等待。
 
 ## 2026-10-11：客户端 Session 与轮次区分
 
@@ -290,6 +321,77 @@ This file records confirmed product decisions separately from proposals.
   引用未来轮次或伪造片段。来源及 Artifact 保留原任务身份。
 - 用户明确要求立即汇报时，Pi 应优先使用已有证据并说明限制；不新增
   分类模型、关键词路由或第二套 Agent Loop。上述行为需回归与原生验收。
+
+## 2026-10-24：4C 原生桌面与 Lark 验收边界
+
+- Semi-OS 是目标仓库，LumiCore 只作为设计参考。原生桌面控制仍由 Rust
+  Host 独占，Node 只负责注册工具和适配 Pi。
+- 4C 的动作契约固定为“新鲜观察、一个原子动作、Host 验证”；租约、观察
+  引用和人工接管代次不一致时停止新动作。动作已进入系统但没有可核验读回
+  必须标记 `unknown`，不能自动重试。
+- 自动 Fixture、Rust Storage 恢复测试和真实 macOS/Lark 人工验收分开记录；
+  不以权限状态、截图变化或工具注册证明业务完成。
+- Lark 发送使用稳定幂等键。`chatId` 目标超时可以查询准确会话历史；`userId`
+  目标没有稳定的按用户查询能力时直接返回 `unknown_send`，不使用空会话 ID
+  进行伪对账。
+- 视觉回退当前明确为不可用，直到真实图片调用、窗口/观察版本绑定和敏感
+  界面拒绝均有证据；不因 Screen Recording 已授权而提前开放。
+
+## 2026-10-25：协议校验不得依赖运行期代码生成
+
+- 桌面版 CSP 固定为 `script-src 'self'`，WebView 不允许 `eval`/`new Function`。
+  协议校验器因此在生成阶段用 Ajv standalone 编译成普通函数模块，运行期只
+  分发调用；`ajv.compile()` 只允许出现在生成器里。
+- 该缺陷不会被 `pnpm dev` 发现（Vite dev server 不发 CSP），只在打包后的
+  客户端出现，表现为模块初始化抛 `EvalError`、界面白屏。回归门禁是
+  `packages/protocol` 的测试在 `--disallow-code-generation-from-strings` 下
+  运行。
+- 载荷可空性有两种等价写法：`type: ["object","null"]` 与
+  `oneOf: [{type:"null"}, ...]`。Rust message registry 必须同时识别，否则
+  合法的 `null` 响应会被判为非法载荷并触发 Worker 重启循环。
+
+## 2026-10-25：Worker 启动不依赖 GUI 环境变量
+
+- 由 launchd 启动的 `.app` 只继承 `/usr/bin:/bin:/usr/sbin:/sbin`，Node 通常
+  不在其中。Host 因此按 `SEMI_OS_NODE` → Homebrew 固定前缀 → nvm 版本目录
+  （从高到低）→ 登录 shell `command -v node` → PATH 扫描的顺序解析出绝对
+  路径，解析结果不依赖终端环境，且顺序确定可测。
+- 解析失败不得中断客户端启动，也不得静默降级：原因写入状态并由
+  `get_worker_status` 暴露到界面，`RestartLimitReached` 同样显式通知。
+  「界面能用、但什么也不工作」比一条错误信息更难排查。
+- 该差异不会被 `tauri dev` 发现：终端继承了完整 PATH，只有 `open`/Dock
+  启动的 bundle 才缺少 Node；与 CSP 白屏属于同一类「仅打包后暴露」缺陷。
+
+## 2026-10-25：hardened runtime 下的麦克风 entitlement
+
+- Tauri 默认给可执行文件开启 hardened runtime。该模式下 TCC 只在签名携带
+  `com.apple.security.device.audio-input` 时允许弹出麦克风授权；缺失时连弹窗
+  都不会出现，应用也不会被列入「系统设置 → 隐私与安全性 → 麦克风」。因此
+  `apps/desktop/src-tauri/entitlements.plist` 只声明这一项权限，不因方便而
+  开启 App Sandbox 或其他能力。
+- 麦克风是唯一需要同时满足「Info.plist 描述」与「签名 entitlement」的权限；
+  它也因此必须可从设置页主动请求：TCC 只把发起过请求的进程列为可授权项。
+- 曾使用 ad-hoc 签名，授权可能因重建后的代码要求变化而失效。当前已改用
+  `Semi-OS Local Signing` 固定证书；2026-10-26 的真实 bundle 指定要求包含
+  稳定的 identifier 与 certificate root，不能继续把当前故障归为 ad-hoc。
+
+## 2026-10-26：原生辅助功能观察与监听恢复
+
+- 历史桌面回执存在“权限检查通过、随后窗口观察失败”，原通用错误隐藏了
+  真正失败阶段。改为闭集错误分别表示权限拒绝、无应用/窗口、AX 通信失败、
+  接口不可用和前台变化；不泄露窗口正文。
+- 优先使用 NSWorkspace 前台 PID 创建应用级 AX 根，保留 SystemWide 全局
+  通信超时，单独设置应用根超时。焦点窗口无值时只读取同应用主窗口，
+  观察结束再次核对前台 PID，不选择其他应用或任意列表首项。
+- 输入事件 tap 失效后保持动作停用；用户明确重新检查、完成授权或恢复时，
+  Host 废弃旧租约与引用再重建。页面挂载/焦点刷新仅查状态，不能隐式恢复；
+  重新检查权限也不解除用户暂停。
+- 打包 App 新增 `--desktop-diagnostic` 只读入口和客户端“只读自检”，不启动
+  模型或动作，不输出窗口内容。验收应使用 `open`/LaunchServices 启动 bundle：
+  本次该路径四项权限均 granted、监听可用且观察到 11 个控件，而直接从 shell
+  启动包内 executable 的权限结果不同，不能混用进程身份的证据。
+- 当前 Worker 仍从编译期仓库路径和本地 Node 启动；这属于未完成的独立发行
+  打包工作，不将本机 bundle 构建或只读观察通过等同于可移植发布通过。
 
 ## Explicitly deferred
 

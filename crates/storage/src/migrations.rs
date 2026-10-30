@@ -58,6 +58,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "outbound rpc delivery receipts",
         include_str!("../migrations/0011_outbound_rpc.sql"),
     ),
+    (
+        12,
+        "controlled desktop action receipts",
+        include_str!("../migrations/0012_desktop_actions.sql"),
+    ),
 ];
 
 /// 在单个排他事务中依次执行迁移。

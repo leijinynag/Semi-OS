@@ -10,9 +10,7 @@ export const DEFAULT_CLOUD_LLM_CONFIG: Readonly<CloudLlmConfig> = {
   model: "deepseek-v4-flash",
 };
 
-export function readCloudLlmConfig(
-  environment: NodeJS.ProcessEnv = process.env,
-): CloudLlmConfig {
+export function readCloudLlmConfig(environment: NodeJS.ProcessEnv = process.env): CloudLlmConfig {
   const provider = environment.SEMI_OS_LLM_PROVIDER?.trim();
   const model = environment.SEMI_OS_LLM_MODEL?.trim();
   if (!provider && !model) {
@@ -21,9 +19,7 @@ export function readCloudLlmConfig(
     return { ...DEFAULT_CLOUD_LLM_CONFIG };
   }
   if (!provider || !model) {
-    throw new Error(
-      "SEMI_OS_LLM_PROVIDER and SEMI_OS_LLM_MODEL must be configured together",
-    );
+    throw new Error("SEMI_OS_LLM_PROVIDER and SEMI_OS_LLM_MODEL must be configured together");
   }
   return { provider, model };
 }
@@ -34,14 +30,10 @@ export function readCloudLlmConfig(
  * 凭证仍由 Pi 的 ModelRuntime 从 Worker 环境或其认证存储读取；这里只选择
  * provider/model，不把 API Key 放进产品协议，更不会暴露给 React。
  */
-export function resolveCloudLlmModel(
-  config: CloudLlmConfig,
-): Model<any> {
+export function resolveCloudLlmModel(config: CloudLlmConfig): Model<any> {
   const model = getModel(config.provider as never, config.model as never);
   if (!model) {
-    throw new Error(
-      `Pi model is unavailable: ${config.provider}/${config.model}`,
-    );
+    throw new Error(`Pi model is unavailable: ${config.provider}/${config.model}`);
   }
   return model;
 }

@@ -3,11 +3,15 @@ import type { ResearchSource } from "@semi-os/protocol";
 import type { JsonObject, ToolDefinition, ToolExecutionResult } from "@semi-os/tool-sdk";
 import {
   BrowserOperationTimeout,
-  BrowserService,
   navigationRisk,
   type BrowserObservation,
 } from "./browser-service.ts";
+import { BrowserNeedsUser, type BrowserBackend } from "./browser-backend.ts";
 
+export type BrowserUserWait = (
+  observation: BrowserObservation,
+  context: Pick<import("@semi-os/tool-sdk").ToolExecutionContext, "taskId" | "signal">,
+) => Promise<BrowserObservation>;
 export interface ResearchSink {
   save(source: ResearchSource, signal: AbortSignal): Promise<void>;
 }
@@ -58,7 +62,23 @@ function observed(observation: BrowserObservation): ToolExecutionResult {
 }
 
 /** 四个工具只负责动作和来源采集；搜集哪些页面、比较什么仍由 Pi + Skill 决定。 */
-export function createBrowserTools(browser: BrowserService, sink: ResearchSink): ToolDefinition[] {
+export function createBrowserTools(
+  browser: BrowserBackend,
+  sink: ResearchSink,
+  waitForUser?: BrowserUserWait,
+): ToolDefinition[] {
+  // 挂起原工具 Promise，恢复时返回新观察给原 Pi 调用，不新建会话/重播动作。
+  const finish = async (
+    observation: BrowserObservation,
+    context: import("@semi-os/tool-sdk").ToolExecutionContext,
+  ) => {
+    await recordFailure(observation, context.taskId, context.signal);
+    return observed(
+      observation.status === "needs_user" && waitForUser
+        ? await waitForUser(observation, context)
+        : observation,
+    );
+  };
   const verify: ToolDefinition["verify"] = async (_input, result) => {
     const pageId = result.output.pageId;
     const status = result.output.status;
@@ -103,9 +123,12 @@ export function createBrowserTools(browser: BrowserService, sink: ResearchSink):
       resolveRisk: async (input) => navigationRisk(string(input, "url")),
       inputSchema: schema({ url: property }, ["url"]),
       execute: async (input, context) => {
-        const observation = await browser.open(string(input, "url"), context.signal);
-        await recordFailure(observation, context.taskId, context.signal);
-        return observed(observation);
+        try {
+          return await finish(await browser.open(string(input, "url"), context.signal), context);
+        } catch (error) {
+          if (error instanceof BrowserNeedsUser) return finish(error.observation, context);
+          throw error;
+        }
       },
       verify,
     },
@@ -133,15 +156,19 @@ export function createBrowserTools(browser: BrowserService, sink: ResearchSink):
           signal ?? new AbortController().signal,
         ),
       execute: async (input, context) => {
-        const observation = await browser.act(
-          string(input, "pageId"),
-          integer(input, "version"),
-          string(input, "ref"),
-          name === "browser_type" ? string(input, "text") : undefined,
-          context.signal,
-        );
-        await recordFailure(observation, context.taskId, context.signal);
-        return observed(observation);
+        try {
+          const observation = await browser.act(
+            string(input, "pageId"),
+            integer(input, "version"),
+            string(input, "ref"),
+            name === "browser_type" ? string(input, "text") : undefined,
+            context.signal,
+          );
+          return await finish(observation, context);
+        } catch (error) {
+          if (error instanceof BrowserNeedsUser) return finish(error.observation, context);
+          throw error;
+        }
       },
       verify,
     })),
@@ -167,8 +194,7 @@ export function createBrowserTools(browser: BrowserService, sink: ResearchSink):
           const id = string(input, "pageId");
           const initial = await browser.observe(id, context.signal);
           if (initial.status !== "ready") {
-            await recordFailure(initial, context.taskId, context.signal);
-            return observed(initial);
+            return finish(initial, context);
           }
           if (input.persist === false) return observed(initial);
           const offset = integer(input, "offset", 0);
@@ -183,8 +209,7 @@ export function createBrowserTools(browser: BrowserService, sink: ResearchSink):
           );
           const observation = extracted.observation;
           if (observation.status !== "ready") {
-            await recordFailure(observation, context.taskId, context.signal);
-            return observed(observation);
+            return finish(observation, context);
           }
           if (offset >= extracted.text.length) throw new Error("正文为空或 offset 超出正文");
           if (extracted.text.length > 1_000_000) throw new Error("正文过长，需限定 region");
@@ -232,6 +257,7 @@ export function createBrowserTools(browser: BrowserService, sink: ResearchSink):
           };
         } catch (error) {
           context.signal.throwIfAborted();
+          if (error instanceof BrowserNeedsUser) return finish(error.observation, context);
           if (!(error instanceof BrowserOperationTimeout)) throw error;
           await recordFailure(error.observation, context.taskId, context.signal);
           return observed(error.observation);

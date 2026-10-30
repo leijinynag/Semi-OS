@@ -1,7 +1,7 @@
 use semi_os_protocol::{ResultType, TaskLifecycle, ToolRiskLevel};
 use semi_os_storage::{
-    AgentSessionCheckpoint, NewTaskEvent, Storage, StorageError, TaskSnapshot, ToolAttempt,
-    ToolAttemptStatus, ToolReplayDecision,
+    AgentSessionCheckpoint, DesktopActionRecord, NewTaskEvent, Storage, StorageError, TaskSnapshot,
+    ToolAttempt, ToolAttemptStatus, ToolReplayDecision,
 };
 use serde_json::json;
 use tempfile::tempdir;
@@ -27,7 +27,7 @@ fn migrates_all_core_tables_on_reopen() {
     let database_path = directory.path().join("semi-os.sqlite3");
 
     let storage = Storage::open(&database_path).expect("database should migrate");
-    assert_eq!(storage.schema_version().expect("version should load"), 11);
+    assert_eq!(storage.schema_version().expect("version should load"), 12);
     drop(storage);
 
     let connection = rusqlite::Connection::open(&database_path).expect("database should open");
@@ -53,6 +53,7 @@ fn migrates_all_core_tables_on_reopen() {
             "capabilities",
             "client_sessions",
             "conversation_turns",
+            "desktop_actions",
             "outbound_rpc_receipts",
             "research_reports",
             "research_sources",
@@ -80,7 +81,7 @@ fn migrates_all_core_tables_on_reopen() {
     drop(connection);
 
     let reopened = Storage::open(&database_path).expect("migration should be idempotent");
-    assert_eq!(reopened.schema_version().expect("version should load"), 11);
+    assert_eq!(reopened.schema_version().expect("version should load"), 12);
 }
 
 #[test]
@@ -281,6 +282,72 @@ fn restores_final_conversations_and_upserts_a_turn() {
     assert_eq!(restored[0]["requestId"], "req_two");
     assert_eq!(restored[1]["summary"], "最终回答");
     assert_eq!(restored[1]["report"], "## 来源");
+}
+
+#[test]
+fn desktop_action_recovery_preserves_unknown_side_effects() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("desktop-actions.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    let record = DesktopActionRecord {
+        request_id: "desktop_req_1".into(),
+        task_id: "task_desktop".into(),
+        attempt_id: "attempt_1".into(),
+        action_kind: "desktop_type".into(),
+        lease_generation: 7,
+        stage: "not_dispatched".into(),
+        summary: "参数已核对".into(),
+    };
+    storage
+        .claim_desktop_action(&record, None, "sha256:input", 10)
+        .unwrap();
+    storage
+        .update_desktop_action(
+            &record.request_id,
+            "possibly_dispatched",
+            7,
+            "已进入系统调用",
+            11,
+        )
+        .unwrap();
+    drop(storage);
+
+    let mut reopened = Storage::open(&path).unwrap();
+    reopened.recover_desktop_actions(20).unwrap();
+    let actions = reopened.load_desktop_actions().unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].stage, "unknown");
+    assert!(actions[0].summary.contains("可能已经执行"));
+    assert!(matches!(
+        reopened.update_desktop_action(
+            &record.request_id,
+            "possibly_dispatched",
+            7,
+            "不应回退",
+            21,
+        ),
+        Err(StorageError::InvalidDesktopTransition)
+    ));
+}
+
+#[test]
+fn desktop_action_request_and_attempt_ids_are_not_reusable() {
+    let mut storage = Storage::open_in_memory().unwrap();
+    let record = DesktopActionRecord {
+        request_id: "desktop_req_duplicate".into(),
+        task_id: "task_desktop".into(),
+        attempt_id: "attempt_duplicate".into(),
+        action_kind: "desktop_click".into(),
+        lease_generation: 1,
+        stage: "not_dispatched".into(),
+        summary: "参数已核对".into(),
+    };
+    storage
+        .claim_desktop_action(&record, None, "sha256:one", 10)
+        .unwrap();
+    assert!(storage
+        .claim_desktop_action(&record, None, "sha256:two", 11)
+        .is_err());
 }
 
 #[test]

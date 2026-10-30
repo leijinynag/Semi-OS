@@ -153,6 +153,25 @@ Keep ownership explicit:
 - macOS desktop actions must follow fresh observation, one atomic action and
   Host-owned verification.
 
+### Native desktop and Lark
+
+- Semi-OS is the target repository. LumiCore may inform design comparisons but
+  must not be edited or treated as an implementation dependency.
+- macOS permissions are capability inputs, not automatic authorization. The
+  client may open System Settings only from an explicit user action.
+- Native desktop mutations require a fresh observation, one atomic action,
+  Host-owned verification and a current user-approved desktop lease. Human
+  takeover invalidates the lease and all element references.
+- A dispatched action without proof is `unknown`; it must be reconciled before
+  any retry. Restart recovery must preserve the unknown state rather than
+  creating a new action.
+- Lark commands use registered structured tools only. Never construct arbitrary
+  CLI/API commands, copy credentials into SQLite or logs, or retry a timed-out
+  send blindly. A `userId` send is not reconcilable through an empty chat ID.
+- Screen Recording permission does not imply visual-model availability. Keep
+  visual fallback explicitly unavailable until a real image-capable call and
+  target-binding evidence exist.
+
 ### CSS, assets and diagrams
 
 - Default to ASCII in source files unless the file already uses another
@@ -189,8 +208,11 @@ The following are non-negotiable unless `docs/DECISIONS.md` is updated:
 5. An uncertain external outcome is `unknown` and must be reconciled before a
    retry. Never blindly repeat a possibly-applied side effect.
 6. Rust is the authority for privileged OS actions and durable local state.
-7. Browser automation uses bounded Playwright tools, not arbitrary scripts
-   exposed to the Agent.
+7. Browser automation uses the bounded browser tools. Ego Lite is the preferred
+   user-visible backend when its app and `ego-browser` CLI are installed;
+   Playwright remains the dedicated-profile fallback only when Ego Lite is not
+   installed. Never expose arbitrary Ego/Playwright scripts to the Agent, and
+   never replay a possibly-applied action on another backend.
 8. Native desktop automation prefers Accessibility semantics, with screenshot
    and constrained low-level fallback.
 9. Personality, user-authored preferences, Agent-authored memories, task

@@ -32,9 +32,7 @@ export class ActiveToolCoordinator {
     const availability = this.#registry.evaluate(context);
     return {
       availability,
-      tools: availability
-        .filter((entry) => entry.active)
-        .map((entry) => entry.tool),
+      tools: availability.filter((entry) => entry.active).map((entry) => entry.tool),
     };
   }
 

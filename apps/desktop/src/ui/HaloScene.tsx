@@ -32,12 +32,7 @@ const modeEnergy: Record<AssistantMode, readonly [number, number]> = {
 };
 
 /** 几何只存参数坐标。曲面、细丝和粒子在 GPU 上使用同一条闭合流线。 */
-function makeRibbonGeometry(
-  center: number,
-  width: number,
-  seed: number,
-  core: boolean,
-) {
+function makeRibbonGeometry(center: number, width: number, seed: number, core: boolean) {
   const geometry = new THREE.BufferGeometry();
   const segments = 320;
   const rows = width < 0.01 ? 1 : 16;
@@ -77,9 +72,7 @@ function makeParticleGeometry() {
     const core = i < 2300;
     const stream = i % 5;
     // 细流内部聚集、流间留白，避免粒子均匀撒成背景噪点。
-    const lane = core
-      ? (random() - 0.5) * 0.9
-      : (stream - 2) * 0.24 + (random() - 0.5) * 0.13;
+    const lane = core ? (random() - 0.5) * 0.9 : (stream - 2) * 0.24 + (random() - 0.5) * 0.13;
     parameters.push(random(), lane, core ? 1 : 0);
     seeds.push(core ? 0 : stream * 1.7);
     sizes.push(0.45 + Math.pow(random(), 5) * 2.6);
@@ -102,13 +95,7 @@ function createUniforms() {
   };
 }
 
-function createRibbon(
-  center: number,
-  width: number,
-  seed: number,
-  core = false,
-  fine = false,
-) {
+function createRibbon(center: number, width: number, seed: number, core = false, fine = false) {
   const uniforms = createUniforms();
   uniforms.uFine.value = fine ? 1 : 0;
   uniforms.uOpacity.value = fine ? 0.5 : core ? 0.9 : 0.86;
@@ -193,7 +180,12 @@ function FlowSculpture({
     const current = animation.current;
     const [baseEnergy, speed] = modeEnergy[mode];
     const speech = motion.reduced ? 0 : Math.min(1, audioLevel?.current ?? 0);
-    current.speech = THREE.MathUtils.damp(current.speech, speech, speech > current.speech ? 32 : 8, dt);
+    current.speech = THREE.MathUtils.damp(
+      current.speech,
+      speech,
+      speech > current.speech ? 32 : 8,
+      dt,
+    );
     const energy = baseEnergy + current.speech * 0.16;
     current.energy = motion.reduced ? energy : THREE.MathUtils.damp(current.energy, energy, 3, dt);
     current.speed = THREE.MathUtils.damp(current.speed, speed, 2.5, dt);
@@ -201,12 +193,22 @@ function FlowSculpture({
     if (!motion.reduced) current.time += dt * current.speed;
     const x = motion.reduced ? 0 : motion.pointer.x;
     const y = motion.reduced ? 0 : motion.pointer.y;
-    root.current.rotation.y = motion.reduced ? 0 : THREE.MathUtils.damp(root.current.rotation.y, x * 0.14, 5, dt);
-    root.current.rotation.x = motion.reduced ? 0 : THREE.MathUtils.damp(root.current.rotation.x, -y * 0.09, 5, dt);
-    root.current.position.x = motion.reduced ? 0 : THREE.MathUtils.damp(root.current.position.x, x * 0.055, 5, dt);
-    root.current.position.y = motion.reduced ? 0 : THREE.MathUtils.damp(root.current.position.y, y * 0.035, 5, dt);
+    root.current.rotation.y = motion.reduced
+      ? 0
+      : THREE.MathUtils.damp(root.current.rotation.y, x * 0.14, 5, dt);
+    root.current.rotation.x = motion.reduced
+      ? 0
+      : THREE.MathUtils.damp(root.current.rotation.x, -y * 0.09, 5, dt);
+    root.current.position.x = motion.reduced
+      ? 0
+      : THREE.MathUtils.damp(root.current.position.x, x * 0.055, 5, dt);
+    root.current.position.y = motion.reduced
+      ? 0
+      : THREE.MathUtils.damp(root.current.position.y, y * 0.035, 5, dt);
     // 固定横向构图并按相机可见范围适配；指针到边缘时仍为光带预留空间。
-    root.current.scale.setScalar(Math.min(state.viewport.width / 4.7, state.viewport.height / 3.45));
+    root.current.scale.setScalar(
+      Math.min(state.viewport.width / 4.7, state.viewport.height / 3.45),
+    );
     for (const { material } of resources.all) {
       material.uniforms.uTime.value = current.time;
       material.uniforms.uEnergy.value = current.energy;

@@ -353,6 +353,146 @@ html[data-surface="assistant"] #root {
   transition: width 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+.desktop-state-card {
+  display: grid;
+  gap: 9px;
+  margin: 0 16px 12px;
+  padding: 14px 16px;
+  border: 1px solid rgb(35 35 40 / 9%);
+  border-radius: 13px;
+  background: #fafafa;
+  color: var(--client-ink);
+}
+
+.desktop-state-card.is-attention {
+  border-color: rgb(180 112 24 / 24%);
+  background: #fffaf1;
+}
+
+.desktop-state-card.is-complete {
+  border-color: rgb(44 118 74 / 20%);
+  background: #f7fbf8;
+}
+
+.desktop-state-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.desktop-state-heading span,
+.desktop-state-card small,
+.desktop-permission-summary {
+  color: var(--client-muted);
+  font-size: 11px;
+}
+
+.desktop-state-warning,
+.desktop-capability-warning {
+  color: #8a5a14 !important;
+}
+
+.desktop-capability-note {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e7e7e9;
+}
+
+.desktop-capability-note > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--client-muted);
+  font-size: 12px;
+}
+
+.desktop-capability-note strong {
+  color: var(--client-ink);
+  font-weight: 550;
+}
+
+.desktop-capability-note p,
+.desktop-capability-note small {
+  margin: 0;
+  color: var(--client-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.desktop-state-card p,
+.desktop-details p {
+  margin: 0;
+  color: var(--client-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.desktop-state-card button,
+.desktop-state-actions button {
+  justify-self: start;
+  padding: 6px 10px;
+  border: 1px solid #dedee2;
+  border-radius: 7px;
+  color: var(--client-ink);
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.desktop-state-card button:disabled,
+.desktop-state-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.desktop-details {
+  display: grid;
+  gap: 12px;
+}
+
+.desktop-state-line.is-attention {
+  color: #8a5a14;
+}
+
+.desktop-state-line.is-complete {
+  color: #2d714a;
+}
+
+.desktop-state-meta {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.desktop-state-meta > div {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.desktop-state-meta dt {
+  color: var(--client-faint);
+  font-size: 11px;
+}
+
+.desktop-state-meta dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--client-muted);
+  font-size: 11px;
+}
+
+.desktop-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
 .client-sidebar.is-collapsed {
   width: 40px;
   overflow: hidden;
@@ -1464,4 +1604,63 @@ html[data-surface="assistant"] #root {
   gap: 8px;
   align-items: center;
   overflow-wrap: anywhere;
+}
+.desktop-permission-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  margin-block: 8px;
+}
+
+/* 可请求的权限多一个按钮；用 flex 容器保持各行列对齐，不让麦克风行错位。 */
+.desktop-permission-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.desktop-permission-hint {
+  display: block;
+  margin-block: 6px;
+  color: #737373;
+  font-size: 0.75rem;
+}
+
+.desktop-permission-notice {
+  margin-block: 6px;
+}
+
+.desktop-permissions button {
+  color: inherit;
+  background: transparent;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  padding: 5px 9px;
+}
+.browser-handoff {
+  margin: 16px 0;
+  padding: 16px 0;
+  border-block: 1px solid var(--color-border, #d9dce1);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.browser-handoff-status,
+.browser-handoff-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.browser-handoff p {
+  margin: 8px 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.browser-handoff-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
 }

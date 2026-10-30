@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { parseWorkflowSnapshot } from "@semi-os/protocol";
+import { parseWorkflowSnapshot, type RequestPayloads } from "@semi-os/protocol";
 import {
   useCallback,
   useEffect,
@@ -30,6 +30,14 @@ import {
   type SessionMenuPosition,
 } from "./SessionControls";
 import { useWorkflows, WorkflowPanel } from "./WorkflowPanel";
+import { DesktopPermissions } from "./DesktopPermissions";
+import { BrowserHandoffPanel } from "./BrowserHandoffPanel";
+
+// 与 Host 的 WorkerStatus 保持对齐；state 用闭集，界面不得靠字符串包含关系推断。
+type WorkerStatus = {
+  state: "running" | "failed" | "unknown";
+  detail: string | null;
+};
 
 interface Source {
   sourceId: string;
@@ -58,6 +66,40 @@ interface WorkerMessage {
   direction: string;
   kind: string;
   payload: Record<string, unknown>;
+}
+type DesktopResult = RequestPayloads["desktop.result"]["result"];
+type DesktopPermissions = NonNullable<RequestPayloads["desktop.result"]["permissions"]>;
+interface DesktopUiState {
+  operationId?: string;
+  taskId?: string;
+  status: DesktopResult["status"];
+  summary: string;
+  leaseGeneration: number;
+  permissions?: DesktopPermissions;
+  observation?: DesktopResult["observation"];
+  evidence?: string;
+  recoveryStage: string;
+  updatedAtMs: number;
+}
+
+const desktopStatusLabels: Record<DesktopUiState["status"], string> = {
+  observed: "已观察",
+  verified: "已验证",
+  needs_user: "待处理",
+  unknown: "结果未知",
+  failure: "失败",
+};
+
+function desktopStatusTone(status: DesktopUiState["status"]) {
+  if (status === "verified" || status === "observed") return "complete";
+  if (status === "needs_user" || status === "unknown") return "attention";
+  return "idle";
+}
+
+function desktopCanMutate(state: DesktopUiState) {
+  return Boolean(
+    state.permissions?.accessibility === "granted" && state.permissions.takeoverDetection,
+  );
 }
 
 function statusFor(
@@ -179,6 +221,7 @@ export function ResearchWorkbench() {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [leftWidth, setLeftWidth] = useState(248);
   const settingsDialog = useRef<HTMLDialogElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [workflowNotice, setWorkflowNotice] = useState<{
     workflowId: string;
@@ -188,6 +231,8 @@ export function ResearchWorkbench() {
   }>();
   const moreButton = useRef<HTMLButtonElement>(null);
   const closeDetailsButton = useRef<HTMLButtonElement>(null);
+  const [desktopState, setDesktopState] = useState<DesktopUiState>();
+  const [desktopControlPending, setDesktopControlPending] = useState(false);
   useEffect(() => {
     let active = true;
     const subscription = listen<unknown>("host://workflow-notice", ({ payload }) => {
@@ -206,6 +251,31 @@ export function ResearchWorkbench() {
           status: String(value.status),
         });
     });
+    return () => {
+      active = false;
+      void subscription.then((stop) => stop()).catch(() => {});
+    };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const update = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      const next = value as DesktopUiState;
+      if (
+        typeof next.status !== "string" ||
+        typeof next.summary !== "string" ||
+        typeof next.leaseGeneration !== "number"
+      )
+        return;
+      if (active) setDesktopState(next);
+    };
+    const subscription = listen<unknown>("host://desktop-state", ({ payload }) => update(payload));
+    void subscription
+      .then(() => invoke<DesktopUiState | null>("get_desktop_state"))
+      .then((value) => {
+        if (active && value) update(value);
+      })
+      .catch(() => {});
     return () => {
       active = false;
       void subscription.then((stop) => stop()).catch(() => {});
@@ -342,6 +412,9 @@ export function ResearchWorkbench() {
       listen<string>("host://research-error", ({ payload }) => {
         if (active) setError(payload);
       }),
+      listen<string>("host://worker-error", ({ payload }) => {
+        if (active) setError(payload);
+      }),
       listen<boolean>("host://assistant-visibility-changed", ({ payload }) => {
         if (active) setVisible(payload);
       }),
@@ -435,6 +508,22 @@ export function ResearchWorkbench() {
     };
   }, []);
 
+  // Worker 启动失败发生在 WebView 建立监听之前，那条广播早就丢了；所以挂载
+  // 时主动拉一次状态。否则用户看到的是「界面能开、但对话和语音全部无反应」。
+  useEffect(() => {
+    let active = true;
+    void invoke<WorkerStatus>("get_worker_status")
+      .then((status) => {
+        if (active && status.state === "failed") {
+          setError(status.detail ?? "Agent Worker 未启动，对话与语音功能不可用");
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function toggleAssistant() {
     try {
       await invoke("set_assistant_visible", { visible: !visible });
@@ -468,6 +557,17 @@ export function ResearchWorkbench() {
       });
     } catch {
       setError("无法打开浏览器，请检查 Worker 是否已就绪");
+    }
+  }
+  async function controlDesktop(action: "pause" | "cancel" | "resume" | "recheck") {
+    if (desktopControlPending) return;
+    setDesktopControlPending(true);
+    try {
+      await invoke("control_desktop", { action });
+    } catch {
+      setError("桌面控制未完成，请查看当前状态后重试");
+    } finally {
+      setDesktopControlPending(false);
     }
   }
   async function selectSource(source: Source) {
@@ -588,7 +688,10 @@ export function ResearchWorkbench() {
               className="client-icon-button"
               aria-label="设置"
               title="设置"
-              onClick={() => settingsDialog.current?.showModal()}
+              onClick={() => {
+                setSettingsOpen(true);
+                settingsDialog.current?.showModal();
+              }}
             >
               <SettingsIcon size={20} />
             </button>
@@ -608,6 +711,7 @@ export function ResearchWorkbench() {
             </p>
           )}
           <ConversationPanel sessionId={activeSessionId} onTaskChange={selectConversationTask} />
+          <BrowserHandoffPanel key={activeSessionId} sessionId={activeSessionId} />
         </article>
         <aside className="client-context" aria-label="上下文">
           <header className="client-context-head">
@@ -619,6 +723,42 @@ export function ResearchWorkbench() {
             confirmation={Boolean(confirmation)}
             onOpenDetails={() => setDetailsOpen(true)}
           />
+          {desktopState && (
+            <section className={`desktop-state-card is-${desktopStatusTone(desktopState.status)}`}>
+              <div className="desktop-state-heading">
+                <strong>桌面</strong>
+                <span>{desktopStatusLabels[desktopState.status]}</span>
+              </div>
+              <p>{desktopState.summary}</p>
+              {desktopState.observation && (
+                <dl className="desktop-state-meta">
+                  <div>
+                    <dt>目标</dt>
+                    <dd>{desktopState.observation.title || desktopState.observation.bundleId}</dd>
+                  </div>
+                  <div>
+                    <dt>观察</dt>
+                    <dd>{desktopState.observation.version}</dd>
+                  </div>
+                </dl>
+              )}
+              {desktopState.evidence && <small>{desktopState.evidence}</small>}
+              {desktopState.permissions && !desktopState.permissions.takeoverDetection && (
+                <small className="desktop-state-warning">
+                  人工接管监听不可用，新的桌面变更不会派发。
+                </small>
+              )}
+              {desktopState.status === "unknown" && (
+                <button
+                  type="button"
+                  disabled={desktopControlPending}
+                  onClick={() => void controlDesktop("recheck")}
+                >
+                  重新检查
+                </button>
+              )}
+            </section>
+          )}
           {workflowNotice && (
             <div role="status" className="context-preview">
               <button
@@ -703,6 +843,101 @@ export function ResearchWorkbench() {
           {workflows.map((item) => (
             <WorkflowPanel key={`${item.plan.workflowId}:${item.plan.version}`} workflow={item} />
           ))}
+          {desktopState && (
+            <details className="context-section" open>
+              <summary>桌面状态</summary>
+              <div className="desktop-details">
+                <p className={`desktop-state-line is-${desktopStatusTone(desktopState.status)}`}>
+                  {desktopStatusLabels[desktopState.status]} · {desktopState.summary}
+                </p>
+                <dl className="desktop-state-meta">
+                  <div>
+                    <dt>操作</dt>
+                    <dd>{desktopState.operationId ?? "无"}</dd>
+                  </div>
+                  <div>
+                    <dt>租约</dt>
+                    <dd>{desktopState.leaseGeneration}</dd>
+                  </div>
+                  <div>
+                    <dt>恢复阶段</dt>
+                    <dd>{desktopState.recoveryStage}</dd>
+                  </div>
+                  {desktopState.observation && (
+                    <>
+                      <div>
+                        <dt>应用</dt>
+                        <dd>{desktopState.observation.bundleId}</dd>
+                      </div>
+                      <div>
+                        <dt>窗口</dt>
+                        <dd>
+                          {desktopState.observation.title || desktopState.observation.windowId}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>元素</dt>
+                        <dd>{desktopState.observation.elements.length}</dd>
+                      </div>
+                    </>
+                  )}
+                </dl>
+                {desktopState.permissions && (
+                  <div className="desktop-permission-summary">
+                    <p>
+                      Accessibility: {desktopState.permissions.accessibility} · 接管监听:{" "}
+                      {desktopState.permissions.takeoverDetection ? "可用" : "不可用"}
+                    </p>
+                    <p>
+                      视觉回退:{" "}
+                      {desktopState.permissions.visualFallback.status === "available"
+                        ? "可用"
+                        : "不可用"}
+                      {" · "}
+                      {desktopState.permissions.visualFallback.reason}
+                    </p>
+                    {desktopState.permissions.screenRecording === "granted" &&
+                      desktopState.permissions.visualFallback.status !== "available" && (
+                        <p>屏幕录制权限不等于视觉定位能力。</p>
+                      )}
+                  </div>
+                )}
+                {desktopState.evidence && <p>{desktopState.evidence}</p>}
+                <div className="desktop-state-actions">
+                  <button
+                    type="button"
+                    disabled={desktopControlPending}
+                    onClick={() => void controlDesktop("recheck")}
+                  >
+                    重新观察
+                  </button>
+                  {desktopCanMutate(desktopState) && desktopState.status !== "needs_user" && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={desktopControlPending}
+                        onClick={() => void controlDesktop("pause")}
+                      >
+                        暂停
+                      </button>
+                      <button
+                        type="button"
+                        disabled={desktopControlPending}
+                        onClick={() => void controlDesktop("cancel")}
+                      >
+                        取消
+                      </button>
+                    </>
+                  )}
+                  {!desktopCanMutate(desktopState) && (
+                    <small className="desktop-state-warning">
+                      需要 Accessibility 与人工接管监听权限后才能执行桌面变更。
+                    </small>
+                  )}
+                </div>
+              </div>
+            </details>
+          )}
           {current?.steps.length ? (
             <details className="context-section" open>
               <summary>
@@ -789,13 +1024,17 @@ export function ResearchWorkbench() {
         className="client-icon-button client-mobile-settings"
         aria-label="设置"
         title="设置"
-        onClick={() => settingsDialog.current?.showModal()}
+        onClick={() => {
+          setSettingsOpen(true);
+          settingsDialog.current?.showModal();
+        }}
       >
         <SettingsIcon size={20} />
       </button>
       {/* 原生 dialog 管理焦点、Escape 和背景交互隔离；设置仍通过 Host 保存。 */}
       <dialog
         ref={settingsDialog}
+        onClose={() => setSettingsOpen(false)}
         className="client-settings"
         aria-labelledby="client-settings-title"
       >
@@ -837,6 +1076,7 @@ export function ResearchWorkbench() {
           <span>浏览器登录</span>
           <LinkIcon size={17} />
         </button>
+        {settingsOpen && <DesktopPermissions />}
         {error && (
           <p className="research-error" role="alert">
             {error}

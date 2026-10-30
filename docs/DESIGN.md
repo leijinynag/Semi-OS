@@ -635,17 +635,47 @@ digest, timing, result class, verification and artifacts.
 
 ### 6.2 Browser automation
 
-MVP uses Playwright with a Semi-OS-owned persistent browser profile:
+MVP uses one bounded browser tool contract with an automatic backend:
 
-- the user signs in interactively once;
-- cookies/storage never enter Git and are treated as secrets;
-- prefer role/name/label/text locators over brittle coordinates;
-- expose four stable primitives first: open, click, type and extract;
-- expand navigation/download/upload only when real scenarios require them;
-- re-observe after every state-changing action.
+- Ego Lite is preferred when its desktop application and `ego-browser` CLI are
+  installed. Semi-OS creates one uniquely named Ego TaskSpace per Worker
+  browser service, so the user can observe the Agent's pages and actions in
+  the same browser surface and can take over when a page requires login or
+  verification.
+- If Ego Lite is not installed, Semi-OS falls back to Playwright with a
+  Semi-OS-owned persistent profile. Playwright remains in the repository for
+  fallback operation and deterministic fixtures.
+- If Ego is detected but its CLI is unavailable, or an Ego operation fails or
+  has an uncertain action receipt, Semi-OS reports an actionable error. It does
+  not replay the action through Playwright.
+- The Agent still sees only `browser_open`, `browser_click`, `browser_type` and
+  `browser_extract`; it never receives arbitrary Playwright or Ego scripts.
+- Both backends use semantic targets, observation versions, risk classification,
+  Host approval, one atomic mutation, readback and source/artifact capture.
 
-Playwright’s authenticated state can contain impersonation-capable cookies, so
-profile data must stay in the user data directory with restrictive permissions.
+Ego's existing browser profile remains owned by Ego Lite. Playwright's
+authenticated state can contain impersonation-capable cookies, so its fallback
+profile must stay in the user data directory with restrictive permissions.
+
+#### Ego 人工接管与原任务续接
+
+- 登录、验证码或访问限制返回真实 `needs_user` 观察，并向原 Space 调用
+  `handOff()`。Ego 自身保管登录态，Semi-OS 不复制 Cookie，不要求每次重新登录。
+- Worker 挂起原浏览器工具的 Promise，保留 Pi Session 与工具栈，不启动新
+  Agent Loop。客户端通过结构化 `browser.session.state` 显示等待状态，
+  重开窗口用 `browser.session.inspect` 读取当前快照。
+- 用户在 Ego 中处理并交还控制后，点击客户端“已处理，继续”。请求只携带
+  Worker 签发的 `resumeId/sessionId/taskId`，不允许 WebView 指定任意 Space。
+  Ego 中交还控制的按钮和 Semi-OS 恢复 Pi 工具调用是两个衔接点，不相互替代。
+- 默认调用 `takeOverTaskSpace(原 ID)`；失败仅显示原因，不自动认领。
+  用户可单独确认“认领原 Space”，才调用 `claimTaskSpace(原 ID)`。
+- 恢复先使全部旧元素引用失效，再刷新挂起点的原页面。页面仍受限则再次
+  交还用户；恢复失败可手动重试，不换后端、不重播旧动作。
+  限制若发生在审批前，旧目标不能继续执行，Pi 必须重新观察并重新审批。
+- 开始新轮次、插话、删除会话和 Worker 退出撤销票据及在途恢复。
+  Worker 重启后不自动认领 Space；结果未知的动作不能靠“继续”清除或重试。
+- 此恢复协议仅用于具备 Space 接管能力的后端；Playwright 继续返回原有
+  `needs_user` 结果，不展示无法完成的 Ego 恢复流程。
 
 ### 6.3 Native desktop automation
 
@@ -663,6 +693,37 @@ Each desktop step follows:
 The agent cannot submit an opaque multi-action script to the desktop driver.
 Scripts may exist inside trusted Skills, but privileged actions still cross the
 same per-action policy and receipt boundary.
+
+#### 4C Implementation Boundary
+
+桌面工具通过独立 `desktop.request/result` 协议进入 Rust Host。Node 不保留
+AX 原生句柄，也不执行系统脚本。Host 保存短时、启动代次隔离的语义引用，
+执行前重新核对前台窗口和唯一目标。桌面租约不由模型参数授予；未完成可信
+风险分类的变更使用准确参数的真人批准。观察不代表桌面占用授权。
+
+监听真实用户输入的回调只更新原子代次，不等待服务锁。代次变化使租约和引用
+失效，后续操作需要用户明确恢复并重新观察。取消、退出和 Worker 重启废弃
+旧引用；已进入系统的原子动作不能被宣称撤销。持久动作阶段区分未派发、
+可能已派发与验证完成，RPC 重放只返回原回执，不再次触发原生调用。
+
+权限预检不弹窗，授权/系统设置入口只由客户端用户触发。屏幕录制和麦克风
+不是语义读取的前置条件；人工接管监听不可用时禁止变更。尚无可核验原生
+实现的动作、截图上传和视觉路径明确阻塞，不将工具注册当作能力验收通过。
+
+前台观察优先由 NSWorkspace 确定真实前台 PID，再创建应用级 AX 根；焦点窗口
+无值时只退回同应用的主窗口。权限拒绝、无窗口、AX 通信失败和前台切换分别
+反馈，不把全部观察失败误报为未授权。输入监听失效后普通状态刷新不会重建；
+用户明确重新检查、完成授权或恢复时先作废旧租约/引用，再重建监听，不复活
+旧批准，也不因重新检查权限而自动恢复暂停中的任务。
+
+#### 4C validation boundary
+
+4C 的自动验证与真人原生验收分开记录在 `docs/4C-VALIDATION.md`。确定性
+Fixture 可以证明权限降级、观察引用新鲜度、单动作和 Host 读回策略，但不能
+证明真实 macOS Accessibility 树、TextEdit 输入、用户接管或视觉模型能力。
+Screen Recording 只表示系统允许采集屏幕，不表示当前模型能够解释图像。
+Lark `userId` 发送超时没有稳定的会话历史查询路径时必须保持
+`unknown_send`，不能用空 `chatId` 伪造对账。
 
 ### 6.4 用户主导的多 Agent 协作
 

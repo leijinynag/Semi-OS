@@ -1,8 +1,4 @@
-import type {
-  JsonObject,
-  ToolDefinition,
-  ToolExecutionReceipt,
-} from "@semi-os/tool-sdk";
+import type { JsonObject, ToolDefinition, ToolExecutionReceipt } from "@semi-os/tool-sdk";
 import {
   AgentRuntimeStateError,
   EventedAgentRuntime,
@@ -14,10 +10,7 @@ import {
   type PauseResult,
   type StartSessionInput,
 } from "./runtime.ts";
-import {
-  executeProductTool,
-  ToolExecutionError,
-} from "./tool-execution.ts";
+import { executeProductTool, ToolExecutionError } from "./tool-execution.ts";
 
 export interface FakeToolCall {
   toolName: string;

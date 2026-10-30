@@ -15,13 +15,25 @@ export function validateSessionTitle(value: string): string {
 }
 
 export function parseClientSessions(value: unknown): ClientSession[] {
-  if (!Array.isArray(value) || !value.every((item) =>
-    item && typeof item === "object" &&
-    typeof item.sessionId === "string" && item.sessionId.length > 0 &&
-    typeof item.title === "string" && Number.isSafeInteger(item.createdAtMs) &&
-    typeof item.active === "boolean")) throw new Error("无效的会话列表");
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof item.sessionId === "string" &&
+        item.sessionId.length > 0 &&
+        typeof item.title === "string" &&
+        Number.isSafeInteger(item.createdAtMs) &&
+        typeof item.active === "boolean",
+    )
+  )
+    throw new Error("无效的会话列表");
   const sessions = value as ClientSession[];
-  if (new Set(sessions.map((item) => item.sessionId)).size !== sessions.length ||
-    sessions.filter((item) => item.active).length !== 1) throw new Error("无效的会话选择");
+  if (
+    new Set(sessions.map((item) => item.sessionId)).size !== sessions.length ||
+    sessions.filter((item) => item.active).length !== 1
+  )
+    throw new Error("无效的会话选择");
   return sessions;
 }

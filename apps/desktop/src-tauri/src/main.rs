@@ -19,6 +19,8 @@ use tauri::{
     Emitter, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+mod desktop;
+mod node_program;
 mod router;
 use router::{handle_research_message, handle_workflow_message};
 mod text_input;
@@ -119,8 +121,14 @@ fn record_voice_playback(
 }
 
 struct DesktopState {
+    desktop: Mutex<desktop::NativeService>,
+    desktop_snapshot: Mutex<Option<desktop::DesktopUiState>>,
     lifecycle: Mutex<HostLifecycle>,
     worker: Mutex<Option<WorkerSupervisorHandle>>,
+    /// Worker 启动失败的原因。保留下来供客户端主动拉取：失败发生在 WebView
+    /// 建立事件监听之前，只发事件会丢消息，界面就无法区分「功能缺失」和
+    /// 「正常运行」。
+    worker_error: Mutex<Option<String>>,
     storage: Mutex<Option<Storage>>,
     confirmations: Mutex<std::collections::HashMap<String, Envelope>>,
     conversation: Mutex<Option<Conversation>>,
@@ -268,6 +276,7 @@ async fn submit_text_message(
         return Err("only the client may submit text".into());
     }
     text_input::validate_text(&text)?;
+    desktop::interrupt(&state);
     let id = format!(
         "text_{}",
         TEXT_INPUT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1432,7 +1441,15 @@ fn send_worker_request(
         return Err("only request envelopes can be sent to the worker".to_owned());
     }
     if let Envelope::Request { kind, .. } = &envelope {
-        if !kind.starts_with("voice.") && kind != "health.check" && kind != "browser.login.open" {
+        if !kind.starts_with("voice.")
+            && !matches!(
+                kind.as_str(),
+                "health.check"
+                    | "browser.login.open"
+                    | "browser.session.resume"
+                    | "browser.session.inspect"
+            )
+        {
             return Err("internal Host messages cannot be sent by a WebView".into());
         }
     }
@@ -1452,8 +1469,48 @@ fn repository_root() -> PathBuf {
         .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
 }
 
+/// Worker 状态快照。`state` 只用闭集，避免界面靠字符串匹配猜测。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerStatus {
+    state: &'static str,
+    detail: Option<String>,
+}
+
+/// 客户端挂载时主动拉取 Worker 状态。
+///
+/// 启动失败发生在 setup 阶段，WebView 那时还没有事件监听，广播一定会丢；
+/// 所以「拉」是主路径，「推」（`host://worker-error`）只用来补充运行期失败。
+#[tauri::command]
+fn get_worker_status(state: State<'_, Arc<DesktopState>>) -> Result<WorkerStatus, String> {
+    let detail = state
+        .worker_error
+        .lock()
+        .map_err(|_| "worker 状态不可用".to_owned())?
+        .clone();
+    let supervised = state
+        .worker
+        .lock()
+        .map_err(|_| "worker 状态不可用".to_owned())?
+        .is_some();
+    let name = if detail.is_some() {
+        "failed"
+    } else if supervised {
+        "running"
+    } else {
+        "unknown"
+    };
+    Ok(WorkerStatus {
+        state: name,
+        detail,
+    })
+}
+
 fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String> {
     let repository_root = repository_root();
+    // GUI 启动的进程不继承用户 shell 的 PATH，必须显式解析 Node 的绝对
+    // 路径；直接用 `node` 只会在终端里碰巧成立。
+    let node = node_program::resolve().map_err(|error| format!("Agent Worker 未启动：{error}"))?;
     let diagnostics_path = app
         .path()
         .app_data_dir()
@@ -1464,7 +1521,7 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
     let message_app_handle = app.clone();
     let supervisor = WorkerSupervisor::new(
         WorkerCommand {
-            program: "node".to_owned(),
+            program: node.to_string_lossy().into_owned(),
             args: vec![
                 "--experimental-strip-types".to_owned(),
                 // 密钥由 Node 原生 dotenv 加载，避免经过 React、Tauri IPC 或
@@ -1496,8 +1553,13 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
         Arc::new(move |event: WorkerEvent| {
             if matches!(event, WorkerEvent::Starting { .. }) {
                 let state = app_handle.state::<Arc<DesktopState>>();
+                desktop::interrupt(&state);
                 if let Ok(mut guard) = state.storage.lock() {
                     if let Some(storage) = guard.as_mut() {
+                        if storage.recover_desktop_actions(unix_time_ms()).is_err() {
+                            let _ = app_handle
+                                .emit("host://desktop-error", "桌面动作恢复失败，请核对现场");
+                        }
                         if storage.recover_workflow_runs(unix_time_ms()).is_err() {
                             let _ = app_handle.emit(
                                 "host://workflow-recovery-error",
@@ -1538,10 +1600,27 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
                     }
                 }
             }
+            if matches!(event, WorkerEvent::RestartLimitReached { .. }) {
+                // 重启耗尽后 Worker 不会再回来；必须让用户看到，而不是让界面
+                // 停在「看起来正常但什么也不做」。
+                let _ = app_handle.emit(
+                    "host://worker-error",
+                    "Agent Worker 多次重启失败，对话、语音与桌面操控将不可用；请检查 Node 与 Worker 日志后重启客户端",
+                );
+            }
             // UI 只接收 WorkerEvent 中经过约束的字段，不转发 stderr 或环境变量。
             let _ = app_handle.emit("host://worker-event", event);
         }),
         Arc::new(move |message| {
+            match desktop::handle_message(&message_app_handle, &message) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(_) => {
+                    let _ = message_app_handle
+                        .emit("host://desktop-error", "桌面结果无法传递，请先核对现场");
+                    return;
+                }
+            }
             match handle_workflow_message(&message_app_handle, &message) {
                 Ok(true) => return,
                 Ok(false) => {}
@@ -1573,6 +1652,7 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
 }
 
 fn shutdown(state: &Arc<DesktopState>) {
+    desktop::interrupt(state);
     if let Ok(mut lifecycle) = state.lifecycle.lock() {
         let _ = route_lifecycle(&mut lifecycle, LifecycleCommand::BeginShutdown);
     }
@@ -1587,9 +1667,17 @@ fn shutdown(state: &Arc<DesktopState>) {
 }
 
 fn main() {
+    // 只读诊断不创建 WebView、Worker 或授权弹窗；必须使用打包后的二进制验收。
+    if std::env::args().any(|argument| argument == "--desktop-diagnostic") {
+        println!("{}", desktop::diagnostic());
+        return;
+    }
     let state = Arc::new(DesktopState {
+        desktop: Mutex::new(desktop::service()),
+        desktop_snapshot: Mutex::new(None),
         lifecycle: Mutex::new(HostLifecycle::default()),
         worker: Mutex::new(None),
+        worker_error: Mutex::new(None),
         storage: Mutex::new(None),
         confirmations: Mutex::new(std::collections::HashMap::new()),
         conversation: Mutex::new(None),
@@ -1616,6 +1704,13 @@ fn main() {
         )
         .manage(Arc::clone(&state))
         .invoke_handler(tauri::generate_handler![
+            desktop::get_desktop_permissions,
+            desktop::check_desktop_observation,
+            desktop::request_desktop_permission,
+            get_worker_status,
+            desktop::get_desktop_state,
+            desktop::open_desktop_permission_settings,
+            desktop::control_desktop,
             get_host_lifecycle,
             get_assistant_visibility,
             set_assistant_visible,
@@ -1711,12 +1806,24 @@ fn main() {
                 .lock()
                 .map_err(|_| "storage unavailable")?
                 .replace(Storage::open(data_dir.join("semi-os.sqlite"))?);
-            let worker = start_worker(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
-            desktop_state
-                .worker
-                .lock()
-                .map_err(|_| "worker supervisor lock is unavailable")?
-                .replace(worker);
+            match start_worker(app.handle()) {
+                Ok(worker) => {
+                    desktop_state
+                        .worker
+                        .lock()
+                        .map_err(|_| "worker supervisor lock is unavailable")?
+                        .replace(worker);
+                }
+                Err(error) => {
+                    // 没有 Worker 时客户端仍要能打开：静默失败会变成「界面能
+                    // 用、但对话与语音全部不工作」，比直接报错更难排查。
+                    *desktop_state
+                        .worker_error
+                        .lock()
+                        .map_err(|_| "worker status lock is unavailable")? = Some(error.clone());
+                    let _ = app.handle().emit("host://worker-error", error);
+                }
+            }
             let mut lifecycle = desktop_state
                 .lifecycle
                 .lock()

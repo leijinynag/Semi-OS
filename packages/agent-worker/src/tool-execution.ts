@@ -104,6 +104,7 @@ export async function executeProductTool(
     ...input.identity,
     signal: input.signal,
     startedAtMs: input.now(),
+    approval: input.approval,
   };
 
   if (input.policyDecision !== "auto" && input.policyDecision !== "approved") {

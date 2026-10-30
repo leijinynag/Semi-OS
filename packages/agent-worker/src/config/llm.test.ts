@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  DEFAULT_CLOUD_LLM_CONFIG,
-  readCloudLlmConfig,
-  resolveCloudLlmModel,
-} from "./llm.ts";
+import { DEFAULT_CLOUD_LLM_CONFIG, readCloudLlmConfig, resolveCloudLlmModel } from "./llm.ts";
 
 test("uses the project DeepSeek Flash default instead of the global Pi model", () => {
   const config = readCloudLlmConfig({});

@@ -4,6 +4,9 @@
 //! 诊断持久化不能依赖 WebView，这样崩溃恢复逻辑可以在无界面的测试中验证。
 
 pub mod conversation;
+pub mod desktop;
+pub mod desktop_router;
+pub use semi_os_desktop_macos as desktop_macos;
 mod diagnostics;
 mod error;
 mod lifecycle;

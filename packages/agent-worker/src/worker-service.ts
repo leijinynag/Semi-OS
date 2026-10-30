@@ -17,9 +17,15 @@ import { FakeSttProvider, FakeTtsProvider } from "./voice/fake-providers.ts";
 import { DashScopeSttProvider } from "./voice/dashscope-stt.ts";
 import { DashScopeTtsProvider } from "./voice/dashscope-tts.ts";
 import { VoiceLoop, VoiceSessionMismatchError, type VoiceLoopEvent } from "./voice/voice-loop.ts";
-import { BrowserService } from "./browser/browser-service.ts";
-import { createBrowserTools } from "./browser/browser-tools.ts";
+import { BrowserNeedsUser, type BrowserBackend } from "./browser/browser-backend.ts";
+import { AutomaticBrowserBackend } from "./browser/browser-selector.ts";
+import { createBrowserTools, type BrowserUserWait } from "./browser/browser-tools.ts";
+import { BrowserHandoff } from "./browser/browser-handoff.ts";
 import { ResearchHost } from "./research-host.ts";
+import { DesktopHost } from "./desktop/desktop-host.ts";
+import { createDesktopTools } from "./desktop/desktop-tools.ts";
+import { LarkService } from "./lark/lark-service.ts";
+import { createLarkTools } from "./lark/lark-tools.ts";
 import { ToolRegistry } from "@semi-os/tool-sdk";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -66,8 +72,14 @@ export interface WorkerServiceOptions {
   pid?: number;
   environment?: NodeJS.ProcessEnv;
   emit(envelope: Envelope): void;
-  createVoiceLoop?: (emit: (event: VoiceLoopEvent) => void, sessionId: string) => VoiceLoopPort;
+  createVoiceLoop?: (
+    emit: (event: VoiceLoopEvent) => void,
+    sessionId: string,
+    waitForBrowser: BrowserUserWait,
+  ) => VoiceLoopPort;
   createCoordinatorRuntime?: (snapshot: WorkflowSnapshot) => AgentRuntimeAdapter;
+  /** 测试或受控集成可以注入后端；生产默认按 Ego Lite -> Playwright 选择。 */
+  browser?: BrowserBackend;
 }
 
 function response(request: RequestEnvelope, kind: string, payload: JsonValue): Envelope {
@@ -100,7 +112,10 @@ export class WorkerService {
   #activeTaskId?: string;
   #activeSessionId?: string;
   readonly #researchHost: ResearchHost;
-  readonly #browser: BrowserService;
+  readonly #desktopHost: DesktopHost;
+  readonly #lark: LarkService;
+  readonly #browser: BrowserBackend;
+  readonly #browserHandoff: BrowserHandoff;
   readonly #workflowHost: WorkflowHost;
   readonly #collaboration: CollaborationService;
   readonly #coordinator: WorkflowCoordinator;
@@ -116,6 +131,8 @@ export class WorkerService {
     this.#environment = options.environment ?? process.env;
     this.#emitEnvelope = options.emit;
     this.#researchHost = new ResearchHost(options.emit);
+    this.#desktopHost = new DesktopHost(options.emit);
+    this.#lark = new LarkService({ environment: this.#environment });
     this.#workflowHost = new WorkflowHost(options.emit);
     this.#collaboration = new CollaborationService(
       this.#workflowHost,
@@ -146,9 +163,19 @@ export class WorkerService {
         createCoordinatorTools(this.#workflowHost, snapshot, this.#collaboration),
       restoreQueued: (snapshot, signal) => this.#collaboration.restoreQueued(snapshot, signal),
     });
-    this.#browser = new BrowserService({
-      profileDir: this.#environment.SEMI_OS_BROWSER_PROFILE_DIR,
-      headless: this.#environment.SEMI_OS_BROWSER_HEADLESS === "true",
+    this.#browser = new AutomaticBrowserBackend({
+      browser: options.browser,
+      env: this.#environment,
+      playwright: {
+        profileDir: this.#environment.SEMI_OS_BROWSER_PROFILE_DIR,
+        headless: this.#environment.SEMI_OS_BROWSER_HEADLESS === "true",
+        timing: (stage, durationMs) => {
+          if (this.#activeRequestId)
+            this.#emitEnvelope(
+              createVoiceEvent(this.#activeRequestId, "research.timing", { stage, durationMs }),
+            );
+        },
+      },
       timing: (stage, durationMs) => {
         if (this.#activeRequestId)
           this.#emitEnvelope(
@@ -156,9 +183,24 @@ export class WorkerService {
           );
       },
     });
+    this.#browserHandoff = new BrowserHandoff(
+      this.#browser,
+      () =>
+        this.#activeSessionId && this.#activeTaskId
+          ? { sessionId: this.#activeSessionId, taskId: this.#activeTaskId }
+          : undefined,
+      (state) =>
+        this.#emitEnvelope({
+          direction: "event",
+          protocolVersion: PROTOCOL_VERSION,
+          requestId: this.#activeRequestId ?? (`req_browser_${state.resumeId}` as RequestId),
+          kind: "browser.session.state",
+          payload: toWirePayload(state),
+        }),
+    );
     this.#createVoiceLoop =
       options.createVoiceLoop ??
-      ((emit, sessionId) =>
+      ((emit, sessionId, waitForBrowser) =>
         createConfiguredVoiceLoop(
           this.#environment,
           emit,
@@ -167,12 +209,26 @@ export class WorkerService {
           this.#workflowHost,
           sessionId,
           this.#collaboration,
+          this.#desktopHost,
+          this.#lark,
+          waitForBrowser,
         ));
   }
 
   async handle(input: RequestEnvelope): Promise<Envelope> {
     const request = parseRequestMessage(input);
     switch (request.kind) {
+      case "browser.session.inspect":
+        return response(
+          request,
+          "browser.session.snapshot",
+          toWirePayload(this.#browserHandoff.snapshot()),
+        );
+      case "browser.session.resume": {
+        // 协议校验已拒绝任意 spaceId；实际 Space 始终由浏览器服务保管。
+        this.#track(this.#browserHandoff.resume(request.payload));
+        return response(request, "browser.session.resume.accepted", { accepted: true });
+      }
       case "workflow.application.prepare":
       case "workflow.application.apply": {
         const payload = request.payload;
@@ -368,6 +424,13 @@ export class WorkerService {
         this.#researchHost.acknowledge(request.payload);
         return response(request, "research.acknowledged", { accepted: true });
       }
+      case "desktop.result": {
+        this.#desktopHost.receive(request.payload);
+        return response(request, "desktop.acknowledged", {
+          operationId: request.payload.operationId,
+          ok: true,
+        });
+      }
       case "browser.login.open": {
         const payload = request.payload;
         if (
@@ -425,6 +488,7 @@ export class WorkerService {
     const voiceRequest: VoiceRequestEnvelope = parseVoiceRequest(request);
     if (voiceRequest.kind === "voice.session.dispose") {
       const { sessionId } = voiceRequest.payload;
+      if (this.#activeSessionId === sessionId) this.#browserHandoff.cancel();
       this.#deletedSessions.add(sessionId);
       this.#userTurns.delete(sessionId);
       // 先撤销事件身份再释放资源；dispose 期间的迟到回调不能再写入已删除的聊天。
@@ -447,6 +511,7 @@ export class WorkerService {
     }
     if (voiceRequest.kind === "voice.text.submit") {
       const payload = voiceRequest.payload;
+      this.#browserHandoff.cancel();
       // 必须在第一个 await 前占住会话；监督 finally 不得抢在用户轮次前再次启动。
       this.#deletedSessions.delete(payload.sessionId);
       this.#userTurns.set(payload.sessionId, request.requestId);
@@ -495,6 +560,7 @@ export class WorkerService {
     }
     if (voiceRequest.kind === "voice.turn.start") {
       const payload = voiceRequest.payload;
+      this.#browserHandoff.cancel();
       this.#deletedSessions.delete(payload.sessionId);
       this.#userTurns.set(payload.sessionId, request.requestId);
       try {
@@ -599,6 +665,7 @@ export class WorkerService {
     }
 
     const payload = voiceRequest.payload;
+    this.#browserHandoff.cancel();
     const targetRequestId = this.#activeRequestId ?? request.requestId;
     for (const turn of this.#turns.values()) turn.audio.close(true);
     this.#turns.clear();
@@ -614,6 +681,7 @@ export class WorkerService {
 
   async dispose(): Promise<void> {
     this.#disposed = true;
+    this.#browserHandoff.cancel();
     this.#operationAbort.abort();
     for (const turn of this.#turns.values()) turn.audio.close(true);
     this.#turns.clear();
@@ -628,6 +696,7 @@ export class WorkerService {
     await this.#collaboration.dispose();
     await Promise.allSettled(this.#operations);
     this.#researchHost.dispose();
+    this.#desktopHost.dispose();
     this.#workflowHost.dispose();
     await this.#browser.dispose();
   }
@@ -663,16 +732,20 @@ export class WorkerService {
   #loop(sessionId: string): VoiceLoopPort {
     const existing = this.#sessionLoops.get(sessionId);
     if (existing) return existing;
-    const loop = this.#createVoiceLoop((event) => {
-      // 不活跃会话的迟到事件不得贴上当前会话身份；轮次内代际仍由 VoiceLoop 校验。
-      if (
-        this.#sessionLoops.get(sessionId) === loop &&
-        this.#activeSessionId === sessionId &&
-        this.#activeRequestId
-      ) {
-        this.#emitVoice(this.#activeRequestId, event);
-      }
-    }, sessionId);
+    const loop = this.#createVoiceLoop(
+      (event) => {
+        // 不活跃会话的迟到事件不得贴上当前会话身份；轮次内代际仍由 VoiceLoop 校验。
+        if (
+          this.#sessionLoops.get(sessionId) === loop &&
+          this.#activeSessionId === sessionId &&
+          this.#activeRequestId
+        ) {
+          this.#emitVoice(this.#activeRequestId, event);
+        }
+      },
+      sessionId,
+      this.#browserHandoff.wait(sessionId),
+    );
     this.#sessionLoops.set(sessionId, loop);
     return loop;
   }
@@ -707,11 +780,14 @@ export class WorkerService {
 function createConfiguredVoiceLoop(
   environment: NodeJS.ProcessEnv,
   emit: (event: VoiceLoopEvent) => void,
-  browser: BrowserService,
+  browser: BrowserBackend,
   researchHost: ResearchHost,
   workflowHost: WorkflowHost,
   sessionId: string,
   collaboration: CollaborationService,
+  desktopHost: DesktopHost,
+  lark: LarkService,
+  waitForBrowser: BrowserUserWait,
 ): VoiceLoop {
   const fixtureTranscript = environment.SEMI_OS_VOICE_FIXTURE_TRANSCRIPT?.trim();
   // 按用户体验反馈切换默认 ASR；保留显式 Qwen 回退，不混用两家的参数。
@@ -740,14 +816,22 @@ function createConfiguredVoiceLoop(
       const approvalId = `approval_${randomUUID().replaceAll("-", "")}`;
       try {
         const effectiveSignal = signal ?? new AbortController().signal;
-        const evidence = ["browser_click", "browser_type"].includes(tool.name)
-          ? await browser.policyEvidence(
-              String(input.pageId),
-              Number(input.version),
-              String(input.ref),
-              effectiveSignal,
-            )
-          : undefined;
+        let evidence;
+        try {
+          evidence = ["browser_click", "browser_type"].includes(tool.name)
+            ? await browser.policyEvidence(
+                String(input.pageId),
+                Number(input.version),
+                String(input.ref),
+                effectiveSignal,
+              )
+            : undefined;
+        } catch (error) {
+          if (error instanceof BrowserNeedsUser && waitForBrowser)
+            await waitForBrowser(error.observation, { taskId, signal: effectiveSignal });
+          // 人工介入后的旧审批目标已失效；交还 Pi 重读观察并重新审批，不执行旧动作。
+          return "rejected";
+        }
         await researchHost.authorize(
           {
             taskId,
@@ -782,10 +866,13 @@ function createConfiguredVoiceLoop(
     additionalSkillPaths: [
       fileURLToPath(new URL("../../skills/research", import.meta.url)),
       fileURLToPath(new URL("../../skills/collaboration", import.meta.url)),
+      fileURLToPath(new URL("../../skills/desktop", import.meta.url)),
     ],
   });
   const registry = new ToolRegistry();
-  registry.registerAll(createBrowserTools(browser, researchHost));
+  registry.registerAll(createBrowserTools(browser, researchHost, waitForBrowser));
+  registry.registerAll(createDesktopTools(desktopHost));
+  registry.registerAll(createLarkTools(lark));
   registry.registerAll(createWorkflowTools(workflowHost, sessionId, collaboration));
   loop = new VoiceLoop({
     runtime,
@@ -793,6 +880,16 @@ function createConfiguredVoiceLoop(
       platform: process.platform,
       capabilities: new Map([
         ["browser", { key: "browser", status: "available", observedAtMs: Date.now() }],
+        ["desktop", { key: "desktop", status: "available", observedAtMs: Date.now() }],
+        [
+          "cli.lark",
+          {
+            key: "cli.lark",
+            status: lark.available ? "available" : "unavailable",
+            reason: lark.available ? undefined : "lark-cli was not found on PATH",
+            observedAtMs: Date.now(),
+          },
+        ],
         ["collaboration", { key: "collaboration", status: "available", observedAtMs: Date.now() }],
       ]),
       workspaceAvailable: true,

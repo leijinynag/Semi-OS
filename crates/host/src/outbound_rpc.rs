@@ -132,7 +132,10 @@ fn matches_response(request: &str, response: &str) -> bool {
         "workflow.acknowledged" => response == "workflow.received",
         "research.confirmation.required" => response == "research.confirmation.announced",
         "research.persisted" => response == "research.acknowledged",
+        "desktop.result" => response == "desktop.acknowledged",
         "browser.login.open" => response == "browser.login.accepted",
+        "browser.session.resume" => response == "browser.session.resume.accepted",
+        "browser.session.inspect" => response == "browser.session.snapshot",
         _ => false,
     }
 }
