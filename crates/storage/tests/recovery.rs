@@ -27,7 +27,7 @@ fn migrates_all_core_tables_on_reopen() {
     let database_path = directory.path().join("semi-os.sqlite3");
 
     let storage = Storage::open(&database_path).expect("database should migrate");
-    assert_eq!(storage.schema_version().expect("version should load"), 14);
+    assert_eq!(storage.schema_version().expect("version should load"), 15);
     drop(storage);
 
     let connection = rusqlite::Connection::open(&database_path).expect("database should open");
@@ -55,6 +55,7 @@ fn migrates_all_core_tables_on_reopen() {
             "conversation_turns",
             "desktop_actions",
             "memories",
+            "memory_admission",
             "memory_links",
             "memory_sources",
             "outbound_rpc_receipts",
@@ -85,7 +86,7 @@ fn migrates_all_core_tables_on_reopen() {
     drop(connection);
 
     let reopened = Storage::open(&database_path).expect("migration should be idempotent");
-    assert_eq!(reopened.schema_version().expect("version should load"), 14);
+    assert_eq!(reopened.schema_version().expect("version should load"), 15);
 }
 
 #[test]

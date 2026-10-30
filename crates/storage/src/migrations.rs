@@ -73,6 +73,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "personality ownership",
         include_str!("../migrations/0014_personality_ownership.sql"),
     ),
+    (
+        15,
+        "memory admission scores",
+        include_str!("../migrations/0015_memory_admission.sql"),
+    ),
 ];
 
 /// 在单个排他事务中依次执行迁移。
