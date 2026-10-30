@@ -17,7 +17,7 @@
 
 - [4A 资料调研工作流](4A-VALIDATION.md)
 - [4B 多 Agent 协作](4B-VALIDATION.md)
-- [4C 原生桌面与 Lark](4C-VALIDATION.md)
+- [4C 原生桌面与 Lark](4C-VALIDATION.md)（本轮最小演示过线以该文 2026-10-30 定稿为准）
 - [Session 管理](SESSION-VALIDATION.md)
 - [桌面助手与语音交互优化](VOICE-OPTIMIZATION-VALIDATION.md)
 - [真人录音评测](VOICE-HUMAN-CORPUS.md)
