@@ -151,7 +151,7 @@ supersedes，Agent 不改用户行。`write_memory` 仍拒绝把压缩摘要晋�
 紧凑人格、L1、L0、再按阶段的 L2–L5。普通轮次停在基础包，超出 token 预算则截断。
 组装不写人格，演化备注和用户事实不进紧凑人格。
 
-P5.8、P5.9 尚未开始。Dream Cycle、图记忆、复杂衰减、自动 Skill 晋升、
+实现提交为 `62db3f7`。P5.8、P5.9 尚未开始。Dream Cycle、图记忆、复杂衰减、自动 Skill 晋升、
 4C 验收、视觉回退、PV.6 和 Worker 发行打包都不在本切片。
 `cargo test --locked -p semi-os-storage` 与
 `cargo clippy --locked -p semi-os-storage --all-targets -- -D warnings`
