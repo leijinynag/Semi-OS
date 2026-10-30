@@ -32,7 +32,7 @@
     "format:check": "node scripts/check-format.mjs && cargo fmt --all -- --check",
     "typecheck": "pnpm -r run typecheck",
     "check:workspaces": "node scripts/check-workspaces.mjs",
-    "check": "pnpm run check:workspaces && pnpm run generate:check && pnpm run format:check && pnpm run typecheck && pnpm run lint && cargo check --workspace && pnpm run test && pnpm run build && git diff --check"
+    "check": "pnpm run check:workspaces && pnpm run generate:check && pnpm run format:check && pnpm run typecheck && pnpm run lint:js && pnpm run build:js && pnpm run lint:rust && cargo check --workspace && pnpm run test && pnpm run build:rust && git diff --check"
   },
   "engines": {
     "node": ">=22.19.0"
