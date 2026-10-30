@@ -1,6 +1,6 @@
-import { Ajv2020 } from "ajv/dist/2020.js";
 import { ProtocolValidationError, type JsonValue } from "./envelope.ts";
-import { messageSchemas, wireSchema } from "./generated/schema.generated.ts";
+import { messageSchemas } from "./generated/schema.generated.ts";
+import { protocolValidators } from "./generated/validators.generated.ts";
 export type {
   RequestMessage,
   ResponseMessage,
@@ -19,15 +19,15 @@ export type ProtocolPayloadShape<
   K extends ProtocolKind<D>,
 > = Registry[D][K];
 
-const ajv = new Ajv2020({ strict: false, strictNumbers: true, allErrors: false });
-const validators = new Map(
-  Object.entries(messageSchemas).flatMap(([direction, kinds]) =>
-    Object.entries(kinds).map(
-      ([kind, payload]) =>
-        [`${direction}:${kind}`, ajv.compile({ $defs: wireSchema.$defs, ...payload })] as const,
-    ),
-  ),
-);
+/**
+ * 校验器在生成阶段编译完成，运行期不再调用 Ajv。
+ * 桌面版 CSP 禁止 eval，而 `ajv.compile()` 依赖 `new Function`，会在 WKWebView
+ * 里抛 EvalError 并导致客户端白屏；`pnpm dev` 不发送 CSP，因而看不出这个缺陷。
+ */
+type Validator = ((payload: unknown) => boolean) & { errors?: ValidationFailure[] };
+type ValidationFailure = { instancePath?: string; keyword?: string };
+
+const validators = new Map<string, Validator>(Object.entries(protocolValidators));
 
 /** 拒绝无法无损穿过 JSONL 的值；Schema 的扩展字段也不能夹带非 JSON 数据。 */
 function assertJson(value: unknown, ancestors = new Set<object>()): void {

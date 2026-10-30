@@ -23,16 +23,40 @@ export interface ResearchReport {
   limitations: string[];
 }
 export function parseResearchSource(value: unknown): ResearchSource {
-  if (!value || typeof value !== "object") throw new ProtocolValidationError("invalid source", "invalid_payload");
+  if (!value || typeof value !== "object")
+    throw new ProtocolValidationError("invalid source", "invalid_payload");
   const source = value as ResearchSource;
   for (const key of ["sourceId", "taskId", "originalUrl", "finalUrl", "title"] as const) {
-    if (typeof source[key] !== "string" || !source[key]) throw new ProtocolValidationError(`invalid source ${key}`, "invalid_payload");
+    if (typeof source[key] !== "string" || !source[key])
+      throw new ProtocolValidationError(`invalid source ${key}`, "invalid_payload");
   }
-  if (!Number.isSafeInteger(source.collectedAtMs) || !["collected", "failed", "needs_user"].includes(source.status) || !Array.isArray(source.quotes)) throw new ProtocolValidationError("invalid source metadata", "invalid_payload");
-  if (source.status === "collected" && (typeof source.text !== "string" || source.text.length > 1_000_000 || !source.artifactId || !source.digest)) throw new ProtocolValidationError("invalid source body", "invalid_payload");
+  if (
+    !Number.isSafeInteger(source.collectedAtMs) ||
+    !["collected", "failed", "needs_user"].includes(source.status) ||
+    !Array.isArray(source.quotes)
+  )
+    throw new ProtocolValidationError("invalid source metadata", "invalid_payload");
+  if (
+    source.status === "collected" &&
+    (typeof source.text !== "string" ||
+      source.text.length > 1_000_000 ||
+      !source.artifactId ||
+      !source.digest)
+  )
+    throw new ProtocolValidationError("invalid source body", "invalid_payload");
   const ids = new Set<string>();
   for (const quote of source.quotes) {
-    if (!quote || typeof quote.quoteId !== "string" || ids.has(quote.quoteId) || !Number.isSafeInteger(quote.start) || !Number.isSafeInteger(quote.end) || quote.start < 0 || quote.end <= quote.start || source.text?.slice(quote.start, quote.end) !== quote.text) throw new ProtocolValidationError("invalid quote", "invalid_payload");
+    if (
+      !quote ||
+      typeof quote.quoteId !== "string" ||
+      ids.has(quote.quoteId) ||
+      !Number.isSafeInteger(quote.start) ||
+      !Number.isSafeInteger(quote.end) ||
+      quote.start < 0 ||
+      quote.end <= quote.start ||
+      source.text?.slice(quote.start, quote.end) !== quote.text
+    )
+      throw new ProtocolValidationError("invalid quote", "invalid_payload");
     ids.add(quote.quoteId);
   }
   return source;

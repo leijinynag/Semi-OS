@@ -2,6 +2,79 @@
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopElement {
+    pub reference: String,
+    pub role: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    pub value_truncated: bool,
+    pub focused: bool,
+    pub enabled: bool,
+    pub sensitive: bool,
+    pub actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<PayloadDesktopBounds>,
+    pub depth: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopObservation {
+    pub version: String,
+    pub observed_at_ms: u64,
+    pub bundle_id: String,
+    pub process_id: u64,
+    pub window_id: String,
+    pub title: String,
+    pub elements: Vec<PayloadDesktopElement>,
+    pub truncated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopResult {
+    pub status: String,
+    pub summary: String,
+    pub lease_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<PayloadDesktopObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopVisualCapability {
+    pub status: String,
+    pub reason: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopPermissions {
+    pub accessibility: String,
+    pub screen_recording: String,
+    pub microphone: String,
+    pub input_monitoring: String,
+    pub takeover_detection: bool,
+    pub visual_fallback: PayloadDesktopVisualCapability,
+    pub checked_at_ms: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestDesktopResultPayload {
+    pub operation_id: String,
+    pub result: PayloadDesktopResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PayloadDesktopPermissions>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RequestHealthCheckPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_capabilities: Option<bool>,
@@ -113,8 +186,19 @@ pub struct RequestBrowserLoginOpenPayload {
     pub url: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestBrowserSessionResumePayload {
+    pub resume_id: String,
+    pub session_id: String,
+    pub task_id: String,
+    pub mode: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", content = "payload")]
 pub enum RequestMessage {
+    #[serde(rename = "desktop.result")]
+    DesktopResult(RequestDesktopResultPayload),
     #[serde(rename = "health.check")]
     HealthCheck(Option<RequestHealthCheckPayload>),
     #[serde(rename = "voice.turn.start")]
@@ -151,6 +235,10 @@ pub enum RequestMessage {
     ResearchPersisted(PayloadAck),
     #[serde(rename = "browser.login.open")]
     BrowserLoginOpen(RequestBrowserLoginOpenPayload),
+    #[serde(rename = "browser.session.resume")]
+    BrowserSessionResume(RequestBrowserSessionResumePayload),
+    #[serde(rename = "browser.session.inspect")]
+    BrowserSessionInspect(std::collections::BTreeMap<String, serde_json::Value>),
     #[serde(rename = "fixture.request")]
     FixtureRequest(std::collections::BTreeMap<String, serde_json::Value>),
 }
@@ -196,6 +284,21 @@ pub enum ResponseWorkflowRunResultPayload {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PayloadBrowserSessionState {
+    pub resume_id: String,
+    pub session_id: String,
+    pub task_id: String,
+    pub status: String,
+    pub message: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResponseBrowserSessionSnapshotPayload {
+    Variant0(serde_json::Value),
+    Variant1(PayloadBrowserSessionState),
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PayloadBrowserObservationElementsItem {
     pub r#ref: String,
     pub role: String,
@@ -219,8 +322,11 @@ pub struct ResponseBrowserLoginFailedPayload {
     pub message: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", content = "payload")]
 pub enum ResponseMessage {
+    #[serde(rename = "desktop.acknowledged")]
+    DesktopAcknowledged(PayloadAck),
     #[serde(rename = "health.ready")]
     HealthReady(ResponseHealthReadyPayload),
     #[serde(rename = "voice.session.disposed")]
@@ -249,10 +355,86 @@ pub enum ResponseMessage {
     ResearchAcknowledged(PayloadAccepted),
     #[serde(rename = "browser.login.accepted")]
     BrowserLoginAccepted(PayloadAccepted),
+    #[serde(rename = "browser.session.resume.accepted")]
+    BrowserSessionResumeAccepted(PayloadAccepted),
+    #[serde(rename = "browser.session.snapshot")]
+    BrowserSessionSnapshot(ResponseBrowserSessionSnapshotPayload),
     #[serde(rename = "browser.login.opened")]
     BrowserLoginOpened(PayloadBrowserObservation),
     #[serde(rename = "browser.login.failed")]
     BrowserLoginFailed(ResponseBrowserLoginFailedPayload),
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventDesktopCancelledPayload {
+    pub operation_id: String,
+    pub task_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopActionVariant0 {
+    pub kind: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopActionVariant1 {
+    pub kind: String,
+    pub version: String,
+    pub reference: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopActionVariant2 {
+    pub kind: String,
+    pub version: String,
+    pub reference: String,
+    pub text: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopActionVariant3 {
+    pub kind: String,
+    pub version: String,
+    pub reference: String,
+    pub key: String,
+    pub modifiers: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopActionVariant4 {
+    pub kind: String,
+    pub version: String,
+    pub reference: String,
+    pub direction: String,
+    pub amount: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadDesktopActionVariant5 {
+    pub kind: String,
+    pub bundle_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PayloadDesktopAction {
+    Variant0(PayloadDesktopActionVariant0),
+    Variant1(PayloadDesktopActionVariant1),
+    Variant2(PayloadDesktopActionVariant2),
+    Variant3(PayloadDesktopActionVariant3),
+    Variant4(PayloadDesktopActionVariant4),
+    Variant5(PayloadDesktopActionVariant5),
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventDesktopRequestPayload {
+    pub operation_id: String,
+    pub task_id: String,
+    pub attempt_id: String,
+    pub input_json: String,
+    pub input_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+    pub action: PayloadDesktopAction,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -960,8 +1142,15 @@ pub struct EventRuntimeErrorPayload {
     pub message: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", content = "payload")]
 pub enum EventMessage {
+    #[serde(rename = "browser.session.state")]
+    BrowserSessionState(PayloadBrowserSessionState),
+    #[serde(rename = "desktop.cancelled")]
+    DesktopCancelled(EventDesktopCancelledPayload),
+    #[serde(rename = "desktop.request")]
+    DesktopRequest(EventDesktopRequestPayload),
     #[serde(rename = "fixture.echo")]
     FixtureEcho(std::collections::BTreeMap<String, serde_json::Value>),
     #[serde(rename = "voice.state")]
@@ -1044,6 +1233,7 @@ pub enum EventMessage {
     RequestError(PayloadErrorPayload),
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", content = "payload")]
 pub enum ErrorMessage {
     #[serde(rename = "protocol.error")]

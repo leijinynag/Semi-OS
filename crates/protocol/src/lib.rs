@@ -173,8 +173,10 @@ pub fn validate_envelope(envelope: &Envelope) -> Result<(), ProtocolValidationEr
             | Envelope::Event { payload, .. } => payload,
             Envelope::Error { .. } => unreachable!("error envelopes are excluded above"),
         };
-        if matches!(kind.as_str(), "workflow.request" | "research.persist")
-            && payload["operationId"].as_str() != Some(request_id.0.as_str())
+        if matches!(
+            kind.as_str(),
+            "workflow.request" | "research.persist" | "desktop.request"
+        ) && payload["operationId"].as_str() != Some(request_id.0.as_str())
         {
             return Err(ProtocolValidationError {
                 code: "invalid_payload",
@@ -243,6 +245,23 @@ mod tests {
         let fixture = include_str!("../../../tests/contract/fixtures/request.json");
         let envelope: Envelope = serde_json::from_str(fixture).expect("fixture should deserialize");
         validate_envelope(&envelope).expect("fixture should validate");
+    }
+
+    #[test]
+    fn accepts_a_null_payload_for_a_nullable_object_response() {
+        // browser.session.snapshot 在没有接管状态时合法返回 null。schema 用
+        // `oneOf: [null, ...]` 表达可空性，registry 必须与 `type: ["object","null"]`
+        // 同等对待，否则 Worker 会被误判成非法载荷并进入重启循环。
+        let message = serde_json::json!({
+            "protocolVersion": 1,
+            "direction": "response",
+            "requestId": "req_nullableSnapshot",
+            "kind": "browser.session.snapshot",
+            "payload": null
+        });
+        let envelope: Envelope =
+            serde_json::from_value(message).expect("envelope should deserialize");
+        validate_envelope(&envelope).expect("null snapshot payload should be accepted");
     }
 
     #[test]

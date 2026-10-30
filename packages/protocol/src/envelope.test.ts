@@ -126,3 +126,33 @@ test("validates fields and rejects lossy JSON even in extension properties", () 
   assert.throws(() => assertValidEnvelope(request(cyclic)), ProtocolValidationError);
   assertValidEnvelope(request({ extension: { a: [1, true, null] } }));
 });
+
+test("browser resume requires a bound ticket and never accepts an arbitrary Space", () => {
+  const payload = {
+    resumeId: "resume_fixture",
+    sessionId: "session_fixture",
+    taskId: "task_fixture",
+    mode: "takeover",
+  };
+  const message = (input: unknown) => ({
+    direction: "request",
+    protocolVersion: 1,
+    requestId: "req_resume_fixture",
+    kind: "browser.session.resume",
+    payload: input,
+  });
+  assertValidEnvelope(message(payload));
+  assertValidEnvelope(message({ ...payload, mode: "claim" }));
+  assert.throws(
+    () => assertValidEnvelope(message({ ...payload, spaceId: 42 })),
+    ProtocolValidationError,
+  );
+  assert.throws(
+    () => assertValidEnvelope(message({ ...payload, mode: "auto" })),
+    ProtocolValidationError,
+  );
+  assert.throws(
+    () => assertValidEnvelope(message({ ...payload, resumeId: "" })),
+    ProtocolValidationError,
+  );
+});

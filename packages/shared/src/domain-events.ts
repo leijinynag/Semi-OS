@@ -120,10 +120,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function assertNonEmptyString(
-  value: unknown,
-  field: string,
-): asserts value is string {
+function assertNonEmptyString(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || value.length === 0) {
     throw new DomainEventValidationError(`${field} must be a non-empty string`);
   }
@@ -135,9 +132,7 @@ function assertNonEmptyString(
  * 这里只验证路由和状态投影所依赖的稳定字段；事件专属的深层业务约束由
  * 对应 Host/Worker 模块负责，避免共享层复制工具实现规则。
  */
-export function assertDomainEvent(
-  value: unknown,
-): asserts value is DomainEvent {
+export function assertDomainEvent(value: unknown): asserts value is DomainEvent {
   if (!isRecord(value)) {
     throw new DomainEventValidationError("domain event must be an object");
   }
@@ -145,13 +140,8 @@ export function assertDomainEvent(
   assertNonEmptyString(value.taskId, "taskId");
   assertNonEmptyString(value.taskRunId, "taskRunId");
   assertNonEmptyString(value.traceId, "traceId");
-  if (
-    typeof value.occurredAtMs !== "number" ||
-    !Number.isSafeInteger(value.occurredAtMs)
-  ) {
-    throw new DomainEventValidationError(
-      "occurredAtMs must be a safe integer",
-    );
+  if (typeof value.occurredAtMs !== "number" || !Number.isSafeInteger(value.occurredAtMs)) {
+    throw new DomainEventValidationError("occurredAtMs must be a safe integer");
   }
   assertNonEmptyString(value.kind, "kind");
 
@@ -185,9 +175,7 @@ export function assertDomainEvent(
     case "verification.recorded":
       assertNonEmptyString(value.attemptId, "attemptId");
       if (!isRecord(value.verification)) {
-        throw new DomainEventValidationError(
-          "verification must be an object",
-        );
+        throw new DomainEventValidationError("verification must be an object");
       }
       break;
     case "task.result_recorded":
@@ -195,8 +183,6 @@ export function assertDomainEvent(
       assertNonEmptyString(value.summary, "summary");
       break;
     default:
-      throw new DomainEventValidationError(
-        `unsupported domain event kind: ${value.kind}`,
-      );
+      throw new DomainEventValidationError(`unsupported domain event kind: ${value.kind}`);
   }
 }

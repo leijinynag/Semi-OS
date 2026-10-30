@@ -94,14 +94,7 @@ export type VoiceRequestEnvelope = {
 }[VoiceRequestKind];
 
 export interface VoiceStatePayload {
-  state:
-    | "idle"
-    | "listening"
-    | "transcribing"
-    | "thinking"
-    | "speaking"
-    | "interrupted"
-    | "error";
+  state: "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "interrupted" | "error";
 }
 
 export interface VoiceAudioChunkPayload {
@@ -133,25 +126,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireString(
-  value: Record<string, unknown>,
-  field: string,
-): string {
+function requireString(value: Record<string, unknown>, field: string): string {
   const entry = value[field];
   if (typeof entry !== "string" || entry.length === 0) {
-    throw new ProtocolValidationError(
-      `${field} must be a non-empty string`,
-      "invalid_payload",
-    );
+    throw new ProtocolValidationError(`${field} must be a non-empty string`, "invalid_payload");
   }
   return entry;
 }
 
-function requireInteger(
-  value: Record<string, unknown>,
-  field: string,
-  minimum = 0,
-): number {
+function requireInteger(value: Record<string, unknown>, field: string, minimum = 0): number {
   const entry = value[field];
   if (!Number.isSafeInteger(entry) || Number(entry) < minimum) {
     throw new ProtocolValidationError(
@@ -169,9 +152,7 @@ function requireInteger(
  * Agent Runtime 前再次校验。音频使用 base64 是 MVP 的有界折中，后续改成
  * 二进制 side channel 时不需要改变上层 VoiceLoop 的事件语义。
  */
-export function parseVoiceRequest(
-  envelope: RequestEnvelope,
-): VoiceRequestEnvelope {
+export function parseVoiceRequest(envelope: RequestEnvelope): VoiceRequestEnvelope {
   if (!VOICE_REQUEST_KINDS.includes(envelope.kind as VoiceRequestKind)) {
     throw new ProtocolValidationError(
       `Unsupported voice request: ${envelope.kind}`,
@@ -179,10 +160,7 @@ export function parseVoiceRequest(
     );
   }
   if (!isRecord(envelope.payload)) {
-    throw new ProtocolValidationError(
-      "voice payload must be an object",
-      "invalid_payload",
-    );
+    throw new ProtocolValidationError("voice payload must be an object", "invalid_payload");
   }
 
   switch (envelope.kind as VoiceRequestKind) {
@@ -207,10 +185,7 @@ export function parseVoiceRequest(
         action !== "steer" &&
         action !== "follow_up"
       ) {
-        throw new ProtocolValidationError(
-          "action is invalid",
-          "invalid_payload",
-        );
+        throw new ProtocolValidationError("action is invalid", "invalid_payload");
       }
       break;
     }
@@ -227,19 +202,10 @@ export function parseVoiceRequest(
       requireString(envelope.payload, "taskId");
       const mode = envelope.payload.mode;
       if (mode !== "pause" && mode !== "cancel" && mode !== "steer") {
-        throw new ProtocolValidationError(
-          "interrupt mode is invalid",
-          "invalid_payload",
-        );
+        throw new ProtocolValidationError("interrupt mode is invalid", "invalid_payload");
       }
-      if (
-        envelope.payload.text !== undefined &&
-        typeof envelope.payload.text !== "string"
-      ) {
-        throw new ProtocolValidationError(
-          "interrupt text must be a string",
-          "invalid_payload",
-        );
+      if (envelope.payload.text !== undefined && typeof envelope.payload.text !== "string") {
+        throw new ProtocolValidationError("interrupt text must be a string", "invalid_payload");
       }
       break;
     }
@@ -273,21 +239,46 @@ export function parseVoiceEvent(envelope: EventEnvelope): VoiceEventEnvelope {
       throw new ProtocolValidationError(`invalid ${field}`, "invalid_payload");
     }
   };
-  if (["voice.sentence", "voice.timestamps", "voice.audio.chunk", "voice.audio.completed", "voice.answer"].includes(envelope.kind)) {
+  if (
+    [
+      "voice.sentence",
+      "voice.timestamps",
+      "voice.audio.chunk",
+      "voice.audio.completed",
+      "voice.answer",
+    ].includes(envelope.kind)
+  ) {
     boundedString("sessionId", 160);
     boundedString("taskId", 160);
   }
-  if (["voice.sentence", "voice.timestamps", "voice.audio.chunk", "voice.audio.completed"].includes(envelope.kind)) boundedString("sentenceId", 160);
+  if (
+    ["voice.sentence", "voice.timestamps", "voice.audio.chunk", "voice.audio.completed"].includes(
+      envelope.kind,
+    )
+  )
+    boundedString("sentenceId", 160);
   switch (envelope.kind) {
     case "voice.sentence":
       boundedString("text", 8192);
-      if (!["answer", "stage", "confirmation"].includes(String(payload.purpose))) throw new ProtocolValidationError("invalid sentence purpose", "invalid_payload");
+      if (!["answer", "stage", "confirmation"].includes(String(payload.purpose)))
+        throw new ProtocolValidationError("invalid sentence purpose", "invalid_payload");
       break;
     case "voice.timestamps":
-      if (!Array.isArray(payload.words) || payload.words.length > 4096 || !payload.words.every((word) =>
-        isRecord(word) && typeof word.text === "string" && word.text.length <= 8192 &&
-        Number.isSafeInteger(word.startMs) && Number.isSafeInteger(word.endMs) &&
-        Number(word.startMs) >= 0 && Number(word.endMs) >= Number(word.startMs) && Number(word.endMs) <= 600_000)) {
+      if (
+        !Array.isArray(payload.words) ||
+        payload.words.length > 4096 ||
+        !payload.words.every(
+          (word) =>
+            isRecord(word) &&
+            typeof word.text === "string" &&
+            word.text.length <= 8192 &&
+            Number.isSafeInteger(word.startMs) &&
+            Number.isSafeInteger(word.endMs) &&
+            Number(word.startMs) >= 0 &&
+            Number(word.endMs) >= Number(word.startMs) &&
+            Number(word.endMs) <= 600_000,
+        )
+      ) {
         throw new ProtocolValidationError("invalid word timestamps", "invalid_payload");
       }
       break;
@@ -298,8 +289,12 @@ export function parseVoiceEvent(envelope: EventEnvelope): VoiceEventEnvelope {
     case "voice.audio.chunk":
       boundedString("audioBase64", 2_000_000);
       requireInteger(payload, "sequence");
-      if (!["audio/mpeg", VOICE_PCM_MIME].includes(String(payload.mimeType)) || typeof payload.first !== "boolean" ||
-        String(payload.audioBase64).length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(String(payload.audioBase64))) {
+      if (
+        !["audio/mpeg", VOICE_PCM_MIME].includes(String(payload.mimeType)) ||
+        typeof payload.first !== "boolean" ||
+        String(payload.audioBase64).length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(String(payload.audioBase64))
+      ) {
         throw new ProtocolValidationError("invalid audio chunk", "invalid_payload");
       }
       break;

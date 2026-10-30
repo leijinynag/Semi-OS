@@ -1,6 +1,7 @@
 // 自动生成；不能另写跨进程消息白名单。
 fn registered_message_shape(direction: &str, kind: &str) -> Option<PayloadShape> {
     match (direction, kind) {
+        ("request", "desktop.result") => Some(PayloadShape::Object),
         ("request", "health.check") => Some(PayloadShape::ObjectOrNull),
         ("request", "voice.turn.start") => Some(PayloadShape::Object),
         ("request", "voice.audio.append") => Some(PayloadShape::Object),
@@ -19,7 +20,10 @@ fn registered_message_shape(direction: &str, kind: &str) -> Option<PayloadShape>
         ("request", "research.confirmation.required") => Some(PayloadShape::Object),
         ("request", "research.persisted") => Some(PayloadShape::Object),
         ("request", "browser.login.open") => Some(PayloadShape::Object),
+        ("request", "browser.session.resume") => Some(PayloadShape::Object),
+        ("request", "browser.session.inspect") => Some(PayloadShape::Object),
         ("request", "fixture.request") => Some(PayloadShape::Object),
+        ("response", "desktop.acknowledged") => Some(PayloadShape::Object),
         ("response", "health.ready") => Some(PayloadShape::Object),
         ("response", "voice.session.disposed") => Some(PayloadShape::Object),
         ("response", "voice.text.accepted") => Some(PayloadShape::Object),
@@ -34,8 +38,13 @@ fn registered_message_shape(direction: &str, kind: &str) -> Option<PayloadShape>
         ("response", "research.confirmation.announced") => Some(PayloadShape::Object),
         ("response", "research.acknowledged") => Some(PayloadShape::Object),
         ("response", "browser.login.accepted") => Some(PayloadShape::Object),
+        ("response", "browser.session.resume.accepted") => Some(PayloadShape::Object),
+        ("response", "browser.session.snapshot") => Some(PayloadShape::ObjectOrNull),
         ("response", "browser.login.opened") => Some(PayloadShape::Object),
         ("response", "browser.login.failed") => Some(PayloadShape::Object),
+        ("event", "browser.session.state") => Some(PayloadShape::Object),
+        ("event", "desktop.cancelled") => Some(PayloadShape::Object),
+        ("event", "desktop.request") => Some(PayloadShape::Object),
         ("event", "fixture.echo") => Some(PayloadShape::Object),
         ("event", "voice.state") => Some(PayloadShape::Object),
         ("event", "voice.transcript.partial") => Some(PayloadShape::Object),

@@ -1,5 +1,5 @@
 import type { ToolRiskLevel, VerificationRecord } from "@semi-os/shared";
-import type { ToolExecutionReceipt } from "./receipt.ts";
+import type { ApprovalBinding, ToolExecutionReceipt } from "./receipt.ts";
 
 export type JsonObject = Readonly<Record<string, unknown>>;
 
@@ -46,6 +46,7 @@ export interface ToolExecutionContext {
   workspace?: string;
   signal: AbortSignal;
   startedAtMs: number;
+  approval?: ApprovalBinding;
 }
 
 export interface ToolExecutionResult {

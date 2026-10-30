@@ -80,6 +80,11 @@
         "browser.login.accepted",
         "browser.login.opened",
         "browser.login.failed",
+        "browser.session.resume",
+        "browser.session.resume.accepted",
+        "browser.session.inspect",
+        "browser.session.snapshot",
+        "browser.session.state",
         "fixture.request",
         "fixture.echo",
         "browser.navigation",
@@ -100,7 +105,11 @@
         "client.release_to_tts_ready",
         "runtime.error",
         "protocol.error",
-        "request.error"
+        "request.error",
+        "desktop.request",
+        "desktop.result",
+        "desktop.acknowledged",
+        "desktop.cancelled"
       ]
     },
     "payload": {
@@ -116,6 +125,16 @@
   },
   "x-messages": {
     "request": {
+      "desktop.result": {
+        "type": "object",
+        "required": ["operationId", "result"],
+        "properties": {
+          "operationId": { "$ref": "#/$defs/nonempty" },
+          "result": { "$ref": "#/$defs/desktopResult" },
+          "permissions": { "$ref": "#/$defs/desktopPermissions" }
+        },
+        "additionalProperties": false
+      },
       "health.check": {
         "type": ["object", "null"],
         "properties": { "includeCapabilities": { "type": "boolean" } }
@@ -190,9 +209,26 @@
         "type": "object",
         "properties": { "url": { "$ref": "#/$defs/nonempty" } }
       },
+      "browser.session.resume": {
+        "type": "object",
+        "required": ["resumeId", "sessionId", "taskId", "mode"],
+        "properties": {
+          "resumeId": { "$ref": "#/$defs/nonempty" },
+          "sessionId": { "$ref": "#/$defs/nonempty" },
+          "taskId": { "$ref": "#/$defs/nonempty" },
+          "mode": { "enum": ["takeover", "claim"] }
+        },
+        "additionalProperties": false
+      },
+      "browser.session.inspect": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
       "fixture.request": { "type": "object" }
     },
     "response": {
+      "desktop.acknowledged": { "$ref": "#/$defs/ack" },
       "health.ready": {
         "type": "object",
         "required": ["pid"],
@@ -232,6 +268,10 @@
       "research.confirmation.announced": { "$ref": "#/$defs/accepted" },
       "research.acknowledged": { "$ref": "#/$defs/accepted" },
       "browser.login.accepted": { "$ref": "#/$defs/accepted" },
+      "browser.session.resume.accepted": { "$ref": "#/$defs/accepted" },
+      "browser.session.snapshot": {
+        "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/browserSessionState" }]
+      },
       "browser.login.opened": { "$ref": "#/$defs/browserObservation" },
       "browser.login.failed": {
         "type": "object",
@@ -240,6 +280,30 @@
       }
     },
     "event": {
+      "browser.session.state": { "$ref": "#/$defs/browserSessionState" },
+      "desktop.cancelled": {
+        "type": "object",
+        "required": ["operationId", "taskId"],
+        "properties": {
+          "operationId": { "$ref": "#/$defs/nonempty" },
+          "taskId": { "$ref": "#/$defs/nonempty" }
+        },
+        "additionalProperties": false
+      },
+      "desktop.request": {
+        "type": "object",
+        "required": ["operationId", "taskId", "attemptId", "inputJson", "inputDigest", "action"],
+        "properties": {
+          "operationId": { "$ref": "#/$defs/nonempty" },
+          "taskId": { "$ref": "#/$defs/nonempty" },
+          "attemptId": { "$ref": "#/$defs/nonempty" },
+          "inputJson": { "type": "string", "maxLength": 24000 },
+          "inputDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "approvalId": { "$ref": "#/$defs/nonempty" },
+          "action": { "$ref": "#/$defs/desktopAction" }
+        },
+        "additionalProperties": false
+      },
       "fixture.echo": { "type": "object" },
       "voice.state": {
         "type": "object",
@@ -682,6 +746,224 @@
     }
   },
   "$defs": {
+    "browserSessionState": {
+      "type": "object",
+      "required": ["resumeId", "sessionId", "taskId", "status", "message"],
+      "properties": {
+        "resumeId": { "$ref": "#/$defs/nonempty" },
+        "sessionId": { "$ref": "#/$defs/nonempty" },
+        "taskId": { "$ref": "#/$defs/nonempty" },
+        "status": { "enum": ["waiting_user", "resuming", "resumed", "failed", "cancelled"] },
+        "message": { "$ref": "#/$defs/nonempty" }
+      },
+      "additionalProperties": false
+    },
+    "desktopPermissionStatus": {
+      "enum": ["granted", "denied", "not_determined", "restricted", "unavailable"]
+    },
+    "desktopVisualCapability": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "enum": ["available", "needs_user", "unavailable"] },
+        "reason": { "$ref": "#/$defs/nonempty", "maxLength": 500 }
+      },
+      "additionalProperties": false
+    },
+    "desktopPermissions": {
+      "type": "object",
+      "required": [
+        "accessibility",
+        "screenRecording",
+        "microphone",
+        "inputMonitoring",
+        "takeoverDetection",
+        "visualFallback",
+        "checkedAtMs"
+      ],
+      "properties": {
+        "accessibility": { "$ref": "#/$defs/desktopPermissionStatus" },
+        "screenRecording": { "$ref": "#/$defs/desktopPermissionStatus" },
+        "microphone": { "$ref": "#/$defs/desktopPermissionStatus" },
+        "inputMonitoring": { "$ref": "#/$defs/desktopPermissionStatus" },
+        "takeoverDetection": { "type": "boolean" },
+        "visualFallback": { "$ref": "#/$defs/desktopVisualCapability" },
+        "checkedAtMs": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "desktopBounds": {
+      "type": "object",
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "minimum": 0 },
+        "height": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "desktopElement": {
+      "type": "object",
+      "required": [
+        "reference",
+        "role",
+        "label",
+        "enabled",
+        "sensitive",
+        "actions",
+        "depth",
+        "valueTruncated",
+        "focused"
+      ],
+      "properties": {
+        "reference": { "$ref": "#/$defs/nonempty" },
+        "role": { "type": "string" },
+        "label": { "type": "string" },
+        "value": { "type": "string", "maxLength": 4000 },
+        "valueTruncated": { "type": "boolean" },
+        "focused": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "actions": {
+          "type": "array",
+          "items": { "enum": ["press", "set_value", "focus", "scroll"] }
+        },
+        "bounds": { "$ref": "#/$defs/desktopBounds" },
+        "depth": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "desktopObservation": {
+      "type": "object",
+      "required": [
+        "version",
+        "observedAtMs",
+        "bundleId",
+        "processId",
+        "windowId",
+        "title",
+        "elements",
+        "truncated"
+      ],
+      "properties": {
+        "version": { "$ref": "#/$defs/nonempty" },
+        "observedAtMs": { "type": "integer", "minimum": 0 },
+        "bundleId": { "$ref": "#/$defs/nonempty" },
+        "processId": { "type": "integer", "minimum": 1 },
+        "windowId": { "$ref": "#/$defs/nonempty" },
+        "title": { "type": "string" },
+        "elements": {
+          "type": "array",
+          "maxItems": 160,
+          "items": { "$ref": "#/$defs/desktopElement" }
+        },
+        "truncated": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "desktopAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "observe" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "version", "reference"],
+          "properties": {
+            "kind": { "enum": ["click", "focus_window"] },
+            "version": { "$ref": "#/$defs/nonempty" },
+            "reference": { "$ref": "#/$defs/nonempty" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "version", "reference", "text"],
+          "properties": {
+            "kind": { "const": "type" },
+            "version": { "$ref": "#/$defs/nonempty" },
+            "reference": { "$ref": "#/$defs/nonempty" },
+            "text": { "type": "string", "maxLength": 4000 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "version", "reference", "key", "modifiers"],
+          "properties": {
+            "kind": { "const": "key" },
+            "version": { "$ref": "#/$defs/nonempty" },
+            "reference": { "$ref": "#/$defs/nonempty" },
+            "key": {
+              "enum": [
+                "return",
+                "tab",
+                "escape",
+                "space",
+                "left",
+                "right",
+                "up",
+                "down",
+                "backspace",
+                "a",
+                "c",
+                "v",
+                "s",
+                "z"
+              ]
+            },
+            "modifiers": {
+              "type": "array",
+              "uniqueItems": true,
+              "maxItems": 4,
+              "items": { "enum": ["command", "shift", "option", "control"] }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "version", "reference", "direction", "amount"],
+          "properties": {
+            "kind": { "const": "scroll" },
+            "version": { "$ref": "#/$defs/nonempty" },
+            "reference": { "$ref": "#/$defs/nonempty" },
+            "direction": { "enum": ["up", "down", "left", "right"] },
+            "amount": { "type": "integer", "minimum": 1, "maximum": 8 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "bundleId"],
+          "properties": {
+            "kind": { "const": "launch_app" },
+            "bundleId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$",
+              "maxLength": 200
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "desktopResult": {
+      "type": "object",
+      "required": ["status", "summary", "leaseGeneration"],
+      "properties": {
+        "status": { "enum": ["observed", "verified", "failure", "needs_user", "unknown"] },
+        "summary": { "$ref": "#/$defs/nonempty" },
+        "leaseGeneration": { "type": "integer", "minimum": 0 },
+        "observation": { "$ref": "#/$defs/desktopObservation" },
+        "evidence": { "type": "string", "maxLength": 2000 }
+      },
+      "additionalProperties": false
+    },
     "positiveVersion": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
     "planDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "commit": { "type": "string", "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" },

@@ -2,6 +2,7 @@
 import type { EnvelopeContext, JsonValue } from "../envelope.ts";
 import type { RequestId } from "@semi-os/shared";
 export type RequestPayloads = {
+"desktop.result": { "operationId": string; "result": { "status": "observed" | "verified" | "failure" | "needs_user" | "unknown"; "summary": string; "leaseGeneration": number; "observation"?: { "version": string; "observedAtMs": number; "bundleId": string; "processId": number; "windowId": string; "title": string; "elements": Array<{ "reference": string; "role": string; "label": string; "value"?: string; "valueTruncated": boolean; "focused": boolean; "enabled": boolean; "sensitive": boolean; "actions": Array<"press" | "set_value" | "focus" | "scroll">; "bounds"?: { "x": number; "y": number; "width": number; "height": number }; "depth": number }>; "truncated": boolean }; "evidence"?: string }; "permissions"?: { "accessibility": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "screenRecording": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "microphone": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "inputMonitoring": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "takeoverDetection": boolean; "visualFallback": { "status": "available" | "needs_user" | "unavailable"; "reason": string }; "checkedAtMs": number } };
 "health.check": { "includeCapabilities"?: boolean } | null;
 "voice.turn.start": { "sessionId": string; "taskId": string; "cwd": string; "mimeType": string; "sampleRateHz"?: number; "action"?: "prompt" | "steer" | "follow_up" };
 "voice.audio.append": { "sequence": number; "audioBase64": string };
@@ -20,12 +21,15 @@ export type RequestPayloads = {
 "research.confirmation.required": { "taskId": string };
 "research.persisted": { "operationId": string; "ok": boolean; "value"?: JsonValue; "error"?: string | null };
 "browser.login.open": { "url"?: string };
+"browser.session.resume": { "resumeId": string; "sessionId": string; "taskId": string; "mode": "takeover" | "claim" };
+"browser.session.inspect": { [key: string]: JsonValue };
 "fixture.request": { [key: string]: JsonValue };
 };
 export type RequestMessage = { [K in keyof RequestPayloads]: EnvelopeContext & {
 protocolVersion: 1; requestId: RequestId; direction: "request"; kind: K; payload: RequestPayloads[K]
 } }[keyof RequestPayloads];
 export type ResponsePayloads = {
+"desktop.acknowledged": { "operationId": string; "ok": boolean; "value"?: JsonValue; "error"?: string | null };
 "health.ready": { "pid": number; "worker"?: string };
 "voice.session.disposed": { "sessionId": string };
 "voice.text.accepted": { "accepted": true };
@@ -40,6 +44,8 @@ export type ResponsePayloads = {
 "research.confirmation.announced": { "accepted": true };
 "research.acknowledged": { "accepted": true };
 "browser.login.accepted": { "accepted": true };
+"browser.session.resume.accepted": { "accepted": true };
+"browser.session.snapshot": null | { "resumeId": string; "sessionId": string; "taskId": string; "status": "waiting_user" | "resuming" | "resumed" | "failed" | "cancelled"; "message": string };
 "browser.login.opened": { "pageId": string; "url": string; "title": string; "version": number; "status": "ready" | "needs_user" | "failed"; "reason"?: string; "elements": Array<{ "ref": string; "role": string; "name": string }> };
 "browser.login.failed": { "message": string };
 };
@@ -47,6 +53,9 @@ export type ResponseMessage = { [K in keyof ResponsePayloads]: EnvelopeContext &
 protocolVersion: 1; requestId: RequestId; direction: "response"; kind: K; payload: ResponsePayloads[K]
 } }[keyof ResponsePayloads];
 export type EventPayloads = {
+"browser.session.state": { "resumeId": string; "sessionId": string; "taskId": string; "status": "waiting_user" | "resuming" | "resumed" | "failed" | "cancelled"; "message": string };
+"desktop.cancelled": { "operationId": string; "taskId": string };
+"desktop.request": { "operationId": string; "taskId": string; "attemptId": string; "inputJson": string; "inputDigest": string; "approvalId"?: string; "action": { "kind": "observe" } | { "kind": "click" | "focus_window"; "version": string; "reference": string } | { "kind": "type"; "version": string; "reference": string; "text": string } | { "kind": "key"; "version": string; "reference": string; "key": "return" | "tab" | "escape" | "space" | "left" | "right" | "up" | "down" | "backspace" | "a" | "c" | "v" | "s" | "z"; "modifiers": Array<"command" | "shift" | "option" | "control"> } | { "kind": "scroll"; "version": string; "reference": string; "direction": "up" | "down" | "left" | "right"; "amount": number } | { "kind": "launch_app"; "bundleId": string } };
 "fixture.echo": { [key: string]: JsonValue };
 "voice.state": { "state": "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "interrupted" | "error" };
 "voice.transcript.partial": { "text": string };

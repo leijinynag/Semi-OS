@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test src/*.test.ts src/**/*.test.ts",
+    "test": "node --disallow-code-generation-from-strings --experimental-strip-types --test src/*.test.ts src/**/*.test.ts",
     "lint": "eslint src",
     "format": "prettier --write src",
     "format:check": "prettier --check src",

@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { format, resolveConfig } from "prettier";
@@ -178,6 +179,7 @@ for (const [direction, kinds] of Object.entries(messages)) {
   });
   payloadRust.push(
     "#[derive(Debug, Clone, Serialize, Deserialize)]",
+    "#[allow(clippy::large_enum_variant)]",
     '#[serde(tag = "kind", content = "payload")]',
     `pub enum ${name}Message {`,
     ...variants,
@@ -267,8 +269,142 @@ for (const definition of enumDefinitions) {
 const tsOutput = resolve(root, "packages/shared/src/generated/domain.generated.ts");
 const rustOutput = resolve(root, "crates/protocol/src/generated.rs");
 
+/**
+ * 协议校验器必须在构建期编译成普通函数模块。
+ *
+ * 运行期调用 `ajv.compile()` 会通过 `new Function` 生成校验代码，而桌面版 CSP
+ * （`script-src 'self'`）禁止 eval：WKWebView 直接抛 EvalError，整个客户端白屏。
+ * `pnpm dev` 看不到这个缺陷，因为 Vite dev server 不发送 CSP。这里改用 Ajv 的
+ * standalone 代码生成，产物不含 `new Function`，浏览器/WebView 都能执行。
+ */
+const protocolRequire = createRequire(resolve(root, "packages/protocol/package.json"));
+const { Ajv2020 } = protocolRequire("ajv/dist/2020.js");
+const standaloneModule = protocolRequire("ajv/dist/standalone/index.js");
+const standaloneCode = standaloneModule.default ?? standaloneModule;
+const validatorAjv = new Ajv2020({
+  strict: false,
+  strictNumbers: true,
+  allErrors: false,
+  code: { source: true, esm: true },
+});
+const validatorRefs = {};
+const validatorExports = {};
+const exportOwner = new Map();
+
+/**
+ * 把 payload 里指向本地 $defs 的 `$ref` 改指向共享的 defs schema。
+ *
+ * 否则每个消息都会把整套 `$defs` 内联一份，生成的校验器会膨胀到数 MB；
+ * 抽成独立 schema 后 Ajv 只生成一份复用的子校验器。
+ */
+const DEFS_ID = "urn:semi-os:defs";
+function hoistDefs(node) {
+  if (Array.isArray(node)) {
+    return node.map(hoistDefs);
+  }
+  if (node && typeof node === "object") {
+    const result = {};
+    for (const [key, value] of Object.entries(node)) {
+      result[key] =
+        key === "$ref" && typeof value === "string" && value.startsWith("#/$defs/")
+          ? `${DEFS_ID}#${value.slice(1)}`
+          : hoistDefs(value);
+    }
+    return result;
+  }
+  return node;
+}
+
+validatorAjv.addSchema({ $id: DEFS_ID, $defs: wireSchema.$defs });
+for (const [direction, kinds] of Object.entries(messages)) {
+  for (const [kind, payload] of Object.entries(kinds)) {
+    const ref = `urn:semi-os:${direction}:${kind}`;
+    // kind 可能带点号（如 desktop.result），导出名只能是合法标识符。
+    const exportName = `${direction}_${kind}`.replace(/[^A-Za-z0-9_]/g, "_");
+    if (exportOwner.has(exportName)) {
+      throw new Error(
+        `两个协议消息会导出同名校验器：${exportOwner.get(exportName)} 与 ${direction}:${kind}`,
+      );
+    }
+    exportOwner.set(exportName, `${direction}:${kind}`);
+    validatorAjv.addSchema({ $id: ref, ...hoistDefs(payload) });
+    // standaloneCode 的映射是“导出名 → schema 引用”。
+    validatorRefs[exportName] = ref;
+    validatorExports[`${direction}:${kind}`] = exportName;
+  }
+}
+/**
+ * Ajv standalone 仍用 CJS 的 `require("ajv/dist/runtime/*").default` 引用运行时助手。
+ * 生成物是 ESM（浏览器与 Node 直接用），所以要把这两处 require 换成静态 import。
+ * 一旦 Ajv 升级引入新的 require 形式，这里会直接报错，避免静默生成坏包。
+ */
+function rewriteRuntimeRequires(code) {
+  const aliases = new Map();
+  const body = code.replace(/require\("([^"]+)"\)(\.default)?/g, (match, specifier, useDefault) => {
+    if (!useDefault) {
+      throw new Error(`standalone 产物出现未预期的 require 形式：${match}`);
+    }
+    if (!aliases.has(specifier)) {
+      aliases.set(specifier, `__rt${aliases.size}`);
+    }
+    return aliases.get(specifier);
+  });
+  if (aliases.size === 0) {
+    return { body, header: "" };
+  }
+  const imports = [...aliases].map(([specifier, alias]) => {
+    const target = specifier.endsWith(".js") ? specifier : `${specifier}.js`;
+    return `import * as ${alias}Ns from ${JSON.stringify(target)};`;
+  });
+  const bindings = [...aliases.values()].map(
+    (alias) => `const ${alias} = runtimeExport(${alias}Ns);`,
+  );
+  return {
+    body,
+    header: [
+      ...imports,
+      // Node 里 namespace.default 是 module.exports（带 __esModule），Vite 会再包一层 default；
+      // 两种形状都归一化到真正的函数值。
+      "function runtimeExport(ns) {",
+      "  const value = ns.default ?? ns;",
+      '  return value && typeof value === "object" && "default" in value ? value.default : value;',
+      "}",
+      ...bindings,
+    ].join("\n"),
+  };
+}
+
+const runtimeRewritten = rewriteRuntimeRequires(standaloneCode(validatorAjv, validatorRefs));
+const validatorsOutput = [
+  // tsc 不去推断 Ajv standalone 产物（它会挂 .errors），只原样透传。
+  "// @ts-nocheck",
+  "// 由 scripts/generate-protocol.mjs 自动生成，请勿手动修改。",
+  "// Ajv standalone 产物：普通函数而不是 new Function，运行期不需要 eval。",
+  runtimeRewritten.header,
+  runtimeRewritten.body,
+  "export const protocolValidators = {",
+  ...Object.entries(validatorExports).map(([key, name]) => `  ${JSON.stringify(key)}: ${name},`),
+  "};\n",
+].join("\n");
+
 await mkdir(dirname(tsOutput), { recursive: true });
 await mkdir(dirname(rustOutput), { recursive: true });
+/**
+ * 载荷是否允许 JSON null。
+ *
+ * 两种写法在 schema 里都合法：`type: ["object", "null"]` 与 `oneOf: [{type:"null"}, ...]`。
+ * 只看前者会让 `browser.session.snapshot` 这类“无接管状态即为 null”的响应在 Rust 侧被拒，
+ * Worker 因此进入重启循环。
+ */
+function payloadAllowsNull(payload) {
+  if (Array.isArray(payload.type) && payload.type.includes("null")) {
+    return true;
+  }
+  return (
+    Array.isArray(payload.oneOf) && payload.oneOf.some((branch) => branch && branch.type === "null")
+  );
+}
+
 const outputs = [
   [tsOutput, `${tsLines.join("\n")}\n`],
   [rustOutput, `${rustLines.join("\n")}`],
@@ -280,6 +416,7 @@ const outputs = [
     resolve(root, "packages/protocol/src/generated/schema.generated.ts"),
     `// 自动生成；供运行时校验使用。\nexport const wireSchema = ${JSON.stringify(wireSchema)} as const;\nexport const messageSchemas = ${JSON.stringify(messages)} as const;\n`,
   ],
+  [resolve(root, "packages/protocol/src/generated/validators.generated.ts"), validatorsOutput],
   [
     resolve(root, "crates/protocol/src/wire.schema.generated.json"),
     `${JSON.stringify(wireSchema, null, 2)}\n`,
@@ -293,7 +430,7 @@ const outputs = [
       .flatMap(([direction, kinds]) =>
         Object.entries(kinds).map(
           ([kind, payload]) =>
-            `        (${JSON.stringify(direction)}, ${JSON.stringify(kind)}) => Some(PayloadShape::${Array.isArray(payload.type) && payload.type.includes("null") ? "ObjectOrNull" : "Object"}),`,
+            `        (${JSON.stringify(direction)}, ${JSON.stringify(kind)}) => Some(PayloadShape::${payloadAllowsNull(payload) ? "ObjectOrNull" : "Object"}),`,
         ),
       )
       .join("\n")}\n        _ => None,\n    }\n}\n`,

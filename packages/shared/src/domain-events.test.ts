@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { resolve } from "node:path";
-import {
-  assertDomainEvent,
-  DomainEventValidationError,
-} from "./domain-events.ts";
+import { assertDomainEvent, DomainEventValidationError } from "./domain-events.ts";
 
 test("shared domain event fixture matches the TypeScript contract", async () => {
   const fixture: unknown = JSON.parse(

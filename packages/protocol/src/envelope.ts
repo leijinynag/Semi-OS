@@ -156,7 +156,7 @@ export function assertValidEnvelope(value: unknown): asserts value is ValidatedM
   }
   assertRegisteredMessage(value.direction, value.kind, value.payload);
   if (
-    (value.kind === "workflow.request" || value.kind === "research.persist") &&
+    ["workflow.request", "research.persist", "desktop.request"].includes(value.kind) &&
     isRecord(value.payload) &&
     value.payload.operationId !== value.requestId
   ) {
