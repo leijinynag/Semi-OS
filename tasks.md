@@ -996,13 +996,19 @@
 
 依赖：P2.1 至 P2.7、P2.13 至 P2.15。可与阶段 4 并行。
 
-- [ ] **P5.1 添加六层记忆 Schema**
-  - 添加 L0 工作上下文、L1 常驻规则、L2 整理记忆、L3 情节摘要、
-    L4 历史证据和 L5 程序性候选，同时保存来源和关系。
-  - Commit 点：`feat(memory): add six layer schema`
-- [ ] **P5.2 添加作者与可变更权限**
-  - 区分用户创建、Agent 创建和系统创建的记录；拒绝 Agent 修改用户创建的人格与偏好记录。
-  - Commit 点：`feat(memory): enforce memory ownership`
+- [x] **P5.1 添加六层记忆 Schema**
+  - `memories`、`memory_sources`、`memory_links` 分开保存 L0–L5、来源和
+    supersedes / contradicts / consolidates / associates。压缩摘要只能是 L0，
+    L4 只存证据指针；作者与可变更性成对落库。未做检索、自动写入或提示词组装。
+  - 证据：`crates/storage/migrations/0013_memory_layers.sql`、
+    `crates/storage/src/memory.rs`；`cargo test --locked -p semi-os-storage` 通过。
+  - Commit 点：`feat(memory): add six layer schema`（`f358e9c`）
+- [x] **P5.2 添加作者与可变更权限**
+  - 记录区分 user / agent / system。Agent 修改或删除用户人格、用户偏好会被拒绝，
+    原文和旧版本保持不变；修正只能新增 Agent 记录并建立关系。系统不能改写用户记录。
+  - 证据：`crates/storage/migrations/0014_personality_ownership.sql`、
+    `memory.rs` 的所有权测试；`cargo test --locked -p semi-os-storage` 通过。
+  - Commit 点：`feat(memory): enforce memory ownership`（`39cd692`）
 - [ ] **P5.3 添加自动记忆写入流水线**
   - 从对话、纠正和验证结果提取候选记忆，过滤秘密、噪音和无依据的身份推断，执行去重并关联冲突。
   - Commit 点：`feat(memory): add automatic memory writes`

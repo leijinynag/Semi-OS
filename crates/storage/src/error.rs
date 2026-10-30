@@ -34,6 +34,19 @@ pub enum StorageError {
     InvalidEventStream { task_id: String, reason: String },
     #[error("invalid persisted enum {kind}: {value}")]
     InvalidEnum { kind: &'static str, value: String },
+    #[error("找不到记忆：{0}")]
+    MemoryNotFound(String),
+    #[error("记忆记录无效：{0}")]
+    InvalidMemory(String),
+    /// 调用者与记录作者不一致。Agent 工具路径不能借这个错误改写用户人格或偏好。
+    #[error("{actor} 不能改写{record_class}（作者为 {author}）")]
+    OwnershipDenied {
+        actor: &'static str,
+        record_class: &'static str,
+        author: &'static str,
+    },
+    #[error("找不到人格记录：{0}")]
+    PersonalityNotFound(String),
 }
 
 pub type StorageResult<T> = Result<T, StorageError>;
