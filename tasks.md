@@ -1021,11 +1021,13 @@
   - `load_memory_pack` 供 Host 按固定顺序取用：Host 策略、紧凑人格、L1、当前任务 L0，再是项目身份和少量高置信 L2。普通轮次停在基础包。上下文、搜索、L4 和选中的 L5 只在对应阶段出现，超出 token 预算则截断。
   - 证据：`memory_access.rs` 的基础包与截断测试；`cargo test --locked -p semi-os-storage` 通过。
   - Commit 点：`feat(memory): add progressive loading`（`6297618`）
-- [ ] **P5.6 添加简单 Pi Session 压缩**
-  - 在达到阈值后压缩，并保留目标、约束、决定、回执、待办动作、`unknown` 结果和最新 Steering。
+- [x] **P5.6 添加简单 Pi Session 压缩**
+  - `compact_session` 在会话达到 Host 传入的阈值后写入 L0 摘要，并保留目标、约束、决定、回执、待办、下一步、`unknown`、当前工作区/应用/目标和最新指令。未达阈值不落库。秘密、噪音、未过滤转储和空的必留槽位会被拒绝。等价正文不覆盖；内容不同时只新增记录，并用 supersedes 或 contradicts 指向旧行。Agent 不能改用户行。`write_memory` 仍拒绝把摘要晋升为长期记忆。
+  - 证据：`crates/storage/src/memory_access.rs`；`cargo test --locked -p semi-os-storage` 与 `cargo clippy --locked -p semi-os-storage --all-targets -- -D warnings` 通过。
   - Commit 点：`feat(memory): add session compaction`
-- [ ] **P5.7 添加人格配置**
-  - 添加独立的人格上下文，支持身份、语气、详略、主动程度、行为、工具和语音偏好。
+- [x] **P5.7 添加人格配置**
+  - `load_compact_persona` 只读当前生效的 `personality_records`，按身份、语气、详略、语言、主动程度、行为、工具和语音偏好组装紧凑文本。演化备注和记忆事实不进入人格槽。`load_memory_pack` 的顺序仍是 Host 策略、紧凑人格、L1、L0，再按阶段追加 L2–L5。普通轮次停在基础包，超出 token 预算则截断。组装不写人格，也不放宽作者约束。
+  - 证据：`memory_access.rs` 的人格组装测试；同上 cargo 命令通过。
   - Commit 点：`feat(personality): add runtime personality`
 - [ ] **P5.8 添加客户端记忆与偏好控制**
   - 允许用户创建、编辑和删除自己的偏好，查看 Agent 创建的记忆，并展示每条记录的归属。

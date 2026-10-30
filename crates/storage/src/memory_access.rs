@@ -1,9 +1,14 @@
-//! 记忆的自动写入、范围检索和渐进加载。
+//! 记忆的自动写入、范围检索、渐进加载、会话压缩和人格运行时组装。
 //!
-//! 写入必须先过确定性过滤，再调用 [`Storage::create_memory`] 与
+//! 长期记忆写入必须先过确定性过滤，再调用 [`Storage::create_memory`] 与
 //! [`Storage::link_memories`]。这两条既有接口持有作者门禁：Agent 不能改用户行，
 //! 冲突只能新增记录并指向旧记录。本模块不调用 [`Storage::revise_memory`]，
 //! 因此修正路径不会把用户偏好或人格原地改写。
+//!
+//! 会话压缩不走 [`Storage::write_memory`]。那条流水线会拒绝 L0，避免摘要被当成
+//! 长期记忆。压缩仍用 `create_memory` 记下真实作者，并在落库前拒绝秘密、噪音和
+//! 未过滤转储。等价正文不覆盖；内容不同时只新增摘要，并用 contradicts 或
+//! supersedes 指向旧行。
 //!
 //! 检索先按用户、工作区、应用、任务和 Skill 收窄，再做全文匹配。调用方拿不到
 //! 其他仓库的行，也没有“倒出整库”的接口；返回条数有上限，并且每条都带来源。
@@ -12,12 +17,13 @@
 //! 紧凑人格、L1、L0、再按阶段追加 L2–L5。普通轮次只用基础包：紧凑人格、L1、
 //! 当前项目身份和少量高置信 L2。超出调用方给出的 token 预算时截断，不能靠把
 //! 预算调大来一次性装入全部 L2–L5。具体预算数字仍未决，所以预算由 Host 传入。
+//! 紧凑人格只读当前生效的 `personality_records`，组装过程不写人格、不改作者。
 
 use crate::memory::{actor_may_mutate, check_memory_id};
 use crate::{
-    MemoryActor, MemoryAuthor, MemoryBody, MemoryLayer, MemoryLink, MemoryRecord, MemoryRecordKind,
-    MemoryRelation, MemoryScope, MemorySource, NewMemory, NewMemoryLink, Storage, StorageError,
-    StorageResult,
+    MemoryActor, MemoryAuthor, MemoryBody, MemoryLayer, MemoryLink, MemoryMutability, MemoryRecord,
+    MemoryRecordKind, MemoryRelation, MemoryScope, MemorySource, NewMemory, NewMemoryLink,
+    NewMemorySource, Storage, StorageError, StorageResult,
 };
 use rusqlite::{params, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -275,6 +281,109 @@ pub struct MemoryPack {
     pub estimated_tokens: u32,
 }
 
+/// 当前生效人格的紧凑材料。字段来自人格表，不是记忆事实。
+///
+/// `text` 的行序固定为身份、语气、详略、语言、主动、行为、工具、语音。
+/// 演化备注不在这里，避免把人格元数据当成用户事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactPersona {
+    pub personality_id: String,
+    pub version: i64,
+    pub author: MemoryAuthor,
+    pub mutability: MemoryMutability,
+    pub identity: String,
+    pub tone: String,
+    pub verbosity: String,
+    pub language: String,
+    pub initiative: String,
+    pub behavior_boundary: String,
+    pub tool_policy: String,
+    pub voice: String,
+    pub text: String,
+}
+
+/// 压缩前仍留在会话里的一回合。只用来判断阈值和续跑窗口，不另写长期记忆。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionTurn {
+    pub turn_ref: String,
+    pub text: String,
+}
+
+/// 已完成动作。回执编号必须原样进入摘要，不能换成“已完成”这类空话。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletedAction {
+    pub summary: String,
+    pub receipt_id: String,
+}
+
+/// 一次阈值压缩的输入。阈值由 Host 传入，本模块不规定具体 token 数字。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCompactionRequest {
+    pub memory_id: String,
+    pub scope: MemoryScope,
+    pub sources: Vec<NewMemorySource>,
+    /// 达到或超过该估算值才写摘要。0 不是合法阈值。
+    pub threshold_tokens: u32,
+    pub objective: String,
+    pub constraints: String,
+    pub decisions: String,
+    pub completed_actions: Vec<CompletedAction>,
+    pub pending: String,
+    pub next_step: String,
+    pub unknown_outcomes: String,
+    pub workspace: String,
+    pub application: String,
+    pub target: String,
+    pub latest_instruction: String,
+    pub turns: Vec<CompactionTurn>,
+    /// 续跑时保留的最近回合数。最新指令单独保留，不占用这个名额。
+    pub retain_recent_turns: usize,
+    /// 显式冲突。只接受 contradicts 与 supersedes。缺省时，不同正文自动 supersedes 旧摘要。
+    pub conflict: Option<MemoryWriteConflict>,
+}
+
+/// 压缩之后会话还能接着跑的材料：L0 摘要、最近回合和最新指令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionReady {
+    pub summary: MemoryRecord,
+    pub recent_turns: Vec<CompactionTurn>,
+    pub latest_instruction: String,
+    pub link: Option<MemoryLink>,
+    /// 同一范围已有等价摘要。本次没有新增行，也没有改旧正文。
+    pub reused_existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompactionOutcome {
+    /// 会话还没到阈值。不写摘要，也不把回合抄进记忆表。
+    BelowThreshold {
+        estimated_tokens: u32,
+    },
+    Ready(Box<CompactionReady>),
+    Rejected(CompactionRejection),
+}
+
+/// 压缩被拒绝的原因。原因里不回显原文，避免秘密进入错误文本。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionRejection {
+    Secret,
+    Noise,
+    UnfilteredDump,
+    /// 必留槽位是空的。拒绝落库，避免丢掉 unknown、回执或最新指令。
+    Incomplete,
+}
+
+impl CompactionRejection {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Secret => "secret",
+            Self::Noise => "noise",
+            Self::UnfilteredDump => "unfiltered_dump",
+            Self::Incomplete => "incomplete",
+        }
+    }
+}
+
 struct RankedMemory {
     record: MemoryRecord,
     confidence: u8,
@@ -366,6 +475,209 @@ impl Storage {
         })
     }
 
+    /// 在会话达到阈值时写下 L0 压缩摘要，并返回还能继续任务的上下文。
+    ///
+    /// 不调用 [`Storage::write_memory`]：那条路径会把 L0 判成非长期记忆并拒绝。
+    /// 作者仍由 [`Storage::create_memory`] 决定，冲突只走 [`Storage::link_memories`]。
+    /// 摘要不会变成 L2/L3/L5，也不会改人格表。秘密、噪音和未过滤转储在落库前拒绝。
+    pub fn compact_session(
+        &mut self,
+        actor: MemoryActor,
+        request: &SessionCompactionRequest,
+        now: i64,
+    ) -> StorageResult<CompactionOutcome> {
+        if now < 0 {
+            return Err(StorageError::InvalidMemory("时间不能为负".into()));
+        }
+        if request.threshold_tokens == 0 {
+            return Err(StorageError::InvalidMemory(
+                "压缩阈值必须由调用方给出，不能为 0".into(),
+            ));
+        }
+        check_memory_id(&request.memory_id, "记忆编号")?;
+        if request.sources.is_empty() {
+            return Err(StorageError::InvalidMemory("压缩摘要必须附带来源".into()));
+        }
+        if let Some(conflict) = &request.conflict {
+            check_memory_id(&conflict.target_memory_id, "冲突目标")?;
+            if conflict.relation != MemoryRelation::Contradicts
+                && conflict.relation != MemoryRelation::Supersedes
+            {
+                return Err(StorageError::InvalidMemory(
+                    "压缩冲突只使用 contradicts 或 supersedes".into(),
+                ));
+            }
+        }
+        for action in &request.completed_actions {
+            if action.receipt_id.trim().is_empty() || action.summary.trim().is_empty() {
+                continue;
+            }
+            check_memory_id(action.receipt_id.trim(), "回执编号")?;
+        }
+
+        let estimated_tokens = session_tokens(&request.turns);
+        if estimated_tokens < request.threshold_tokens {
+            return Ok(CompactionOutcome::BelowThreshold { estimated_tokens });
+        }
+        if compaction_incomplete(request) {
+            return Ok(CompactionOutcome::Rejected(CompactionRejection::Incomplete));
+        }
+        if let Some(rejection) = screen_compaction(request) {
+            return Ok(CompactionOutcome::Rejected(rejection));
+        }
+
+        let body = compaction_body(request);
+        if self.load_memory(&request.memory_id)?.is_some() {
+            return Err(StorageError::InvalidMemory(
+                "记忆编号已存在，压缩不能覆盖已有行".into(),
+            ));
+        }
+        let existing = self.records_in_exact_scope(body.kind(), &request.scope)?;
+        if let Some(duplicate) = existing
+            .iter()
+            .find(|record| canonical_text(&record.body) == canonical_text(&body))
+        {
+            if actor_may_mutate(actor, duplicate.author) {
+                self.attach_compaction_sources(actor, &duplicate.memory_id, request, now)?;
+            }
+            return Ok(CompactionOutcome::Ready(Box::new(CompactionReady {
+                summary: duplicate.clone(),
+                recent_turns: retained_turns(request),
+                latest_instruction: request.latest_instruction.trim().to_owned(),
+                link: None,
+                reused_existing: true,
+            })));
+        }
+
+        let relation = self.resolve_compaction_conflict(request, &body, &existing)?;
+        let record = self.create_memory(
+            actor,
+            &NewMemory {
+                memory_id: request.memory_id.clone(),
+                body,
+                scope: request.scope.clone(),
+                sources: request.sources.clone(),
+            },
+            now,
+        )?;
+        let link = if let Some((target_id, relation)) = relation {
+            Some(self.link_memories(
+                actor,
+                &NewMemoryLink {
+                    link_id: link_id_for(&record.memory_id, &target_id, relation),
+                    from_memory_id: record.memory_id.clone(),
+                    to_memory_id: target_id,
+                    relation,
+                },
+                now,
+            )?)
+        } else {
+            None
+        };
+        Ok(CompactionOutcome::Ready(Box::new(CompactionReady {
+            summary: record,
+            recent_turns: retained_turns(request),
+            latest_instruction: request.latest_instruction.trim().to_owned(),
+            link,
+            reused_existing: false,
+        })))
+    }
+
+    /// 读取当前生效人格并压成紧凑文本。只读，不追加版本，也不采纳记忆里的事实。
+    pub fn load_compact_persona(&self) -> StorageResult<Option<CompactPersona>> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT personality_id, version, author_kind, mutability,
+                        identity, tone, verbosity, language, initiative,
+                        behavior_boundary, tool_policy, voice
+                 FROM personality_records WHERE active = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            personality_id,
+            version,
+            author_kind,
+            mutability,
+            identity,
+            tone,
+            verbosity,
+            language,
+            initiative,
+            behavior,
+            tool,
+            voice,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let author = match author_kind.as_str() {
+            "user" => MemoryAuthor::User,
+            "system" => MemoryAuthor::System,
+            _ => {
+                return Err(StorageError::InvalidMemory(
+                    "人格作者无效，运行时组装不能接受 Agent 人格".into(),
+                ))
+            }
+        };
+        let mutability = match mutability.as_str() {
+            "user_readonly" => MemoryMutability::UserReadonly,
+            "system_readonly" => MemoryMutability::SystemReadonly,
+            _ => {
+                return Err(StorageError::InvalidMemory(
+                    "人格可变更性无效，运行时组装不能放宽作者约束".into(),
+                ))
+            }
+        };
+        if author.mutability() != mutability {
+            return Err(StorageError::InvalidMemory(
+                "人格作者与可变更性不一致".into(),
+            ));
+        }
+        let text = render_compact_persona(&[
+            ("身份", identity.as_str()),
+            ("语气", tone.as_str()),
+            ("详略", verbosity.as_str()),
+            ("语言", language.as_str()),
+            ("主动", initiative.as_str()),
+            ("行为", behavior.as_str()),
+            ("工具", tool.as_str()),
+            ("语音", voice.as_str()),
+        ]);
+        Ok(Some(CompactPersona {
+            personality_id,
+            version,
+            author,
+            mutability,
+            identity,
+            tone,
+            verbosity,
+            language,
+            initiative,
+            behavior_boundary: behavior,
+            tool_policy: tool,
+            voice,
+            text,
+        }))
+    }
+
     /// 先按范围过滤，再按全文、置信度、重要度和冲突降权排序。
     ///
     /// `limit` 超过 [`MAX_RECALL`] 会被截断。空查询仍受范围和条数限制，不会返回其他仓库的记录。
@@ -399,11 +711,12 @@ impl Storage {
                 Vec::new(),
             ));
         }
-        if let Some(persona) = self.compact_persona()? {
+        // 人格编号不是记忆编号，不能放进 memory_id，否则会和记忆行混在一起。
+        if let Some(persona) = self.load_compact_persona()? {
             entries.push(pack_entry(
                 MemoryPackSlot::CompactPersona,
                 None,
-                persona,
+                persona.text,
                 Vec::new(),
             ));
         }
@@ -420,7 +733,11 @@ impl Storage {
         )?;
         let l0: Vec<_> = records
             .iter()
-            .filter(|record| record.layer == MemoryLayer::L0)
+            .filter(|record| {
+                record.layer == MemoryLayer::L0
+                    && !(record.record_kind == MemoryRecordKind::CompactionSummary
+                        && superseded.contains(&record.memory_id))
+            })
             .collect();
         push_records(
             &mut entries,
@@ -758,36 +1075,59 @@ impl Storage {
         Ok(record)
     }
 
-    fn compact_persona(&self) -> StorageResult<Option<String>> {
-        // 演化备注是人格元数据，不能混进用户事实，也不进入紧凑人格。
-        let row = self
-            .connection
-            .query_row(
-                "SELECT identity, tone, verbosity, language, initiative,
-                        behavior_boundary, tool_policy, voice
-                 FROM personality_records WHERE active = 1",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, String>(7)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((identity, tone, verbosity, language, initiative, behavior, tool, voice)) = row
-        else {
-            return Ok(None);
-        };
-        Ok(Some(format!(
-            "身份：{identity}\n语气：{tone}\n详略：{verbosity}\n语言：{language}\n主动：{initiative}\n行为：{behavior}\n工具：{tool}\n语音：{voice}"
-        )))
+    fn resolve_compaction_conflict(
+        &self,
+        request: &SessionCompactionRequest,
+        body: &MemoryBody,
+        existing: &[MemoryRecord],
+    ) -> StorageResult<Option<(String, MemoryRelation)>> {
+        if let Some(conflict) = &request.conflict {
+            if conflict.target_memory_id == request.memory_id {
+                return Err(StorageError::InvalidMemory("记忆不能关联到自己".into()));
+            }
+            let target = self
+                .load_memory(&conflict.target_memory_id)?
+                .ok_or_else(|| StorageError::MemoryNotFound(conflict.target_memory_id.clone()))?;
+            if !conflict_target_allowed(&request.scope, &target.scope) {
+                return Err(StorageError::InvalidMemory(
+                    "冲突目标超出当前记忆范围".into(),
+                ));
+            }
+            return Ok(Some((target.memory_id, conflict.relation)));
+        }
+        let candidate = canonical_text(body);
+        let mut older: Vec<_> = existing
+            .iter()
+            .filter(|record| canonical_text(&record.body) != candidate)
+            .collect();
+        older.sort_by(|left, right| {
+            right
+                .updated_at_ms
+                .cmp(&left.updated_at_ms)
+                .then(left.memory_id.cmp(&right.memory_id))
+        });
+        Ok(older
+            .first()
+            .map(|record| (record.memory_id.clone(), MemoryRelation::Supersedes)))
+    }
+
+    fn attach_compaction_sources(
+        &mut self,
+        actor: MemoryActor,
+        memory_id: &str,
+        request: &SessionCompactionRequest,
+        now: i64,
+    ) -> StorageResult<()> {
+        let existing = self.list_memory_sources(memory_id)?;
+        for source in &request.sources {
+            let already = existing
+                .iter()
+                .any(|item| item.kind == source.kind && item.source_ref == source.source_ref);
+            if !already {
+                self.attach_memory_source(actor, memory_id, source, now)?;
+            }
+        }
+        Ok(())
     }
 
     fn insert_admission(
@@ -1120,6 +1460,129 @@ fn truncate_to_tokens(text: &str, budget: u32) -> String {
     text.chars().take(max_chars).collect()
 }
 
+fn session_tokens(turns: &[CompactionTurn]) -> u32 {
+    turns.iter().fold(0u32, |total, turn| {
+        total.saturating_add(estimate_tokens(turn.text.trim()))
+    })
+}
+
+fn retained_turns(request: &SessionCompactionRequest) -> Vec<CompactionTurn> {
+    let skip = request
+        .turns
+        .len()
+        .saturating_sub(request.retain_recent_turns);
+    request
+        .turns
+        .iter()
+        .skip(skip)
+        .map(|turn| CompactionTurn {
+            turn_ref: turn.turn_ref.trim().to_owned(),
+            text: turn.text.trim().to_owned(),
+        })
+        .collect()
+}
+
+fn compaction_incomplete(request: &SessionCompactionRequest) -> bool {
+    [
+        request.objective.as_str(),
+        request.constraints.as_str(),
+        request.decisions.as_str(),
+        request.pending.as_str(),
+        request.next_step.as_str(),
+        request.unknown_outcomes.as_str(),
+        request.workspace.as_str(),
+        request.application.as_str(),
+        request.target.as_str(),
+        request.latest_instruction.as_str(),
+    ]
+    .iter()
+    .any(|text| text.trim().is_empty())
+        || request
+            .completed_actions
+            .iter()
+            .any(|action| action.summary.trim().is_empty() || action.receipt_id.trim().is_empty())
+}
+
+fn compaction_fields(request: &SessionCompactionRequest) -> Vec<&str> {
+    let mut fields = vec![
+        request.objective.as_str(),
+        request.constraints.as_str(),
+        request.decisions.as_str(),
+        request.pending.as_str(),
+        request.next_step.as_str(),
+        request.unknown_outcomes.as_str(),
+        request.workspace.as_str(),
+        request.application.as_str(),
+        request.target.as_str(),
+        request.latest_instruction.as_str(),
+    ];
+    for action in &request.completed_actions {
+        fields.push(action.summary.as_str());
+        fields.push(action.receipt_id.as_str());
+    }
+    fields
+}
+
+/// 只检查将要落库的槽位。回合原文不写入记忆表，因此不因为旧回合里的秘密拒绝整次压缩。
+fn screen_compaction(request: &SessionCompactionRequest) -> Option<CompactionRejection> {
+    let fields = compaction_fields(request);
+    if fields.iter().any(|field| contains_secret(field)) {
+        return Some(CompactionRejection::Secret);
+    }
+    if fields.iter().any(|field| is_unfiltered_dump(field)) {
+        return Some(CompactionRejection::UnfilteredDump);
+    }
+    if fields.iter().all(|field| is_noise_text(field)) {
+        return Some(CompactionRejection::Noise);
+    }
+    None
+}
+
+fn format_completed(actions: &[CompletedAction]) -> String {
+    if actions.is_empty() {
+        "无已完成动作".to_owned()
+    } else {
+        actions
+            .iter()
+            .map(|action| {
+                format!(
+                    "{}（回执 {}）",
+                    action.summary.trim(),
+                    action.receipt_id.trim()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("；")
+    }
+}
+
+fn compaction_body(request: &SessionCompactionRequest) -> MemoryBody {
+    MemoryBody::CompactionSummary {
+        objective: request.objective.trim().to_owned(),
+        constraints: request.constraints.trim().to_owned(),
+        decisions: request.decisions.trim().to_owned(),
+        pending: request.pending.trim().to_owned(),
+        unknown_outcomes: request.unknown_outcomes.trim().to_owned(),
+        completed_actions: format_completed(&request.completed_actions),
+        next_step: request.next_step.trim().to_owned(),
+        active_context: format!(
+            "工作区：{}；应用：{}；目标：{}",
+            request.workspace.trim(),
+            request.application.trim(),
+            request.target.trim()
+        ),
+        latest_instruction: request.latest_instruction.trim().to_owned(),
+    }
+}
+
+fn render_compact_persona(parts: &[(&str, &str)]) -> String {
+    parts
+        .iter()
+        .map(|(label, value)| format!("{label}：{value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn screen_body(body: &MemoryBody) -> Option<MemoryWriteRejection> {
     if !matches!(
         body.kind().layer(),
@@ -1263,12 +1726,20 @@ fn render_body(body: &MemoryBody) -> String {
             decisions,
             pending,
             unknown_outcomes,
+            completed_actions,
+            next_step,
+            active_context,
+            latest_instruction,
         } => join_parts([
             Some(objective.as_str()),
             Some(constraints.as_str()),
             Some(decisions.as_str()),
+            Some(completed_actions.as_str()),
             Some(pending.as_str()),
+            Some(next_step.as_str()),
             Some(unknown_outcomes.as_str()),
+            Some(active_context.as_str()),
+            Some(latest_instruction.as_str()),
         ]),
         MemoryBody::SafetyRule { statement }
         | MemoryBody::ToolBoundary { statement }
@@ -1420,7 +1891,8 @@ mod tests {
     use super::*;
     use crate::{
         MemoryActor, MemoryAuthor, MemoryBody, MemoryMutability, MemoryQuery, MemoryRelation,
-        MemoryScope, MemorySourceKind, NewMemory, NewMemorySource, PersonalityDraft,
+        MemoryRevision, MemoryScope, MemorySourceKind, NewMemory, NewMemorySource,
+        PersonalityDraft, StorageError,
     };
 
     fn open() -> Storage {
@@ -1545,6 +2017,10 @@ mod tests {
                     decisions: "尚未晋升".into(),
                     pending: "继续当前任务".into(),
                     unknown_outcomes: "没有未核对结果".into(),
+                    completed_actions: String::new(),
+                    next_step: String::new(),
+                    active_context: String::new(),
+                    latest_instruction: String::new(),
                 },
                 MemoryWriteRejection::NotDurableLayer,
             ),
@@ -2349,5 +2825,605 @@ mod tests {
         assert!(procedures[0].text.contains("完整流程候选0"));
         assert!(!joined(&procedural).contains("完整流程候选1"));
         assert!(procedures[0].sources.len() == 1);
+    }
+
+    fn filler(tokens: u32) -> String {
+        let chars = usize::try_from(tokens.saturating_mul(4).saturating_sub(3)).unwrap_or(1);
+        "a".repeat(chars.max(1))
+    }
+
+    fn compaction_request(id: &str, turns: Vec<CompactionTurn>) -> SessionCompactionRequest {
+        SessionCompactionRequest {
+            memory_id: id.into(),
+            scope: scope(
+                "user_a",
+                Some("repo_a"),
+                Some("TextEdit"),
+                Some("task_1"),
+                None,
+            ),
+            sources: vec![NewMemorySource {
+                source_id: format!("src_{id}"),
+                kind: MemorySourceKind::PiSession,
+                source_ref: format!("pi_{id}"),
+                note: None,
+            }],
+            threshold_tokens: 1,
+            objective: "整理桌面笔记".into(),
+            constraints: "不发送外部消息".into(),
+            decisions: "决定旧稿，不把性格推断写成事实".into(),
+            completed_actions: vec![CompletedAction {
+                summary: "已观察窗口".into(),
+                receipt_id: "receipt_observe_1".into(),
+            }],
+            pending: "等待确认后输入".into(),
+            next_step: "核对 TextEdit 焦点".into(),
+            unknown_outcomes: "desktop_click 结果 unknown".into(),
+            workspace: "repo_a".into(),
+            application: "TextEdit".into(),
+            target: "未命名文稿".into(),
+            latest_instruction: "打断后改为只输入标题".into(),
+            turns,
+            retain_recent_turns: 2,
+            conflict: None,
+        }
+    }
+
+    fn sample_turns() -> Vec<CompactionTurn> {
+        vec![
+            CompactionTurn {
+                turn_ref: "turn_old".into(),
+                text: format!("{}旧回合记号", filler(8)),
+            },
+            CompactionTurn {
+                turn_ref: "turn_recent_a".into(),
+                text: "最近回合甲".into(),
+            },
+            CompactionTurn {
+                turn_ref: "turn_recent_b".into(),
+                text: "最近回合乙".into(),
+            },
+        ]
+    }
+
+    fn ready(outcome: CompactionOutcome) -> CompactionReady {
+        match outcome {
+            CompactionOutcome::Ready(ready) => *ready,
+            other => panic!("expected a compaction summary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compaction_keeps_required_fields_on_l0_and_can_continue() {
+        let mut db = open();
+        db.create_personality(
+            MemoryActor::User,
+            "persona_main",
+            &PersonalityDraft {
+                identity: "Semi 助手".into(),
+                tone: "平静".into(),
+                verbosity: "简短".into(),
+                language: "zh-CN".into(),
+                initiative: "低".into(),
+                behavior_boundary: "先确认外部副作用".into(),
+                tool_policy: "只读默认可执行".into(),
+                voice: "不自动播报后台任务".into(),
+                evolution_note: Some("演化备注不是事实".into()),
+                active: true,
+            },
+            10,
+        )
+        .unwrap();
+        let before = db.list_memories(&MemoryQuery::default()).unwrap().len();
+        let outcome = db
+            .compact_session(
+                MemoryActor::Agent,
+                &compaction_request("mem_compact", sample_turns()),
+                20,
+            )
+            .unwrap();
+        let ready = ready(outcome);
+        assert!(!ready.reused_existing);
+        assert!(ready.link.is_none());
+        assert_eq!(ready.summary.layer, MemoryLayer::L0);
+        assert_eq!(
+            ready.summary.record_kind,
+            MemoryRecordKind::CompactionSummary
+        );
+        assert_eq!(ready.summary.author, MemoryAuthor::Agent);
+        assert_eq!(ready.summary.mutability, MemoryMutability::AgentMutable);
+        let body = render_body(&ready.summary.body);
+        for required in [
+            "整理桌面笔记",
+            "不发送外部消息",
+            "决定旧稿",
+            "receipt_observe_1",
+            "等待确认后输入",
+            "核对 TextEdit 焦点",
+            "desktop_click 结果 unknown",
+            "工作区：repo_a",
+            "应用：TextEdit",
+            "目标：未命名文稿",
+            "打断后改为只输入标题",
+        ] {
+            assert!(body.contains(required), "missing {required}");
+        }
+        assert_eq!(
+            ready
+                .recent_turns
+                .iter()
+                .map(|turn| turn.turn_ref.as_str())
+                .collect::<Vec<_>>(),
+            vec!["turn_recent_a", "turn_recent_b"]
+        );
+        assert_eq!(ready.latest_instruction, "打断后改为只输入标题");
+        let stored = texts_of(&db);
+        assert!(!stored.contains("旧回合记号"));
+        assert!(!stored.contains("最近回合甲"));
+        assert_eq!(
+            db.list_memories(&MemoryQuery::default()).unwrap().len(),
+            before + 1
+        );
+        assert!(db
+            .list_memories(&MemoryQuery {
+                record_kind: Some(MemoryRecordKind::Profile),
+                ..MemoryQuery::default()
+            })
+            .unwrap()
+            .is_empty());
+        let promoted = db
+            .write_memory(
+                MemoryActor::Agent,
+                &candidate(
+                    "mem_promoted",
+                    ready.summary.body.clone(),
+                    ready.summary.scope.clone(),
+                    90,
+                ),
+                21,
+            )
+            .unwrap();
+        assert_eq!(
+            promoted,
+            MemoryWriteOutcome::Rejected(MemoryWriteRejection::NotDurableLayer)
+        );
+        assert_eq!(
+            db.list_memories(&MemoryQuery::default()).unwrap().len(),
+            before + 1
+        );
+
+        let pack = db
+            .load_memory_pack(&MemoryPackRequest {
+                scope: recall(
+                    "user_a",
+                    Some("repo_a"),
+                    Some("TextEdit"),
+                    Some("task_1"),
+                    None,
+                ),
+                stage: MemoryPackStage::Base,
+                token_budget: 100_000,
+                host_policy: "外部动作必须由 Host 确认".into(),
+                query: String::new(),
+                selected_memory_id: None,
+            })
+            .unwrap();
+        assert!(!pack.truncated);
+        assert_order(&pack);
+        assert_eq!(
+            pack.entries
+                .iter()
+                .map(|entry| entry.slot)
+                .collect::<Vec<_>>(),
+            vec![
+                MemoryPackSlot::HostPolicy,
+                MemoryPackSlot::CompactPersona,
+                MemoryPackSlot::L0,
+            ]
+        );
+        let persona = pack
+            .entries
+            .iter()
+            .find(|entry| entry.slot == MemoryPackSlot::CompactPersona)
+            .unwrap();
+        assert!(persona.text.contains("身份：Semi 助手"));
+        assert!(!persona.text.contains("演化备注不是事实"));
+        assert!(!persona.text.contains("receipt_observe_1"));
+        assert!(!persona.text.contains("性格"));
+        let l0 = pack
+            .entries
+            .iter()
+            .find(|entry| entry.slot == MemoryPackSlot::L0)
+            .unwrap();
+        assert!(l0.text.contains("receipt_observe_1"));
+        assert!(l0.text.contains("unknown"));
+        assert!(l0.text.contains("打断后改为只输入标题"));
+        assert_eq!(
+            db.load_personality("persona_main")
+                .unwrap()
+                .unwrap()
+                .version,
+            1
+        );
+    }
+
+    #[test]
+    fn compaction_rejects_unsafe_or_incomplete_input_without_writing() {
+        let mut db = open();
+        let below = compaction_request(
+            "mem_below",
+            vec![CompactionTurn {
+                turn_ref: "turn_short".into(),
+                text: filler(4),
+            }],
+        );
+        let mut below = below;
+        below.threshold_tokens = 5;
+        below.latest_instruction = "password=not-stored".into();
+        let outcome = db.compact_session(MemoryActor::Agent, &below, 30).unwrap();
+        match outcome {
+            CompactionOutcome::BelowThreshold { estimated_tokens } => {
+                assert!(estimated_tokens < 5);
+                assert!(estimated_tokens > 0);
+            }
+            other => panic!("short session should stay uncompacted, got {other:?}"),
+        }
+        assert!(texts_of(&db).is_empty());
+        assert!(!texts_of(&db).contains("password"));
+
+        let mut unset = compaction_request("mem_unset", sample_turns());
+        unset.threshold_tokens = 0;
+        assert!(matches!(
+            db.compact_session(MemoryActor::Agent, &unset, 31),
+            Err(StorageError::InvalidMemory(_))
+        ));
+
+        let mut missing_unknown = compaction_request("mem_missing", sample_turns());
+        missing_unknown.unknown_outcomes.clear();
+        assert_eq!(
+            db.compact_session(MemoryActor::Agent, &missing_unknown, 32)
+                .unwrap(),
+            CompactionOutcome::Rejected(CompactionRejection::Incomplete)
+        );
+        let mut missing_receipt = compaction_request("mem_receipt", sample_turns());
+        missing_receipt.completed_actions[0].receipt_id.clear();
+        assert_eq!(
+            db.compact_session(MemoryActor::Agent, &missing_receipt, 33)
+                .unwrap(),
+            CompactionOutcome::Rejected(CompactionRejection::Incomplete)
+        );
+
+        let mut secret = compaction_request("mem_secret", sample_turns());
+        secret.latest_instruction = "api_key=fake-session-key".into();
+        assert_eq!(
+            db.compact_session(MemoryActor::Agent, &secret, 34).unwrap(),
+            CompactionOutcome::Rejected(CompactionRejection::Secret)
+        );
+        let mut noise = compaction_request("mem_noise", sample_turns());
+        noise.objective = "好的".into();
+        noise.constraints = "好的".into();
+        noise.decisions = "好的".into();
+        noise.pending = "好的".into();
+        noise.next_step = "好的".into();
+        noise.unknown_outcomes = "好的".into();
+        noise.workspace = "好的".into();
+        noise.application = "好的".into();
+        noise.target = "好的".into();
+        noise.latest_instruction = "好的".into();
+        noise.completed_actions.clear();
+        assert_eq!(
+            db.compact_session(MemoryActor::Agent, &noise, 35).unwrap(),
+            CompactionOutcome::Rejected(CompactionRejection::Noise)
+        );
+        let mut dump = compaction_request("mem_dump", sample_turns());
+        dump.decisions = "User: 整段原文 Assistant: 原样保存".into();
+        assert_eq!(
+            db.compact_session(MemoryActor::Agent, &dump, 36).unwrap(),
+            CompactionOutcome::Rejected(CompactionRejection::UnfilteredDump)
+        );
+        assert!(texts_of(&db).is_empty());
+        assert!(!texts_of(&db).contains("api_key"));
+        assert!(!texts_of(&db).contains("User:"));
+
+        let mut none_done = compaction_request("mem_none", sample_turns());
+        none_done.completed_actions.clear();
+        let ready = ready(
+            db.compact_session(MemoryActor::Agent, &none_done, 37)
+                .unwrap(),
+        );
+        assert!(render_body(&ready.summary.body).contains("无已完成动作"));
+        assert_eq!(ready.summary.layer, MemoryLayer::L0);
+    }
+
+    #[test]
+    fn compaction_links_conflicts_without_changing_user_rows() {
+        let mut db = open();
+        let user = ready(
+            db.compact_session(
+                MemoryActor::User,
+                &compaction_request("mem_user", sample_turns()),
+                40,
+            )
+            .unwrap(),
+        );
+        let user_body = user.summary.body.clone();
+        let user_updated = user.summary.updated_at_ms;
+        let mut duplicate = compaction_request("mem_dup", sample_turns());
+        duplicate.sources[0].source_id = "src_dup".into();
+        duplicate.sources[0].source_ref = "pi_dup".into();
+        duplicate.conflict = Some(MemoryWriteConflict {
+            target_memory_id: "mem_user".into(),
+            relation: MemoryRelation::Contradicts,
+        });
+        let reused = ready(
+            db.compact_session(MemoryActor::Agent, &duplicate, 41)
+                .unwrap(),
+        );
+        assert!(reused.reused_existing);
+        assert_eq!(reused.summary.memory_id, "mem_user");
+        assert!(reused.link.is_none());
+        assert_eq!(reused.summary.body, user_body);
+        assert_eq!(reused.summary.updated_at_ms, user_updated);
+        assert_eq!(db.list_memory_sources("mem_user").unwrap().len(), 1);
+        assert_eq!(db.list_memories(&MemoryQuery::default()).unwrap().len(), 1);
+
+        let mut conflict = compaction_request("mem_agent", sample_turns());
+        conflict.decisions = "决定新稿".into();
+        let linked = ready(
+            db.compact_session(MemoryActor::Agent, &conflict, 42)
+                .unwrap(),
+        );
+        assert!(!linked.reused_existing);
+        assert_eq!(linked.summary.author, MemoryAuthor::Agent);
+        let link = linked
+            .link
+            .expect("new summary should point at the old one");
+        assert_eq!(link.relation, MemoryRelation::Supersedes);
+        assert_eq!(link.from_memory_id, "mem_agent");
+        assert_eq!(link.to_memory_id, "mem_user");
+        assert_eq!(db.load_memory("mem_user").unwrap().unwrap().body, user_body);
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::Agent,
+                "mem_user",
+                &MemoryRevision {
+                    body: conflict_body(&conflict),
+                    scope: conflict.scope.clone(),
+                },
+                43,
+            ),
+            Err(StorageError::OwnershipDenied { .. })
+        ));
+
+        let preference = db
+            .write_memory(
+                MemoryActor::User,
+                &candidate(
+                    "mem_pref",
+                    preference("reply.language", "zh-CN"),
+                    conflict.scope.clone(),
+                    90,
+                ),
+                44,
+            )
+            .unwrap();
+        assert!(matches!(preference, MemoryWriteOutcome::Stored { .. }));
+        let mut contradicted = compaction_request("mem_contra", sample_turns());
+        contradicted.decisions = "决定和偏好冲突".into();
+        contradicted.conflict = Some(MemoryWriteConflict {
+            target_memory_id: "mem_pref".into(),
+            relation: MemoryRelation::Contradicts,
+        });
+        let contra = ready(
+            db.compact_session(MemoryActor::Agent, &contradicted, 45)
+                .unwrap(),
+        );
+        assert_eq!(
+            contra.link.expect("contradiction link").relation,
+            MemoryRelation::Contradicts
+        );
+        match db.load_memory("mem_pref").unwrap().unwrap().body {
+            MemoryBody::Preference { value, .. } => assert_eq!(value, "zh-CN"),
+            other => panic!("user preference changed: {other:?}"),
+        }
+
+        let mut graph = compaction_request("mem_graph", sample_turns());
+        graph.decisions = "不该建立图关系".into();
+        graph.conflict = Some(MemoryWriteConflict {
+            target_memory_id: "mem_user".into(),
+            relation: MemoryRelation::Associates,
+        });
+        assert!(matches!(
+            db.compact_session(MemoryActor::Agent, &graph, 46),
+            Err(StorageError::InvalidMemory(_))
+        ));
+        assert!(db.load_memory("mem_graph").unwrap().is_none());
+
+        let mut overwrite = compaction_request("mem_user", sample_turns());
+        overwrite.decisions = "试图覆盖用户摘要".into();
+        assert!(matches!(
+            db.compact_session(MemoryActor::Agent, &overwrite, 47),
+            Err(StorageError::InvalidMemory(_))
+        ));
+        assert_eq!(db.load_memory("mem_user").unwrap().unwrap().body, user_body);
+
+        let pack = db
+            .load_memory_pack(&MemoryPackRequest {
+                scope: recall(
+                    "user_a",
+                    Some("repo_a"),
+                    Some("TextEdit"),
+                    Some("task_1"),
+                    None,
+                ),
+                stage: MemoryPackStage::Base,
+                token_budget: 100_000,
+                host_policy: "Host 策略".into(),
+                query: String::new(),
+                selected_memory_id: None,
+            })
+            .unwrap();
+        let l0 = joined(&pack);
+        assert!(l0.contains("决定新稿"));
+        assert!(!l0.contains("决定旧稿"));
+        assert!(
+            render_body(&db.load_memory("mem_user").unwrap().unwrap().body).contains("决定旧稿")
+        );
+    }
+
+    fn conflict_body(request: &SessionCompactionRequest) -> MemoryBody {
+        let mut body = compaction_body(request);
+        if let MemoryBody::CompactionSummary { decisions, .. } = &mut body {
+            *decisions = "Agent 改写用户摘要".into();
+        }
+        body
+    }
+
+    #[test]
+    fn persona_pack_keeps_facet_order_and_does_not_write() {
+        let mut db = open();
+        let fixture = seed_pack(&mut db);
+        let before_memories = db.list_memories(&MemoryQuery::default()).unwrap().len();
+        let before = db.load_personality("persona_main").unwrap().unwrap();
+        let persona = db.load_compact_persona().unwrap().unwrap();
+        assert_eq!(persona.personality_id, "persona_main");
+        assert_eq!(persona.version, before.version);
+        assert_eq!(persona.author, MemoryAuthor::User);
+        assert_eq!(persona.mutability, MemoryMutability::UserReadonly);
+        assert_eq!(
+            persona.text,
+            [
+                "身份：Semi 助手",
+                "语气：平静",
+                "详略：简短",
+                "语言：zh-CN",
+                "主动：低",
+                "行为：先确认外部副作用",
+                "工具：只读默认可执行",
+                "语音：不自动播报后台任务",
+            ]
+            .join("\n")
+        );
+        assert!(!persona.text.contains("演化备注不是事实"));
+        assert!(!persona.text.contains("当前仓库是 Semi-OS"));
+
+        db.create_personality(
+            MemoryActor::User,
+            "persona_idle",
+            &PersonalityDraft {
+                identity: "不该入选".into(),
+                tone: "随意".into(),
+                verbosity: "很长".into(),
+                language: "en".into(),
+                initiative: "高".into(),
+                behavior_boundary: "不要装进运行时".into(),
+                tool_policy: "不要装进运行时".into(),
+                voice: "不要装进运行时".into(),
+                evolution_note: Some("闲置演化".into()),
+                active: false,
+            },
+            200,
+        )
+        .unwrap();
+        db.write_memory(
+            MemoryActor::Agent,
+            &candidate(
+                "pref_tone",
+                preference("tone", "粗鲁嘲讽"),
+                scope("user_a", Some("repo_a"), None, None, None),
+                95,
+            ),
+            201,
+        )
+        .unwrap();
+        let persona = db.load_compact_persona().unwrap().unwrap();
+        assert_eq!(persona.tone, "平静");
+        assert!(!persona.text.contains("粗鲁嘲讽"));
+        assert!(!persona.text.contains("不该入选"));
+        assert_eq!(
+            db.load_personality("persona_main").unwrap().unwrap().tone,
+            "平静"
+        );
+        assert_eq!(
+            db.load_personality("persona_main")
+                .unwrap()
+                .unwrap()
+                .version,
+            before.version
+        );
+
+        let pack = db
+            .load_memory_pack(&request(MemoryPackStage::Base, 100_000, "粗鲁", None))
+            .unwrap();
+        assert_order(&pack);
+        assert_eq!(pack.stage, MemoryPackStage::Base);
+        let persona_entry = pack
+            .entries
+            .iter()
+            .find(|entry| entry.slot == MemoryPackSlot::CompactPersona)
+            .unwrap();
+        assert_eq!(persona_entry.text, persona.text);
+        assert!(!persona_entry.text.contains("粗鲁嘲讽"));
+        assert!(joined(&pack).contains("粗鲁嘲讽"));
+        assert!(pack.entries.iter().all(|entry| {
+            !matches!(
+                entry.slot,
+                MemoryPackSlot::L3 | MemoryPackSlot::L4 | MemoryPackSlot::L5
+            )
+        }));
+        assert!(!joined(&pack).contains("情节摘要"));
+        assert!(!joined(&pack).contains("完整流程候选"));
+        assert_eq!(
+            db.list_memories(&MemoryQuery::default()).unwrap().len(),
+            before_memories + 1
+        );
+        assert_eq!(
+            db.list_personality_versions("persona_main").unwrap().len(),
+            1
+        );
+        let _ = fixture;
+
+        let mut quiet = open();
+        quiet
+            .create_personality(
+                MemoryActor::User,
+                "persona_off",
+                &PersonalityDraft {
+                    identity: "关闭".into(),
+                    tone: "平静".into(),
+                    verbosity: "简短".into(),
+                    language: "zh-CN".into(),
+                    initiative: "低".into(),
+                    behavior_boundary: "停用".into(),
+                    tool_policy: "停用".into(),
+                    voice: "停用".into(),
+                    evolution_note: None,
+                    active: false,
+                },
+                1,
+            )
+            .unwrap();
+        assert!(quiet.load_compact_persona().unwrap().is_none());
+        assert!(matches!(
+            quiet.create_personality(
+                MemoryActor::Agent,
+                "persona_agent",
+                &PersonalityDraft {
+                    identity: "冒充".into(),
+                    tone: "平静".into(),
+                    verbosity: "简短".into(),
+                    language: "zh-CN".into(),
+                    initiative: "低".into(),
+                    behavior_boundary: "不行".into(),
+                    tool_policy: "不行".into(),
+                    voice: "不行".into(),
+                    evolution_note: None,
+                    active: true,
+                },
+                2,
+            ),
+            Err(StorageError::OwnershipDenied { .. })
+        ));
+        assert!(quiet.load_compact_persona().unwrap().is_none());
     }
 }

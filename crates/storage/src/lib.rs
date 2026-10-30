@@ -28,9 +28,10 @@ pub use memory::{
     PersonalityRecord,
 };
 pub use memory_access::{
-    MemoryHit, MemoryPack, MemoryPackEntry, MemoryPackRequest, MemoryPackSlot, MemoryPackStage,
-    MemoryRecallScope, MemoryWriteCandidate, MemoryWriteConflict, MemoryWriteOutcome,
-    MemoryWriteRejection,
+    CompactPersona, CompactionOutcome, CompactionReady, CompactionRejection, CompactionTurn,
+    CompletedAction, MemoryHit, MemoryPack, MemoryPackEntry, MemoryPackRequest, MemoryPackSlot,
+    MemoryPackStage, MemoryRecallScope, MemoryWriteCandidate, MemoryWriteConflict,
+    MemoryWriteOutcome, MemoryWriteRejection, SessionCompactionRequest,
 };
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
