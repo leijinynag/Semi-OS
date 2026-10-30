@@ -24,6 +24,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: pnpm --filter @semi-os/agent-worker exec playwright install chromium
+      # pnpm check 会先执行 build:js，再跑 Clippy / cargo check / test / cargo build。
+      # Tauri 的 generate_context! 在默认 custom-protocol 下于编译期嵌入
+      # frontendDist（../dist → apps/desktop/dist）；干净检出没有该目录时，
+      # 宏会在 Rust 编译阶段 panic，而 tauri CLI 的 beforeBuildCommand 不会被 cargo 调用。
       - run: pnpm check
       - name: Check committed patch whitespace
         if: github.event_name == 'pull_request'
