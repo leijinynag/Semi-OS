@@ -13,8 +13,9 @@
 //! 用户人格，都拒绝 Agent 改写；Agent 只能改写自己创建的记忆。修正写成新记录
 //! 并建立关系，不能覆盖用户原文，也不能原地改掉旧的人格版本。
 //!
-//! 人格不进入 `memories`。本模块不组装提示词、不执行检索排序或自动写入。
-//! 后续顺序仍是 Host 策略、紧凑人格、L1、L0，再渐进加载 L2–L5。
+//! 人格不进入 `memories`。自动写入、范围检索和渐进包在 `memory_access`，
+//! 仍必须经过这里的作者门禁。提示词顺序保持为 Host 策略、紧凑人格、L1、L0，
+//! 再按阶段加载 L2–L5；本文件不组装完整提示词。
 
 use crate::{Storage, StorageError, StorageResult};
 use rusqlite::{params, OptionalExtension, Row};
@@ -1073,6 +1074,14 @@ fn load_memory_on(
         )
         .optional()?;
     raw.map(decode_memory).transpose()
+}
+
+pub(crate) fn check_memory_id(value: &str, field: &str) -> StorageResult<()> {
+    validate_id(value, field)
+}
+
+pub(crate) fn actor_may_mutate(actor: MemoryActor, author: MemoryAuthor) -> bool {
+    ensure_can_mutate(actor, author, "记忆").is_ok()
 }
 
 /// 只有与作者相同的调用者可以改写。系统身份不能代替用户，Agent 也不能。

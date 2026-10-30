@@ -7,6 +7,7 @@ mod desktop;
 mod error;
 mod execution;
 mod memory;
+mod memory_access;
 mod migrations;
 mod models;
 mod outbound_rpc;
@@ -25,6 +26,11 @@ pub use memory::{
     MemoryQuery, MemoryRecord, MemoryRecordKind, MemoryRelation, MemoryRevision, MemoryScope,
     MemorySource, MemorySourceKind, NewMemory, NewMemoryLink, NewMemorySource, PersonalityDraft,
     PersonalityRecord,
+};
+pub use memory_access::{
+    MemoryHit, MemoryPack, MemoryPackEntry, MemoryPackRequest, MemoryPackSlot, MemoryPackStage,
+    MemoryRecallScope, MemoryWriteCandidate, MemoryWriteConflict, MemoryWriteOutcome,
+    MemoryWriteRejection,
 };
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
