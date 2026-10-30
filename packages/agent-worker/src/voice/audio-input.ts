@@ -23,7 +23,10 @@ export class AudioInput implements AsyncIterable<SttAudioChunk> {
 
   close(discard = false): void {
     this.#ended = true;
-    if (discard) { this.#chunks = []; this.#bytes = 0; }
+    if (discard) {
+      this.#chunks = [];
+      this.#bytes = 0;
+    }
     this.#wake?.();
   }
 
@@ -35,8 +38,13 @@ export class AudioInput implements AsyncIterable<SttAudioChunk> {
           this.#bytes -= chunk.data.byteLength;
           yield chunk;
         } else if (this.#ended) return;
-        else await new Promise<void>((resolve) => { this.#wake = resolve; });
+        else
+          await new Promise<void>((resolve) => {
+            this.#wake = resolve;
+          });
       }
-    } finally { this.#wake = undefined; }
+    } finally {
+      this.#wake = undefined;
+    }
   }
 }

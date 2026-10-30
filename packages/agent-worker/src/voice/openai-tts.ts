@@ -31,23 +31,20 @@ export class OpenAiTtsProvider implements TtsProvider {
   }: Parameters<TtsProvider["synthesize"]>[0]): AsyncIterable<TtsEvent> {
     const request = combineAbortSignals(callerSignal, this.#options.timeoutMs);
     try {
-      const response = await this.#options.fetch(
-        `${this.#options.baseUrl}/audio/speech`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.#options.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: this.#options.model,
-            voice: this.#options.voice,
-            input: text,
-            response_format: "mp3",
-          }),
-          signal: request.signal,
+      const response = await this.#options.fetch(`${this.#options.baseUrl}/audio/speech`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.#options.apiKey}`,
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({
+          model: this.#options.model,
+          voice: this.#options.voice,
+          input: text,
+          response_format: "mp3",
+        }),
+        signal: request.signal,
+      });
       if (!response.ok) {
         throw await providerError(response);
       }

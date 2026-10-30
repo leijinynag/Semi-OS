@@ -3,10 +3,7 @@ export function combineAbortSignals(
   timeoutMs: number,
 ): { signal: AbortSignal; dispose(): void } {
   const timeout = new AbortController();
-  const timer = setTimeout(
-    () => timeout.abort(new Error("provider request timed out")),
-    timeoutMs,
-  );
+  const timer = setTimeout(() => timeout.abort(new Error("provider request timed out")), timeoutMs);
   const signal = AbortSignal.any([callerSignal, timeout.signal]);
   return {
     signal,

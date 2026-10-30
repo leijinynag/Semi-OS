@@ -36,8 +36,16 @@ test("PCM media output bypasses WebAudio and waits for actual playback", async (
   const originalMediaSource = globalThis.MediaSource;
   Object.assign(globalThis, {
     Audio: AudioFixture,
-    AudioContext: class { createMediaElementSource() { throw new Error("must not route media into WebAudio"); } },
-    MediaSource: { isTypeSupported() { throw new Error("PCM is not an MSE stream"); } },
+    AudioContext: class {
+      createMediaElementSource() {
+        throw new Error("must not route media into WebAudio");
+      }
+    },
+    MediaSource: {
+      isTypeSupported() {
+        throw new Error("PCM is not an MSE stream");
+      },
+    },
   });
   try {
     AudioFixture.instances = [];
@@ -58,14 +66,20 @@ test("PCM media output bypasses WebAudio and waits for actual playback", async (
     assert.equal(AudioFixture.instances[1]!.played, true);
     player.stop();
 
-    const wave = new DataView(await pcmWave([Uint8Array.of(1), Uint8Array.of(2, 3, 4)]).arrayBuffer());
+    const wave = new DataView(
+      await pcmWave([Uint8Array.of(1), Uint8Array.of(2, 3, 4)]).arrayBuffer(),
+    );
     assert.equal(wave.getUint32(24, true), 22050);
     assert.equal(wave.getUint32(40, true), 4);
     assert.equal(wave.getUint16(44, true), 513);
     assert.throws(() => pcmWave([Uint8Array.of(1)]));
     assert.throws(() => pcmWave([]));
   } finally {
-    Object.assign(globalThis, { Audio: originalAudio, AudioContext: originalContext, MediaSource: originalMediaSource });
+    Object.assign(globalThis, {
+      Audio: originalAudio,
+      AudioContext: originalContext,
+      MediaSource: originalMediaSource,
+    });
   }
 });
 
@@ -101,9 +115,14 @@ test("queues a new sentence until the active sentence ends", () => {
     audio.dispatchEvent(new Event("waiting"));
     audio.currentTime = 0.8;
     audio.dispatchEvent(new Event("timeupdate"));
-    assert.deepEqual(events.map((event) => [event.state, event.positionMs]), [
-      ["playing", 0], ["playing", 400], ["buffering", 400],
-    ]);
+    assert.deepEqual(
+      events.map((event) => [event.state, event.positionMs]),
+      [
+        ["playing", 0],
+        ["playing", 400],
+        ["buffering", 400],
+      ],
+    );
 
     AudioFixture.instances[0]?.finish();
 
@@ -133,7 +152,9 @@ test("playback error clears all audio and never emits ended", () => {
     assert.equal(player.busy, false);
     assert.ok(events.includes("failed"));
     assert.equal(events.includes("ended"), false);
-  } finally { Object.assign(globalThis, { Audio: originalAudio, MediaSource: originalMediaSource }); }
+  } finally {
+    Object.assign(globalThis, { Audio: originalAudio, MediaSource: originalMediaSource });
+  }
 });
 
 test("stop interrupts the active sentence and clears queued audio", () => {
@@ -171,15 +192,27 @@ test("stop interrupts the active sentence and clears queued audio", () => {
 });
 
 test("direct media amplitude follows playback clock and resets on buffering and cancellation", () => {
-  const originals = { Audio: globalThis.Audio, MediaSource: globalThis.MediaSource,
-    requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame };
+  const originals = {
+    Audio: globalThis.Audio,
+    MediaSource: globalThis.MediaSource,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
+    cancelAnimationFrame: globalThis.cancelAnimationFrame,
+  };
   let frame: FrameRequestCallback | undefined;
-  Object.assign(globalThis, { Audio: AudioFixture, MediaSource: undefined,
-    requestAnimationFrame(callback: FrameRequestCallback) { frame = callback; return 1; },
-    cancelAnimationFrame() { frame = undefined; } });
+  Object.assign(globalThis, {
+    Audio: AudioFixture,
+    MediaSource: undefined,
+    requestAnimationFrame(callback: FrameRequestCallback) {
+      frame = callback;
+      return 1;
+    },
+    cancelAnimationFrame() {
+      frame = undefined;
+    },
+  });
   try {
     const player = new VoicePlayer(() => {}, { mediaOutput: true });
-    const pcm = floatToPcm16(Float32Array.from({ length: 2205 }, (_, i) => i < 441 ? 0 : 0.2));
+    const pcm = floatToPcm16(Float32Array.from({ length: 2205 }, (_, i) => (i < 441 ? 0 : 0.2)));
     player.append("clock", VOICE_PCM_MIME, Buffer.from(pcm).toString("base64"), true);
     player.complete("clock");
     const audio = AudioFixture.instances.at(-1)!;
@@ -199,5 +232,7 @@ test("direct media amplitude follows playback clock and resets on buffering and 
     player.stop();
     assert.equal(player.audioLevel.current, 0);
     assert.equal(frame, undefined);
-  } finally { Object.assign(globalThis, originals); }
+  } finally {
+    Object.assign(globalThis, originals);
+  }
 });

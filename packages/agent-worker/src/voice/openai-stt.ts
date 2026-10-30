@@ -119,15 +119,12 @@ export class OpenAiSttProvider implements SttProvider {
         new Blob([new Uint8Array(bytes)], { type: mimeType }),
         mimeType.includes("wav") ? "speech.wav" : "speech.webm",
       );
-      const response = await this.#options.fetch(
-        `${this.#options.baseUrl}/audio/transcriptions`,
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${this.#options.apiKey}` },
-          body: form,
-          signal: request.signal,
-        },
-      );
+      const response = await this.#options.fetch(`${this.#options.baseUrl}/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.#options.apiKey}` },
+        body: form,
+        signal: request.signal,
+      });
       if (!response.ok) {
         throw await providerError(response);
       }
@@ -157,9 +154,7 @@ export class OpenAiSttProvider implements SttProvider {
         }
       }
       const finalText = transcript.trim();
-      yield finalText
-        ? { kind: "stt.final", text: finalText }
-        : { kind: "stt.silence" };
+      yield finalText ? { kind: "stt.final", text: finalText } : { kind: "stt.silence" };
     } catch (error) {
       if (request.signal.aborted) {
         yield { kind: "stt.cancelled" };

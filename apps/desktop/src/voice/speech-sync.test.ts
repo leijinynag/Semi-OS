@@ -4,10 +4,13 @@ import { spokenPrefix, validateWords } from "./speech-sync.ts";
 
 test("reveals by actual word position and falls back for incomplete timestamps", () => {
   const text = "你好。";
-  const words = validateWords([
-    { text: "你", startMs: 120, endMs: 240 },
-    { text: "好", startMs: 240, endMs: 400 },
-  ], text);
+  const words = validateWords(
+    [
+      { text: "你", startMs: 120, endMs: 240 },
+      { text: "好", startMs: 240, endMs: 400 },
+    ],
+    text,
+  );
   assert.ok(words);
   assert.equal(spokenPrefix(text, words, 0), "");
   assert.equal(spokenPrefix(text, words, 130), "你");

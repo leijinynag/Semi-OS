@@ -6,41 +6,29 @@ import { DashScopeTtsProvider } from "./dashscope-tts.ts";
 import type { SttEvent } from "./stt.ts";
 import type { TtsEvent } from "./tts.ts";
 import { AudioInput } from "./audio-input.ts";
-import type {
-  ProviderWebSocket,
-  ProviderWebSocketFactory,
-} from "./dashscope-websocket.ts";
+import type { ProviderWebSocket, ProviderWebSocketFactory } from "./dashscope-websocket.ts";
 
 class FakeWebSocket implements ProviderWebSocket {
   readonly sent: Array<string | Uint8Array> = [];
   readonly #openListeners: Array<() => void> = [];
-  readonly #messageListeners: Array<
-    (data: RawData, isBinary: boolean) => void
-  > = [];
+  readonly #messageListeners: Array<(data: RawData, isBinary: boolean) => void> = [];
   readonly #errorListeners: Array<(error: Error) => void> = [];
   readonly #closeListeners: Array<() => void> = [];
   closed = false;
 
   on(event: "open", listener: () => void): this;
-  on(
-    event: "message",
-    listener: (data: RawData, isBinary: boolean) => void,
-  ): this;
+  on(event: "message", listener: (data: RawData, isBinary: boolean) => void): this;
   on(event: "error", listener: (error: Error) => void): this;
   on(event: "close", listener: () => void): this;
   on(
     event: "open" | "message" | "error" | "close",
     listener:
-      | (() => void)
-      | ((data: RawData, isBinary: boolean) => void)
-      | ((error: Error) => void),
+      (() => void) | ((data: RawData, isBinary: boolean) => void) | ((error: Error) => void),
   ): this {
     if (event === "open") {
       this.#openListeners.push(listener as () => void);
     } else if (event === "message") {
-      this.#messageListeners.push(
-        listener as (data: RawData, isBinary: boolean) => void,
-      );
+      this.#messageListeners.push(listener as (data: RawData, isBinary: boolean) => void);
     } else if (event === "error") {
       this.#errorListeners.push(listener as (error: Error) => void);
     } else {
@@ -68,9 +56,7 @@ class FakeWebSocket implements ProviderWebSocket {
   }
 
   binary(data: Uint8Array): void {
-    this.#messageListeners.forEach((listener) =>
-      listener(Buffer.from(data), true),
-    );
+    this.#messageListeners.forEach((listener) => listener(Buffer.from(data), true));
   }
 }
 
@@ -96,22 +82,28 @@ function action(message: string | Uint8Array): string | undefined {
   if (typeof message !== "string") {
     return undefined;
   }
-  return (
-    JSON.parse(message) as { header?: { action?: string } }
-  ).header?.action;
+  return (JSON.parse(message) as { header?: { action?: string } }).header?.action;
 }
 
 test("pre-cancelled speech providers do not create a connection", async () => {
   const controller = new AbortController();
   controller.abort();
-  const createWebSocket: ProviderWebSocketFactory = () => { throw new Error("must not connect"); };
+  const createWebSocket: ProviderWebSocketFactory = () => {
+    throw new Error("must not connect");
+  };
   const stt = new DashScopeSttProvider({ apiKey: "test", createWebSocket });
   const tts = new DashScopeTtsProvider({ apiKey: "test", voice: "test", createWebSocket });
   const audio = (async function* () {})();
   const input = [];
-  for await (const event of stt.transcribe({ audio, signal: controller.signal })) input.push(event.kind);
+  for await (const event of stt.transcribe({ audio, signal: controller.signal }))
+    input.push(event.kind);
   const output = [];
-  for await (const event of tts.synthesize({ sentenceId: "s1", text: "你好", signal: controller.signal })) output.push(event.kind);
+  for await (const event of tts.synthesize({
+    sentenceId: "s1",
+    text: "你好",
+    signal: controller.signal,
+  }))
+    output.push(event.kind);
   assert.deepEqual(input, ["stt.cancelled"]);
   assert.deepEqual(output, ["tts.cancelled"]);
 });
@@ -144,7 +136,7 @@ test("starts DashScope STT before sending ordered PCM and normalizes results", a
   assert.equal(headers.Authorization, "Bearer secret-token");
   socket.message({ header: { event: "task-started" } });
   await tick();
-  assert.deepEqual([...socket.sent[1] as Uint8Array], [1, 2]);
+  assert.deepEqual([...(socket.sent[1] as Uint8Array)], [1, 2]);
   assert.equal(action(socket.sent[2]!), "finish-task");
   socket.message({
     header: { event: "result-generated" },
@@ -219,10 +211,7 @@ test("streams CosyVoice binary frames and completes after task-finished", async 
   await tick();
   socket.message({ header: { event: "task-started" } });
   await tick();
-  assert.deepEqual(
-    socket.sent.slice(1, 3).map(action),
-    ["continue-task", "finish-task"],
-  );
+  assert.deepEqual(socket.sent.slice(1, 3).map(action), ["continue-task", "finish-task"]);
   socket.binary(new Uint8Array([1, 2, 3]));
   socket.message({ header: { event: "task-finished" } });
   await consume;
@@ -259,14 +248,15 @@ test("cancels an active CosyVoice task without emitting late audio", async () =>
 
   const lastPayload = socket.sent
     .filter((message): message is string => typeof message === "string")
-    .map((message) => JSON.parse(message) as {
-      payload?: { input?: { directive?: string } };
-    })
+    .map(
+      (message) =>
+        JSON.parse(message) as {
+          payload?: { input?: { directive?: string } };
+        },
+    )
     .at(-1);
   assert.equal(lastPayload?.payload?.input?.directive, "cancel");
-  assert.deepEqual(events, [
-    { kind: "tts.cancelled", sentenceId: "sentence_cancelled" },
-  ]);
+  assert.deepEqual(events, [{ kind: "tts.cancelled", sentenceId: "sentence_cancelled" }]);
 });
 
 async function tick(): Promise<void> {
@@ -276,8 +266,14 @@ async function tick(): Promise<void> {
 test("prewarms only transport and claims the open connection once for the first sentence", async () => {
   const { socket, factory } = fixture();
   let connections = 0;
-  const provider = new DashScopeTtsProvider({ apiKey: "test", voice: "test",
-    createWebSocket: (url, headers) => { connections++; return factory(url, headers); } });
+  const provider = new DashScopeTtsProvider({
+    apiKey: "test",
+    voice: "test",
+    createWebSocket: (url, headers) => {
+      connections++;
+      return factory(url, headers);
+    },
+  });
   const turn = new AbortController();
   provider.prepare(turn.signal);
   provider.prepare(turn.signal);
@@ -287,8 +283,11 @@ test("prewarms only transport and claims the open connection once for the first 
   const events: TtsEvent[] = [];
   const consume = (async () => {
     for await (const event of provider.synthesize({
-      sentenceId: "prepared", text: "你好。", signal: new AbortController().signal,
-    })) events.push(event);
+      sentenceId: "prepared",
+      text: "你好。",
+      signal: new AbortController().signal,
+    }))
+      events.push(event);
   })();
   await tick();
   assert.equal(connections, 1);
@@ -305,13 +304,16 @@ test("prewarms only transport and claims the open connection once for the first 
 
 test("cancelling prewarm releases transport and allows a fresh synthesis", async () => {
   const sockets: FakeWebSocket[] = [];
-  const provider = new DashScopeTtsProvider({ apiKey: "test", voice: "test",
+  const provider = new DashScopeTtsProvider({
+    apiKey: "test",
+    voice: "test",
     createWebSocket: () => {
       const socket = new FakeWebSocket();
       sockets.push(socket);
       queueMicrotask(() => socket.open());
       return socket;
-    } });
+    },
+  });
   const turn = new AbortController();
   provider.prepare(turn.signal);
   await tick();
@@ -320,8 +322,12 @@ test("cancelling prewarm releases transport and allows a fresh synthesis", async
   assert.equal(sockets[0]!.sent.length, 0);
   const consume = (async () => {
     for await (const _event of provider.synthesize({
-      sentenceId: "fresh", text: "下一句。", signal: new AbortController().signal,
-    })) { /* 消费到终态，验证取消的连接不被复用。 */ }
+      sentenceId: "fresh",
+      text: "下一句。",
+      signal: new AbortController().signal,
+    })) {
+      /* 消费到终态，验证取消的连接不被复用。 */
+    }
   })();
   await tick();
   assert.equal(sockets.length, 2);
@@ -334,11 +340,19 @@ test("receives partial STT while input remains open, cancels the producer and se
   const { socket, factory } = fixture();
   const input = new AudioInput();
   const controller = new AbortController();
-  const provider = new DashScopeSttProvider({ apiKey: "test", mode: "fun", nearfield: true,
-    languageHints: ["zh"], vocabulary: ["Semi-OS"], vocabularyId: "vocab-test", createWebSocket: factory });
+  const provider = new DashScopeSttProvider({
+    apiKey: "test",
+    mode: "fun",
+    nearfield: true,
+    languageHints: ["zh"],
+    vocabulary: ["Semi-OS"],
+    vocabularyId: "vocab-test",
+    createWebSocket: factory,
+  });
   const events: SttEvent[] = [];
   const consume = (async () => {
-    for await (const event of provider.transcribe({ audio: input, signal: controller.signal })) events.push(event);
+    for await (const event of provider.transcribe({ audio: input, signal: controller.signal }))
+      events.push(event);
   })();
   await tick();
   const run = JSON.parse(socket.sent[0] as string).payload;
@@ -348,10 +362,21 @@ test("receives partial STT while input remains open, cancels the producer and se
   assert.equal(run.parameters.vocabulary, undefined);
   assert.equal(run.parameters.vocabulary_id, "vocab-test");
   socket.message({ header: { event: "task-started" } });
-  input.push({ sequence: 0, data: new Uint8Array([0, 0]), mimeType: "audio/pcm", sampleRateHz: 16_000 });
+  input.push({
+    sequence: 0,
+    data: new Uint8Array([0, 0]),
+    mimeType: "audio/pcm",
+    sampleRateHz: 16_000,
+  });
   await tick();
-  assert.equal(socket.sent.some((message) => action(message) === "finish-task"), false);
-  socket.message({ header: { event: "result-generated" }, payload: { output: { sentence: { text: "持续录音", sentence_end: false } } } });
+  assert.equal(
+    socket.sent.some((message) => action(message) === "finish-task"),
+    false,
+  );
+  socket.message({
+    header: { event: "result-generated" },
+    payload: { output: { sentence: { text: "持续录音", sentence_end: false } } },
+  });
   await tick();
   assert.deepEqual(events, [{ kind: "stt.partial", text: "持续录音" }]);
   controller.abort();
@@ -363,10 +388,19 @@ test("receives partial STT while input remains open, cancels the producer and se
 
 test("Fun vocabulary failures are visible and never silently retry without hotwords", async () => {
   const { socket, factory } = fixture();
-  const provider = new DashScopeSttProvider({ apiKey: "secret", mode: "fun", vocabularyId: "vocab-test", createWebSocket: factory });
+  const provider = new DashScopeSttProvider({
+    apiKey: "secret",
+    mode: "fun",
+    vocabularyId: "vocab-test",
+    createWebSocket: factory,
+  });
   const events: SttEvent[] = [];
   const consume = (async () => {
-    for await (const event of provider.transcribe({ audio: (async function* () {})(), signal: new AbortController().signal })) events.push(event);
+    for await (const event of provider.transcribe({
+      audio: (async function* () {})(),
+      signal: new AbortController().signal,
+    }))
+      events.push(event);
   })();
   await tick();
   socket.message({ header: { event: "task-failed", error_message: "secret" } });
@@ -376,35 +410,70 @@ test("Fun vocabulary failures are visible and never silently retry without hotwo
   assert.match(error.message, /词表|热词|vocabulary/);
   assert.equal(error.message.includes("secret"), false);
   assert.equal(socket.sent.length, 1);
-  assert.throws(() => new DashScopeSttProvider({ apiKey: "test", mode: "fun", vocabularyId: "../invalid" }));
+  assert.throws(
+    () => new DashScopeSttProvider({ apiKey: "test", mode: "fun", vocabularyId: "../invalid" }),
+  );
 });
 
 test("requests CosyVoice timestamps and ignores malformed time ranges without blocking audio", async () => {
   const { socket, factory } = fixture();
-  const provider = new DashScopeTtsProvider({ apiKey: "test", voice: "test", createWebSocket: factory });
+  const provider = new DashScopeTtsProvider({
+    apiKey: "test",
+    voice: "test",
+    createWebSocket: factory,
+  });
   const events: TtsEvent[] = [];
   const consume = (async () => {
-    for await (const event of provider.synthesize({ sentenceId: "s1", text: "你好", signal: new AbortController().signal })) events.push(event);
+    for await (const event of provider.synthesize({
+      sentenceId: "s1",
+      text: "你好",
+      signal: new AbortController().signal,
+    }))
+      events.push(event);
   })();
   await tick();
-  assert.equal(JSON.parse(socket.sent[0] as string).payload.parameters.word_timestamp_enabled, true);
+  assert.equal(
+    JSON.parse(socket.sent[0] as string).payload.parameters.word_timestamp_enabled,
+    true,
+  );
   socket.message({ header: { event: "task-started" } });
-  socket.message({ header: { event: "result-generated" }, payload: { output: {
-    type: "sentence-end", sentence: { words: [{ text: "你", begin_time: 100, end_time: 0 }] },
-  } } });
+  socket.message({
+    header: { event: "result-generated" },
+    payload: {
+      output: {
+        type: "sentence-end",
+        sentence: { words: [{ text: "你", begin_time: 100, end_time: 0 }] },
+      },
+    },
+  });
   socket.binary(new Uint8Array([1, 2]));
-  socket.message({ header: { event: "result-generated" }, payload: { output: {
-    type: "sentence-end", sentence: { words: [
-      { text: "你", begin_time: 0, end_time: 120 }, { text: "好", begin_time: 120, end_time: 240 },
-    ] },
-  } } });
+  socket.message({
+    header: { event: "result-generated" },
+    payload: {
+      output: {
+        type: "sentence-end",
+        sentence: {
+          words: [
+            { text: "你", begin_time: 0, end_time: 120 },
+            { text: "好", begin_time: 120, end_time: 240 },
+          ],
+        },
+      },
+    },
+  });
   socket.message({ header: { event: "task-finished" } });
   await consume;
-  assert.deepEqual(events.find((event) => event.kind === "tts.timestamps"), {
-    kind: "tts.timestamps", sentenceId: "s1", words: [
-      { text: "你", startMs: 0, endMs: 120 }, { text: "好", startMs: 120, endMs: 240 },
-    ],
-  });
+  assert.deepEqual(
+    events.find((event) => event.kind === "tts.timestamps"),
+    {
+      kind: "tts.timestamps",
+      sentenceId: "s1",
+      words: [
+        { text: "你", startMs: 0, endMs: 120 },
+        { text: "好", startMs: 120, endMs: 240 },
+      ],
+    },
+  );
   assert.equal(events.filter((event) => event.kind === "tts.timestamps").length, 1);
   assert.equal(events.at(-1)?.kind, "tts.completed");
 });

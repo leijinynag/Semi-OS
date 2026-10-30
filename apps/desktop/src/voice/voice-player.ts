@@ -14,14 +14,22 @@ export function pcmWave(chunks: Uint8Array[]): Blob {
   const header = new ArrayBuffer(44);
   const view = new DataView(header);
   const tag = (offset: number, text: string) => {
-    for (let index = 0; index < text.length; index++) view.setUint8(offset + index, text.charCodeAt(index));
+    for (let index = 0; index < text.length; index++)
+      view.setUint8(offset + index, text.charCodeAt(index));
   };
-  tag(0, "RIFF"); view.setUint32(4, 36 + length, true); tag(8, "WAVE");
-  tag(12, "fmt "); view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, 22_050, true); view.setUint32(28, 44_100, true);
-  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  tag(36, "data"); view.setUint32(40, length, true);
+  tag(0, "RIFF");
+  view.setUint32(4, 36 + length, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 22_050, true);
+  view.setUint32(28, 44_100, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  tag(36, "data");
+  view.setUint32(40, length, true);
   return new Blob([header, ...chunks.map((chunk) => chunk.slice().buffer)], { type: "audio/wav" });
 }
 
@@ -66,17 +74,22 @@ export class VoicePlayer {
   #recoveryTimer?: ReturnType<typeof setTimeout>;
   readonly #mediaOutput: boolean;
 
-  constructor(onPlayback: (event: PlaybackEvent) => void = () => {}, options: { mediaOutput?: boolean } = {}) {
+  constructor(
+    onPlayback: (event: PlaybackEvent) => void = () => {},
+    options: { mediaOutput?: boolean } = {},
+  ) {
     this.#onPlayback = onPlayback;
     this.#mediaOutput = options.mediaOutput ?? false;
   }
 
-  get busy(): boolean { return Boolean(this.#active || this.#queued.length); }
+  get busy(): boolean {
+    return Boolean(this.#active || this.#queued.length);
+  }
 
   /** 播放专用上下文；不挂接麦克风节点，不受录音器销毁影响。 */
   get audioContext(): AudioContext | undefined {
     if (typeof AudioContext === "undefined") return undefined;
-    return this.#context ??= new AudioContext();
+    return (this.#context ??= new AudioContext());
   }
 
   /** 由真实用户按键启动音频上下文，避免自动播放限制；同一 WebView 只建一次。 */
@@ -84,12 +97,7 @@ export class VoicePlayer {
     await this.audioContext?.resume();
   }
 
-  append(
-    sentenceId: string,
-    mimeType: string,
-    audioBase64: string,
-    first: boolean,
-  ): void {
+  append(sentenceId: string, mimeType: string, audioBase64: string, first: boolean): void {
     let sentence = this.#findSentence(sentenceId);
     if (!sentence) {
       if (!first) {
@@ -131,10 +139,14 @@ export class VoicePlayer {
       let blob: Blob;
       try {
         if (active.mimeType === VOICE_PCM_MIME) active.envelope = pcmEnvelope(active.chunks);
-        blob = active.mimeType === VOICE_PCM_MIME
-          ? pcmWave(active.chunks)
-          : new Blob(parts, { type: active.mimeType });
-      } catch { this.#fail(active); return; }
+        blob =
+          active.mimeType === VOICE_PCM_MIME
+            ? pcmWave(active.chunks)
+            : new Blob(parts, { type: active.mimeType });
+      } catch {
+        this.#fail(active);
+        return;
+      }
       active.objectUrl = URL.createObjectURL(blob);
       active.audio!.src = active.objectUrl;
       void active.audio!.play().catch(() => this.#fail(active));
@@ -181,13 +193,19 @@ export class VoicePlayer {
     }
     const next = active.chunks.shift();
     if (next) {
-      try { active.sourceBuffer.appendBuffer(next.slice().buffer); }
-      catch { this.#fail(active); }
+      try {
+        active.sourceBuffer.appendBuffer(next.slice().buffer);
+      } catch {
+        this.#fail(active);
+      }
       return;
     }
     if (active.completed) {
-      try { active.mediaSource.endOfStream(); }
-      catch { this.#fail(active); }
+      try {
+        active.mediaSource.endOfStream();
+      } catch {
+        this.#fail(active);
+      }
     }
   }
 
@@ -205,7 +223,10 @@ export class VoicePlayer {
     };
     this.#active = active;
     if (active.mimeType === VOICE_PCM_MIME && !this.#mediaOutput) {
-      if (!this.#context) { this.#fail(active); return; }
+      if (!this.#context) {
+        this.#fail(active);
+        return;
+      }
       try {
         active.pcm = new PcmStream(this.#context, this.audioLevel, (event) => {
           if (this.#active !== active) return;
@@ -218,7 +239,9 @@ export class VoicePlayer {
         });
         this.#flush();
         this.#recoverContext(active);
-      } catch { this.#fail(active); }
+      } catch {
+        this.#fail(active);
+      }
       return;
     }
     const audio = new Audio();
@@ -234,7 +257,9 @@ export class VoicePlayer {
         active.source = this.#context.createMediaElementSource(audio);
         active.source.connect(this.#analyser);
         this.#analyser.connect(this.#context.destination);
-      } catch { /* 音量分析失败不影响音频本身和文字同步。 */ }
+      } catch {
+        /* 音量分析失败不影响音频本身和文字同步。 */
+      }
     }
     audio.addEventListener("playing", () => {
       if (this.#active !== active) return;
@@ -268,14 +293,15 @@ export class VoicePlayer {
       active.mediaSource.addEventListener(
         "sourceopen",
         () => {
-          if (
-            this.#active !== active ||
-            active.mediaSource?.readyState !== "open"
-          ) {
+          if (this.#active !== active || active.mediaSource?.readyState !== "open") {
             return;
           }
-          try { active.sourceBuffer = active.mediaSource.addSourceBuffer(active.mimeType); }
-          catch { this.#fail(active); return; }
+          try {
+            active.sourceBuffer = active.mediaSource.addSourceBuffer(active.mimeType);
+          } catch {
+            this.#fail(active);
+            return;
+          }
           active.sourceBuffer.addEventListener("updateend", () => this.#flush());
           this.#flush();
           void audio.play().catch(() => this.#fail(active));
@@ -332,11 +358,14 @@ export class VoicePlayer {
         else this.#fail(sentence);
       }
     }, 3000);
-    void context.resume().then(() => {
-      if (this.#recovering === sentence && context.state === "running") this.#clearRecovery();
-    }, () => {
-      if (this.#recovering === sentence && this.#active === sentence) this.#fail(sentence);
-    });
+    void context.resume().then(
+      () => {
+        if (this.#recovering === sentence && context.state === "running") this.#clearRecovery();
+      },
+      () => {
+        if (this.#recovering === sentence && this.#active === sentence) this.#fail(sentence);
+      },
+    );
   }
 
   #clearRecovery(): void {
@@ -346,8 +375,13 @@ export class VoicePlayer {
   }
 
   #publish(sentence: ActiveSentence, state: PlaybackEvent["state"]): void {
-    this.#onPlayback({ sentenceId: sentence.sentenceId, state,
-      positionMs: sentence.pcm?.positionMs ?? Math.max(0, Math.round((sentence.audio?.currentTime || 0) * 1000)) });
+    this.#onPlayback({
+      sentenceId: sentence.sentenceId,
+      state,
+      positionMs:
+        sentence.pcm?.positionMs ??
+        Math.max(0, Math.round((sentence.audio?.currentTime || 0) * 1000)),
+    });
   }
 
   #sample(sentence: ActiveSentence): void {
@@ -356,12 +390,22 @@ export class VoicePlayer {
     const samples = new Float32Array(this.#analyser?.fftSize ?? 256);
     let previousTime: number | undefined;
     const tick = (now: number) => {
-      if (this.#active !== sentence || !sentence.playing) { this.#frame = undefined; return; }
+      if (this.#active !== sentence || !sentence.playing) {
+        this.#frame = undefined;
+        return;
+      }
       this.#analyser?.getFloatTimeDomainData(samples);
       const target = sentence.envelope
         ? envelopeLevel(sentence.envelope, sentence.audio?.currentTime ?? 0)
-        : Math.min(1, Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length) * 4);
-      this.audioLevel.current = smoothLevel(this.audioLevel.current, target, previousTime === undefined ? 1 / 60 : (now - previousTime) / 1000);
+        : Math.min(
+            1,
+            Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length) * 4,
+          );
+      this.audioLevel.current = smoothLevel(
+        this.audioLevel.current,
+        target,
+        previousTime === undefined ? 1 / 60 : (now - previousTime) / 1000,
+      );
       previousTime = now;
       this.#publish(sentence, "playing");
       this.#frame = requestAnimationFrame(tick);

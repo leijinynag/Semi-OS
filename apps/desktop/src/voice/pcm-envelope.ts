@@ -13,7 +13,10 @@ export function pcmEnvelope(chunks: readonly Uint8Array[], sampleRate = 22_050):
   let count = 0;
   for (const chunk of chunks) {
     for (const byte of chunk) {
-      if (low === undefined) { low = byte; continue; }
+      if (low === undefined) {
+        low = byte;
+        continue;
+      }
       const raw = low | (byte << 8);
       const sample = (raw >= 0x8000 ? raw - 0x10000 : raw) / 0x8000;
       low = undefined;
@@ -36,5 +39,8 @@ export function envelopeLevel(envelope: PcmEnvelope | undefined, seconds: number
 
 export function smoothLevel(previous: number, target: number, deltaSeconds: number): number {
   const rate = target > previous ? 36 : 9;
-  return previous + (target - previous) * (1 - Math.exp(-rate * Math.min(0.1, Math.max(0, deltaSeconds))));
+  return (
+    previous +
+    (target - previous) * (1 - Math.exp(-rate * Math.min(0.1, Math.max(0, deltaSeconds))))
+  );
 }

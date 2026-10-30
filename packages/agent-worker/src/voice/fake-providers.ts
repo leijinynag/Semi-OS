@@ -20,9 +20,7 @@ export class FakeSttProvider implements SttProvider {
     }
     const midpoint = Math.max(1, Math.floor(this.transcript.length / 2));
     yield { kind: "stt.partial", text: this.transcript.slice(0, midpoint) };
-    yield this.transcript
-      ? { kind: "stt.final", text: this.transcript }
-      : { kind: "stt.silence" };
+    yield this.transcript ? { kind: "stt.final", text: this.transcript } : { kind: "stt.silence" };
   }
 }
 

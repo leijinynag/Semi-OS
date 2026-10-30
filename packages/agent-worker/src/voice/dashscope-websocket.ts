@@ -14,10 +14,8 @@ export type ProviderWebSocketFactory = (
   headers: Record<string, string>,
 ) => ProviderWebSocket;
 
-export const createProviderWebSocket: ProviderWebSocketFactory = (
-  url,
-  headers,
-) => new WebSocket(url, { headers });
+export const createProviderWebSocket: ProviderWebSocketFactory = (url, headers) =>
+  new WebSocket(url, { headers });
 
 export class AsyncEventQueue<T> {
   readonly #values: T[] = [];
@@ -67,7 +65,5 @@ export function eventName(value: unknown): string | undefined {
   if (!isRecord(value) || !isRecord(value.header)) {
     return undefined;
   }
-  return typeof value.header.event === "string"
-    ? value.header.event
-    : undefined;
+  return typeof value.header.event === "string" ? value.header.event : undefined;
 }

@@ -27,9 +27,7 @@ export interface DashScopeSttOptions {
 }
 
 type SocketEvent =
-  | { kind: "message"; value: unknown; binary?: Uint8Array }
-  | { kind: "error" }
-  | { kind: "closed" };
+  { kind: "message"; value: unknown; binary?: Uint8Array } | { kind: "error" } | { kind: "closed" };
 
 function sentenceFrom(value: unknown): {
   text?: string;
@@ -47,21 +45,19 @@ function sentenceFrom(value: unknown): {
   const sentence = value.payload.output.sentence;
   return {
     text: typeof sentence.text === "string" ? sentence.text : undefined,
-    sentenceEnd:
-      typeof sentence.sentence_end === "boolean"
-        ? sentence.sentence_end
-        : undefined,
-    id: typeof sentence.sentence_id === "number" || typeof sentence.sentence_id === "string"
-      ? String(sentence.sentence_id)
-      : typeof sentence.begin_time === "number" ? String(sentence.begin_time) : undefined,
+    sentenceEnd: typeof sentence.sentence_end === "boolean" ? sentence.sentence_end : undefined,
+    id:
+      typeof sentence.sentence_id === "number" || typeof sentence.sentence_id === "string"
+        ? String(sentence.sentence_id)
+        : typeof sentence.begin_time === "number"
+          ? String(sentence.begin_time)
+          : undefined,
   };
 }
 
 function assertPcmChunk(chunk: SttAudioChunk): void {
   if (chunk.mimeType !== "audio/pcm" || chunk.sampleRateHz !== 16_000) {
-    throw new Error(
-      "DashScope STT requires mono PCM16 audio at 16000 Hz",
-    );
+    throw new Error("DashScope STT requires mono PCM16 audio at 16000 Hz");
   }
 }
 
@@ -74,20 +70,17 @@ function assertPcmChunk(chunk: SttAudioChunk): void {
  */
 export class DashScopeSttProvider implements SttProvider {
   readonly #options: Required<
-    Pick<
-      DashScopeSttOptions,
-      "apiKey" | "websocketUrl" | "model" | "timeoutMs" | "createWebSocket"
-    >
+    Pick<DashScopeSttOptions, "apiKey" | "websocketUrl" | "model" | "timeoutMs" | "createWebSocket">
   >;
   readonly #parameters: Record<string, unknown>;
 
   constructor(options: DashScopeSttOptions) {
     this.#options = {
       apiKey: options.apiKey,
-      websocketUrl:
-        options.websocketUrl ??
-        "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
-      model: options.model ?? (options.mode === "fun" ? "fun-asr-realtime" : "qwen-audio-3.1-asr-flash-streaming"),
+      websocketUrl: options.websocketUrl ?? "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
+      model:
+        options.model ??
+        (options.mode === "fun" ? "fun-asr-realtime" : "qwen-audio-3.1-asr-flash-streaming"),
       timeoutMs: options.timeoutMs ?? 180_000,
       createWebSocket: options.createWebSocket ?? createProviderWebSocket,
     };
@@ -96,13 +89,19 @@ export class DashScopeSttProvider implements SttProvider {
     if (options.mode === "fun") {
       this.#parameters.max_sentence_silence = 800;
       if (options.vocabularyId) {
-        if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.vocabularyId)) throw new Error("invalid Fun-ASR vocabulary_id");
+        if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.vocabularyId))
+          throw new Error("invalid Fun-ASR vocabulary_id");
         this.#parameters.vocabulary_id = options.vocabularyId;
       }
     } else {
-      if (options.nearfield && this.#options.model.includes("3.1")) this.#parameters.vad_model = "near_meeting_16k";
-      if (options.languageHints?.length) this.#parameters.language_hints = options.languageHints.slice(0, 4);
-      if (options.vocabulary?.length) this.#parameters.vocabulary = Object.fromEntries(options.vocabulary.slice(0, 100).map((word) => [word, 3]));
+      if (options.nearfield && this.#options.model.includes("3.1"))
+        this.#parameters.vad_model = "near_meeting_16k";
+      if (options.languageHints?.length)
+        this.#parameters.language_hints = options.languageHints.slice(0, 4);
+      if (options.vocabulary?.length)
+        this.#parameters.vocabulary = Object.fromEntries(
+          options.vocabulary.slice(0, 100).map((word) => [word, 3]),
+        );
     }
   }
 
@@ -111,7 +110,10 @@ export class DashScopeSttProvider implements SttProvider {
     signal: callerSignal,
   }: Parameters<SttProvider["transcribe"]>[0]): AsyncIterable<SttEvent> {
     const cleanup = new AbortController();
-    const request = combineAbortSignals(AbortSignal.any([callerSignal, cleanup.signal]), this.#options.timeoutMs);
+    const request = combineAbortSignals(
+      AbortSignal.any([callerSignal, cleanup.signal]),
+      this.#options.timeoutMs,
+    );
     const queue = new AsyncEventQueue<SocketEvent>();
     const taskId = createTaskId();
     let socket: ProviderWebSocket | undefined;
@@ -123,7 +125,9 @@ export class DashScopeSttProvider implements SttProvider {
     let producer: Promise<void> | undefined;
     const iterator = audio[Symbol.asyncIterator]();
     const cancelled = new Promise<IteratorResult<SttAudioChunk>>((resolve) => {
-      request.signal.addEventListener("abort", () => resolve({ done: true, value: undefined }), { once: true });
+      request.signal.addEventListener("abort", () => resolve({ done: true, value: undefined }), {
+        once: true,
+      });
     });
 
     try {
@@ -199,15 +203,20 @@ export class DashScopeSttProvider implements SttProvider {
               assertPcmChunk(next.value);
               if (next.value.data.byteLength) socket?.send(next.value.data);
             }
-            if (!request.signal.aborted) socket?.send(JSON.stringify({
-              header: {
-                action: "finish-task",
-                task_id: taskId,
-                streaming: "duplex",
-              },
-              payload: { input: {} },
-            }));
-          })().catch(() => { queue.push({ kind: "error" }); });
+            if (!request.signal.aborted)
+              socket?.send(
+                JSON.stringify({
+                  header: {
+                    action: "finish-task",
+                    task_id: taskId,
+                    streaming: "duplex",
+                  },
+                  payload: { input: {} },
+                }),
+              );
+          })().catch(() => {
+            queue.push({ kind: "error" });
+          });
         } else if (name === "result-generated") {
           const sentence = sentenceFrom(event.value);
           if (sentence.text) {
@@ -223,9 +232,11 @@ export class DashScopeSttProvider implements SttProvider {
           }
         } else if (name === "task-failed") {
           // 不静默剥掉热词参数重试：用户必须知道配置没生效。
-          throw new Error(this.#parameters.vocabulary_id
-            ? "Fun-ASR 识别失败，请检查定制词表与网关兼容性；热词未确认生效"
-            : "DashScope STT task failed");
+          throw new Error(
+            this.#parameters.vocabulary_id
+              ? "Fun-ASR 识别失败，请检查定制词表与网关兼容性；热词未确认生效"
+              : "DashScope STT task failed",
+          );
         } else if (name === "task-finished") {
           finished = true;
         }
@@ -243,10 +254,7 @@ export class DashScopeSttProvider implements SttProvider {
         yield {
           kind: "stt.error",
           code: "cloud_stt_failed",
-          message:
-            error instanceof Error
-              ? error.message
-              : "DashScope STT request failed",
+          message: error instanceof Error ? error.message : "DashScope STT request failed",
           retryable: true,
         };
       }

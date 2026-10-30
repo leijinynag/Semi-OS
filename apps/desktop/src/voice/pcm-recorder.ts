@@ -5,7 +5,16 @@ export interface PcmRecorderOptions {
   chunkDurationMs?: number;
   onChunk(data: Uint8Array, token: number): void;
   onFirstSample?(token: number): void;
-  onDiagnostics?(value: { sampleRateHz: number; rms: number; peak: number; clippedSamples: number; silenceRatio: number }, token: number): void;
+  onDiagnostics?(
+    value: {
+      sampleRateHz: number;
+      rms: number;
+      peak: number;
+      clippedSamples: number;
+      silenceRatio: number;
+    },
+    token: number,
+  ): void;
 }
 
 /** 积分重采样跨分片保留小数边界；44.1 kHz 输入不再每块丢失尾部采样。 */
@@ -37,7 +46,8 @@ export class StreamingResampler {
   }
   flush(): Float32Array {
     const output = this.#weight ? Float32Array.of(this.#sum / this.#weight) : new Float32Array();
-    this.#weight = 0; this.#sum = 0;
+    this.#weight = 0;
+    this.#sum = 0;
     return output;
   }
 }
@@ -69,11 +79,7 @@ export function floatToPcm16(input: Float32Array): Uint8Array {
   const view = new DataView(bytes.buffer);
   input.forEach((sample, index) => {
     const clamped = Math.max(-1, Math.min(1, sample));
-    view.setInt16(
-      index * 2,
-      clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff,
-      true,
-    );
+    view.setInt16(index * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
   });
   return bytes;
 }
@@ -123,14 +129,20 @@ export class PcmRecorder {
       this.#context = this.#options.audioContext ?? new AudioContext({ sampleRate: 48_000 });
       // 保持独立同源资源，避免生产构建内联 data URL 后被原生 CSP 拦截。
       try {
-        await this.#context.audioWorklet.addModule(new URL("./pcm-worklet.js?no-inline", import.meta.url));
+        await this.#context.audioWorklet.addModule(
+          new URL("./pcm-worklet.js?no-inline", import.meta.url),
+        );
       } catch (error) {
         if (!this.#options.audioContext) await this.#context.close();
         this.#context = undefined;
         throw error;
       }
     })();
-    try { await this.#preparing; } finally { this.#preparing = undefined; }
+    try {
+      await this.#preparing;
+    } finally {
+      this.#preparing = undefined;
+    }
   }
 
   /** 预先接通设备图；处理器常驻，门控关闭时不跨线程发送任何采样。 */
@@ -147,23 +159,32 @@ export class PcmRecorder {
     this.#stream = stream;
     this.#source = context.createMediaStreamSource(stream);
     this.#processor = new AudioWorkletNode(context, "semi-os-capture", {
-      channelCount: 1, channelCountMode: "explicit",
-      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+      channelCount: 1,
+      channelCountMode: "explicit",
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
     });
     const processor = this.#processor;
     const samplesPerChunk = Math.round(
       (this.#options.targetSampleRate * this.#options.chunkDurationMs) / 1000,
     );
-    this.#processor.port.onmessage = ({ data }: MessageEvent<{ kind: string; token: number; samples?: Float32Array }>) => {
+    this.#processor.port.onmessage = ({
+      data,
+    }: MessageEvent<{ kind: string; token: number; samples?: Float32Array }>) => {
       // flush 超时或断开连接不保证消息队列已排空；旧节点不能向下一轮
       // 重采样器写音频，也不能替下一轮确认停止。
       if (this.#processor !== processor) return;
       if (data.token !== this.#token) return;
-      if (data.kind === "flushed") { this.#flushed?.(); return; }
+      if (data.kind === "flushed") {
+        this.#flushed?.();
+        return;
+      }
       if (!this.#active || !data.samples) return;
       if (this.#count === 0 && data.samples.length) this.#options.onFirstSample?.(this.#token);
       for (const sample of data.samples) {
-        this.#count++; this.#square += sample * sample;
+        this.#count++;
+        this.#square += sample * sample;
         this.#peak = Math.max(this.#peak, Math.abs(sample));
         if (Math.abs(sample) >= 0.99) this.#clipped++;
         if (Math.abs(sample) < 0.005) this.#silent++;
@@ -171,9 +192,7 @@ export class PcmRecorder {
       const resampled = this.#resampler!.push(data.samples);
       this.#pending.push(...resampled);
       while (this.#pending.length >= samplesPerChunk) {
-        const samples = new Float32Array(
-          this.#pending.splice(0, samplesPerChunk),
-        );
+        const samples = new Float32Array(this.#pending.splice(0, samplesPerChunk));
         this.#options.onChunk(floatToPcm16(samples), this.#token);
       }
     };
@@ -190,7 +209,10 @@ export class PcmRecorder {
     this.#active = true;
     this.#count = this.#square = this.#peak = this.#clipped = this.#silent = 0;
     this.#pending = [];
-    this.#resampler = new StreamingResampler(this.#context.sampleRate, this.#options.targetSampleRate);
+    this.#resampler = new StreamingResampler(
+      this.#context.sampleRate,
+      this.#options.targetSampleRate,
+    );
     this.#processor.port.postMessage({ kind: "begin", token });
   }
 
@@ -203,7 +225,9 @@ export class PcmRecorder {
   async stop(): Promise<void> {
     if (this.#stopping) return this.#stopping;
     if (!this.#processor || !this.#active) return;
-    this.#stopping = this.#flush().finally(() => { this.#stopping = undefined; });
+    this.#stopping = this.#flush().finally(() => {
+      this.#stopping = undefined;
+    });
     return this.#stopping;
   }
 
@@ -213,7 +237,10 @@ export class PcmRecorder {
       await new Promise<void>((resolve) => {
         // 系统挂起音频时不能无限等待；正常路径由 Worklet 的确认消息结束。
         const timer = setTimeout(resolve, 300);
-        this.#flushed = () => { clearTimeout(timer); resolve(); };
+        this.#flushed = () => {
+          clearTimeout(timer);
+          resolve();
+        };
         processor.port.postMessage({ kind: "end", token: this.#token });
       });
     } else processor?.port.postMessage({ kind: "end", token: this.#token });
@@ -226,11 +253,17 @@ export class PcmRecorder {
     }
     this.#active = false;
     this.#flushed = undefined;
-    if (this.#context) this.#options.onDiagnostics?.({
-      sampleRateHz: this.#context.sampleRate,
-      rms: Math.sqrt(this.#square / Math.max(1, this.#count)), peak: this.#peak,
-      clippedSamples: this.#clipped, silenceRatio: this.#silent / Math.max(1, this.#count),
-    }, this.#token);
+    if (this.#context)
+      this.#options.onDiagnostics?.(
+        {
+          sampleRateHz: this.#context.sampleRate,
+          rms: Math.sqrt(this.#square / Math.max(1, this.#count)),
+          peak: this.#peak,
+          clippedSamples: this.#clipped,
+          silenceRatio: this.#silent / Math.max(1, this.#count),
+        },
+        this.#token,
+      );
     this.#resampler = undefined;
   }
 

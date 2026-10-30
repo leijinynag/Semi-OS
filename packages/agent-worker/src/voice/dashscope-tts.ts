@@ -48,22 +48,14 @@ export class DashScopeTtsProvider implements TtsProvider {
   readonly #options: Required<
     Pick<
       DashScopeTtsOptions,
-      | "apiKey"
-      | "websocketUrl"
-      | "model"
-      | "voice"
-      | "timeoutMs"
-      | "createWebSocket"
-      | "format"
+      "apiKey" | "websocketUrl" | "model" | "voice" | "timeoutMs" | "createWebSocket" | "format"
     >
   >;
 
   constructor(options: DashScopeTtsOptions) {
     this.#options = {
       apiKey: options.apiKey,
-      websocketUrl:
-        options.websocketUrl ??
-        "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
+      websocketUrl: options.websocketUrl ?? "wss://maas.qianwenaiapi.com/api-ws/v1/inference",
       model: options.model ?? "cosyvoice-v3.5-plus",
       voice: options.voice,
       timeoutMs: options.timeoutMs ?? 30_000,
@@ -79,7 +71,11 @@ export class DashScopeTtsProvider implements TtsProvider {
   prepare(signal: AbortSignal): void {
     if (signal.aborted || this.#prepared) return;
     let connection: TtsConnection;
-    try { connection = this.#connect(); } catch { return; }
+    try {
+      connection = this.#connect();
+    } catch {
+      return;
+    }
     this.#prepared = connection;
     const discard = () => {
       if (this.#prepared !== connection) return;
@@ -109,8 +105,11 @@ export class DashScopeTtsProvider implements TtsProvider {
       if (isBinary) {
         queue.push({ kind: "message", binary: rawDataToBytes(data) });
       } else {
-        try { queue.push({ kind: "message", value: parseDashScopeMessage(data) }); }
-        catch { queue.push({ kind: "error" }); }
+        try {
+          queue.push({ kind: "message", value: parseDashScopeMessage(data) });
+        } catch {
+          queue.push({ kind: "error" });
+        }
       }
     });
     socket.on("error", () => queue.push({ kind: "error" }));
@@ -238,16 +237,37 @@ export class DashScopeTtsProvider implements TtsProvider {
           const value = event.value;
           if (isRecord(value) && isRecord(value.payload) && isRecord(value.payload.output)) {
             const output = value.payload.output;
-            if (["sentence-begin", "sentence-synthesis", "sentence-end"].includes(String(output.type)) && isRecord(output.sentence) && Array.isArray(output.sentence.words)) {
+            if (
+              ["sentence-begin", "sentence-synthesis", "sentence-end"].includes(
+                String(output.type),
+              ) &&
+              isRecord(output.sentence) &&
+              Array.isArray(output.sentence.words)
+            ) {
               const words = output.sentence.words;
-              if (words.length > 0 && words.length <= 4096 && words.every((word) =>
-                isRecord(word) && typeof word.text === "string" &&
-                Number.isSafeInteger(word.begin_time) && Number.isSafeInteger(word.end_time) &&
-                Number(word.begin_time) >= 0 && Number(word.end_time) >= Number(word.begin_time) &&
-                Number(word.end_time) <= 600_000)) {
-                yield { kind: "tts.timestamps", sentenceId, words: words.map((word) => ({
-                  text: String(word.text), startMs: Number(word.begin_time), endMs: Number(word.end_time),
-                })) };
+              if (
+                words.length > 0 &&
+                words.length <= 4096 &&
+                words.every(
+                  (word) =>
+                    isRecord(word) &&
+                    typeof word.text === "string" &&
+                    Number.isSafeInteger(word.begin_time) &&
+                    Number.isSafeInteger(word.end_time) &&
+                    Number(word.begin_time) >= 0 &&
+                    Number(word.end_time) >= Number(word.begin_time) &&
+                    Number(word.end_time) <= 600_000,
+                )
+              ) {
+                yield {
+                  kind: "tts.timestamps",
+                  sentenceId,
+                  words: words.map((word) => ({
+                    text: String(word.text),
+                    startMs: Number(word.begin_time),
+                    endMs: Number(word.end_time),
+                  })),
+                };
               }
             }
           }
@@ -266,10 +286,7 @@ export class DashScopeTtsProvider implements TtsProvider {
           kind: "tts.error",
           sentenceId,
           code: "cloud_tts_failed",
-          message:
-            error instanceof Error
-              ? error.message
-              : "DashScope TTS request failed",
+          message: error instanceof Error ? error.message : "DashScope TTS request failed",
           retryable: true,
         };
       }

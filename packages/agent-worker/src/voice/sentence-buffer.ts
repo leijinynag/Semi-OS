@@ -54,15 +54,25 @@ export class SentenceBuffer {
  */
 function chineseClauseEnd(text: string): number | undefined {
   const closers: string[] = [];
-  const pairs: Record<string, string> = { "“": "”", "‘": "’", "（": "）", "(": ")", "「": "」", "『": "』", '"': '"' };
+  const pairs: Record<string, string> = {
+    "“": "”",
+    "‘": "’",
+    "（": "）",
+    "(": ")",
+    "「": "」",
+    "『": "』",
+    '"': '"',
+  };
   let han = 0;
   for (let index = 0; index < text.length; index += 1) {
     const character = text[index]!;
-    if (/[`<>\[\]{}]/u.test(character) || /^(?:https?:\/\/|www\.)/iu.test(text.slice(index))) return undefined;
+    if (/[`<>\[\]{}]/u.test(character) || /^(?:https?:\/\/|www\.)/iu.test(text.slice(index)))
+      return undefined;
     if (/\p{Script=Han}/u.test(character)) han += 1;
     if (closers.at(-1) === character) closers.pop();
     else if (pairs[character]) closers.push(pairs[character]!);
-    else if (closers.length === 0 && han >= MIN_CLAUSE_HAN && /[，；]/u.test(character)) return index + 1;
+    else if (closers.length === 0 && han >= MIN_CLAUSE_HAN && /[，；]/u.test(character))
+      return index + 1;
   }
   return undefined;
 }

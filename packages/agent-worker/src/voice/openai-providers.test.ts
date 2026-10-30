@@ -91,11 +91,7 @@ test("cancels TTS through the caller AbortSignal", async () => {
     apiKey: "test",
     fetch: async (_input, init) =>
       new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => reject(init.signal?.reason),
-          { once: true },
-        );
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
         controller.abort(new Error("user interrupted"));
       }),
   });
@@ -108,7 +104,5 @@ test("cancels TTS through the caller AbortSignal", async () => {
     events.push(event);
   }
 
-  assert.deepEqual(events, [
-    { kind: "tts.cancelled", sentenceId: "sentence_cancelled" },
-  ]);
+  assert.deepEqual(events, [{ kind: "tts.cancelled", sentenceId: "sentence_cancelled" }]);
 });

@@ -16,7 +16,8 @@ test("44.1 kHz resampling is invariant to chunk boundaries and flushes the tail"
   const expected = [...whole.push(samples), ...whole.flush()];
   const streaming = new StreamingResampler(44_100, 16_000);
   const actual: number[] = [];
-  for (let index = 0; index < samples.length; index += 128) actual.push(...streaming.push(samples.subarray(index, index + 128)));
+  for (let index = 0; index < samples.length; index += 128)
+    actual.push(...streaming.push(samples.subarray(index, index + 128)));
   actual.push(...streaming.flush());
   assert.deepEqual(actual, expected);
   assert.equal(actual.length, 1601);
@@ -36,26 +37,40 @@ test("preloads worklet once, preserves short recordings and reuses context acros
   let modules = 0;
   let closes = 0;
   let processor!: {
-    port: { onmessage?: (event: { data: unknown }) => void; postMessage(value: { kind: string; token: number }): void };
+    port: {
+      onmessage?: (event: { data: unknown }) => void;
+      postMessage(value: { kind: string; token: number }): void;
+    };
   };
   class Context {
     sampleRate = 48_000;
     state = "running";
     destination = {};
-    audioWorklet = { async addModule() { modules++; } };
+    audioWorklet = {
+      async addModule() {
+        modules++;
+      },
+    };
     async resume() {}
-    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
-    async close() { closes++; }
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
+    async close() {
+      closes++;
+    }
   }
   class Processor {
     port = {
       onmessage: undefined as ((event: { data: unknown }) => void) | undefined,
       postMessage: (value: { kind: string; token: number }) => {
-        if (value.kind === "end") this.port.onmessage?.({ data: { kind: "flushed", token: value.token } });
+        if (value.kind === "end")
+          this.port.onmessage?.({ data: { kind: "flushed", token: value.token } });
       },
       close() {},
     };
-    constructor() { processor = this; }
+    constructor() {
+      processor = this;
+    }
     connect() {}
     disconnect() {}
   }
@@ -77,16 +92,24 @@ test("preloads worklet once, preserves short recordings and reuses context acros
   const stream = {} as MediaStream;
   for (let turn = 0; turn < 2; turn++) {
     await recorder.start(stream, turn + 1);
-    processor.port.onmessage?.({ data: { kind: "samples", token: turn + 1, samples: new Float32Array(480).fill(0.5) } });
+    processor.port.onmessage?.({
+      data: { kind: "samples", token: turn + 1, samples: new Float32Array(480).fill(0.5) },
+    });
     await recorder.stop();
   }
   assert.equal(modules, 1);
   assert.equal(closes, 0);
-  assert.deepEqual(chunks.map((chunk) => chunk.length), [320, 320]);
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.length),
+    [320, 320],
+  );
   await recorder.dispose();
   assert.equal(closes, 1);
   const shared = new Context();
-  const borrower = new PcmRecorder({ audioContext: shared as unknown as AudioContext, onChunk() {} });
+  const borrower = new PcmRecorder({
+    audioContext: shared as unknown as AudioContext,
+    onChunk() {},
+  });
   await borrower.prepare();
   await borrower.start({} as MediaStream);
   await borrower.stop();
@@ -103,7 +126,9 @@ test("late worklet messages after a flush timeout cannot enter the next recordin
       postMessage() {},
       close() {},
     };
-    constructor() { processors.push(this); }
+    constructor() {
+      processors.push(this);
+    }
     connect() {}
     disconnect() {}
   }
@@ -114,12 +139,20 @@ test("late worklet messages after a flush timeout cannot enter the next recordin
     else Reflect.deleteProperty(globalThis, "AudioWorkletNode");
   });
   const context = {
-    sampleRate: 48_000, state: "running", destination: {},
-    audioWorklet: { async addModule() {} }, async resume() {},
-    createMediaStreamSource() { return { connect() {}, disconnect() {} }; },
+    sampleRate: 48_000,
+    state: "running",
+    destination: {},
+    audioWorklet: { async addModule() {} },
+    async resume() {},
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    },
   } as unknown as AudioContext;
   const chunks: Uint8Array[] = [];
-  const recorder = new PcmRecorder({ audioContext: context, onChunk: (chunk) => chunks.push(chunk) });
+  const recorder = new PcmRecorder({
+    audioContext: context,
+    onChunk: (chunk) => chunks.push(chunk),
+  });
   const stream = {} as MediaStream;
   await recorder.start(stream, 1);
   const staleHandler = processors[0]!.port.onmessage!;
@@ -131,7 +164,9 @@ test("late worklet messages after a flush timeout cannot enter the next recordin
   staleHandler({ data: { kind: "samples", token: 1, samples: new Float32Array(4800).fill(0.5) } });
   assert.equal(chunks.length, 0, "expired processor must not feed the new resampler");
   let stopped = false;
-  const nextStop = recorder.stop().then(() => { stopped = true; });
+  const nextStop = recorder.stop().then(() => {
+    stopped = true;
+  });
   staleHandler({ data: { kind: "flushed", token: 1 } });
   await Promise.resolve();
   await Promise.resolve();

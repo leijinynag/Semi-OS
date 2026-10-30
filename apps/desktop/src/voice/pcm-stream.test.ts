@@ -23,16 +23,25 @@ class AudioContextFixture {
     stop(): void;
   }> = [];
 
-  constructor() { AudioContextFixture.instances.push(this); }
-  async resume() { this.state = "running"; this.resumed++; }
-  async close() { this.closed = true; }
+  constructor() {
+    AudioContextFixture.instances.push(this);
+  }
+  async resume() {
+    this.state = "running";
+    this.resumed++;
+  }
+  async close() {
+    this.closed = true;
+  }
 
   createAnalyser() {
     return {
       fftSize: 256,
       connect() {},
       disconnect() {},
-      getFloatTimeDomainData(samples: Float32Array) { samples.fill(0.1); },
+      getFloatTimeDomainData(samples: Float32Array) {
+        samples.fill(0.1);
+      },
     };
   }
 
@@ -50,8 +59,12 @@ class AudioContextFixture {
       stopped: false,
       connect() {},
       disconnect() {},
-      start(at: number) { this.startAt = at; },
-      stop() { this.stopped = true; },
+      start(at: number) {
+        this.startAt = at;
+      },
+      stop() {
+        this.stopped = true;
+      },
     };
     this.sources.push(source);
     return source;
@@ -120,7 +133,9 @@ test("PCM schedules immediately and keeps contiguous chunks without cross-fade",
   const audio = new AudioContextFixture();
   const events: PcmPlayback[] = [];
   const level = { current: 0 };
-  const stream = new PcmStream(audio as unknown as AudioContext, level, (event) => events.push(event));
+  const stream = new PcmStream(audio as unknown as AudioContext, level, (event) =>
+    events.push(event),
+  );
   try {
     stream.append(new Uint8Array(4410)); // 100 ms，未 complete 也必须排程。
     stream.append(new Uint8Array(4410));
@@ -143,7 +158,10 @@ test("PCM schedules immediately and keeps contiguous chunks without cross-fade",
     stream.append(new Uint8Array(4410));
     assert.equal(audio.sources[2]!.startAt, 0.32);
     stream.complete();
-    assert.equal(events.some((event) => event.state === "ended"), false);
+    assert.equal(
+      events.some((event) => event.state === "ended"),
+      false,
+    );
     audio.currentTime = 0.37;
     context.mock.timers.tick(20);
     assert.equal(events.at(-1)!.positionMs, 250);
@@ -151,14 +169,18 @@ test("PCM schedules immediately and keeps contiguous chunks without cross-fade",
     context.mock.timers.tick(20);
     assert.equal(events.at(-1)!.state, "ended");
     assert.equal(events.at(-1)!.positionMs, 300);
-  } finally { stream.stop(); }
+  } finally {
+    stream.stop();
+  }
 });
 
 test("PCM preserves split samples and stops scheduled audio on interruption", (context) => {
   context.mock.timers.enable({ apis: ["setInterval"] });
   const audio = new AudioContextFixture();
   const events: PcmPlayback[] = [];
-  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) => events.push(event));
+  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) =>
+    events.push(event),
+  );
   try {
     stream.append(Uint8Array.of(0xff));
     assert.equal(audio.sources.length, 0);
@@ -171,19 +193,29 @@ test("PCM preserves split samples and stops scheduled audio on interruption", (c
     audio.currentTime = 1;
     context.mock.timers.tick(20);
     assert.equal(audio.sources.length, 1);
-    assert.equal(events.some((event) => event.state === "ended"), false);
-  } finally { stream.stop(); }
+    assert.equal(
+      events.some((event) => event.state === "ended"),
+      false,
+    );
+  } finally {
+    stream.stop();
+  }
 });
 
 test("PCM input with an incomplete sample fails instead of claiming playback ended", (context) => {
   context.mock.timers.enable({ apis: ["setInterval"] });
   const audio = new AudioContextFixture();
   const events: PcmPlayback[] = [];
-  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) => events.push(event));
+  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) =>
+    events.push(event),
+  );
   stream.append(Uint8Array.of(1));
   stream.complete();
   assert.equal(events.at(-1)!.state, "failed");
-  assert.equal(events.some((event) => event.state === "ended"), false);
+  assert.equal(
+    events.some((event) => event.state === "ended"),
+    false,
+  );
 });
 
 test("a running context with a frozen clock fails instead of buffering forever", (t) => {
@@ -192,23 +224,32 @@ test("a running context with a frozen clock fails instead of buffering forever",
   t.mock.method(performance, "now", () => now);
   const audio = new AudioContextFixture();
   const events: PcmPlayback[] = [];
-  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) => events.push(event));
+  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) =>
+    events.push(event),
+  );
   try {
     stream.append(new Uint8Array(4410));
     stream.complete();
     now = 3001;
     t.mock.timers.tick(20);
     assert.equal(events.at(-1)?.state, "failed");
-    assert.equal(events.some((event) => event.state === "ended"), false);
+    assert.equal(
+      events.some((event) => event.state === "ended"),
+      false,
+    );
     assert.equal(audio.sources[0]!.stopped, true);
-  } finally { stream.stop(); }
+  } finally {
+    stream.stop();
+  }
 });
 
 test("PCM pauses text progress with the audio context", (context) => {
   context.mock.timers.enable({ apis: ["setInterval"] });
   const audio = new AudioContextFixture();
   const events: PcmPlayback[] = [];
-  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) => events.push(event));
+  const stream = new PcmStream(audio as unknown as AudioContext, { current: 0 }, (event) =>
+    events.push(event),
+  );
   try {
     stream.append(new Uint8Array(4410));
     audio.currentTime = 0.07;
@@ -224,7 +265,9 @@ test("PCM pauses text progress with the audio context", (context) => {
     context.mock.timers.tick(20);
     assert.equal(events.at(-1)!.state, "playing");
     assert.equal(events.at(-1)!.positionMs, 70);
-  } finally { stream.stop(); }
+  } finally {
+    stream.stop();
+  }
 });
 
 test("VoicePlayer reuses one context and queues PCM until actual playback ends", async (context) => {
@@ -250,7 +293,10 @@ test("VoicePlayer reuses one context and queues PCM until actual playback ends",
     assert.deepEqual(events.at(-1), { sentenceId: "first", state: "playing", positionMs: 50 });
     audio.currentTime = 0.13;
     context.mock.timers.tick(20);
-    assert.equal(events.some((event) => event.sentenceId === "first" && event.state === "ended"), true);
+    assert.equal(
+      events.some((event) => event.sentenceId === "first" && event.state === "ended"),
+      true,
+    );
     assert.equal(audio.sources.length, 2);
     assert.ok(Math.abs(audio.sources[1]!.startAt! - 0.15) < 1e-8);
     audio.currentTime = 0.2;
@@ -263,7 +309,10 @@ test("VoicePlayer reuses one context and queues PCM until actual playback ends",
     audio.currentTime = 1;
     context.mock.timers.tick(100);
     assert.equal(audio.sources.length, 2, "interruption cannot activate queued sentences");
-    assert.equal(events.some((event) => event.sentenceId === "second" && event.state === "ended"), false);
+    assert.equal(
+      events.some((event) => event.sentenceId === "second" && event.state === "ended"),
+      false,
+    );
   } finally {
     player.dispose();
     Object.assign(globalThis, { AudioContext: originalContext });
