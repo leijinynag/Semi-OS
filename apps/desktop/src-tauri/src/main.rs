@@ -335,14 +335,6 @@ fn with_client_memory<T>(
     operation(storage).map_err(|error| memory_controls::client_memory_message(&error).to_owned())
 }
 
-fn unix_time_ms() -> Result<i64, String> {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "本机时间无效")?
-        .as_millis();
-    i64::try_from(millis).map_err(|_| "本机时间无效".to_owned())
-}
-
 #[tauri::command]
 fn list_client_memory(
     window: tauri::WebviewWindow,
@@ -353,6 +345,7 @@ fn list_client_memory(
     })
 }
 
+/// 沿用本模块已有的 `unix_time_ms`。同名再定义会让桌面其余时间戳调用点无法编译。
 #[tauri::command]
 fn create_user_preference(
     window: tauri::WebviewWindow,
@@ -360,7 +353,7 @@ fn create_user_preference(
     key: String,
     value: String,
 ) -> Result<ClientMemoryPage, String> {
-    let now = unix_time_ms()?;
+    let now = unix_time_ms();
     with_client_memory(&window, &state, move |storage| {
         memory_controls::create_user_preference(storage, &UserPreferenceInput { key, value }, now)
     })
@@ -374,7 +367,7 @@ fn revise_user_preference(
     key: String,
     value: String,
 ) -> Result<ClientMemoryPage, String> {
-    let now = unix_time_ms()?;
+    let now = unix_time_ms();
     with_client_memory(&window, &state, move |storage| {
         memory_controls::revise_user_preference(
             storage,
