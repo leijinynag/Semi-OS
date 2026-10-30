@@ -13,9 +13,10 @@
 //! 用户人格，都拒绝 Agent 改写；Agent 只能改写自己创建的记忆。修正写成新记录
 //! 并建立关系，不能覆盖用户原文，也不能原地改掉旧的人格版本。
 //!
-//! 人格不进入 `memories`。自动写入、范围检索和渐进包在 `memory_access`，
-//! 仍必须经过这里的作者门禁。提示词顺序保持为 Host 策略、紧凑人格、L1、L0，
-//! 再按阶段加载 L2–L5；本文件不组装完整提示词。
+//! 人格不进入 `memories`。自动写入、范围检索、渐进包和会话压缩在 `memory_access`，
+//! 仍必须经过这里的作者门禁。压缩摘要只能经 `create_memory` 落到 L0，不能借
+//! `write_memory` 晋升成长期记忆，也不能改写用户行。提示词顺序保持为 Host 策略、
+//! 紧凑人格、L1、L0，再按阶段加载 L2–L5；本文件不组装完整提示词。
 
 use crate::{Storage, StorageError, StorageResult};
 use rusqlite::{params, OptionalExtension, Row};
@@ -25,6 +26,9 @@ use std::collections::HashSet;
 const MAX_ID_CHARS: usize = 128;
 const MAX_TEXT_CHARS: usize = 2_000;
 const MAX_EXCERPT_CHARS: usize = 500;
+/// 已完成动作和当前目标会把多条短句拼进一个字段。上限高于单句，但仍然拒绝
+/// 把整段会话塞进摘要；超限必须失败，不能截掉回执编号。
+const MAX_COMPACTION_CHARS: usize = MAX_TEXT_CHARS * 4;
 
 const MEMORY_COLUMNS: &str = "memory_id, layer, record_kind, content_json, author_kind, mutability, user_id, workspace_id, application_id, task_id, skill_id, created_at_ms, updated_at_ms";
 const PERSONALITY_COLUMNS: &str = "personality_id, version, author_kind, mutability, identity, tone, verbosity, language, initiative, behavior_boundary, tool_policy, voice, evolution_note, active, created_at_ms";
@@ -300,6 +304,17 @@ pub enum MemoryBody {
         decisions: String,
         pending: String,
         unknown_outcomes: String,
+        /// 已完成动作及回执编号。P5.1 的旧行没有该字段，读出来是空字符串。
+        /// 空字符串只表示“这份历史摘要没有该槽位”，压缩路径不能靠空字符串交差。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        completed_actions: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        next_step: String,
+        /// 工作区、应用和目标的正文副本。范围列负责过滤，这里保证摘要自身留得住目标。
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        active_context: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        latest_instruction: String,
     },
     #[serde(rename_all = "camelCase")]
     SafetyRule { statement: String },
@@ -1281,6 +1296,16 @@ fn clean_text(value: &str, field: &str, max_chars: usize) -> StorageResult<Strin
     Ok(value.to_owned())
 }
 
+/// 压缩摘要的新增槽位。旧调用可以不填；真正的压缩路径会在写入前拒绝空槽位。
+fn clean_kept(value: &str, field: &str, max_chars: usize) -> StorageResult<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        Ok(String::new())
+    } else {
+        clean_text(value, field, max_chars)
+    }
+}
+
 fn clean_optional(
     value: &Option<String>,
     field: &str,
@@ -1521,12 +1546,20 @@ fn normalize_body(body: &MemoryBody) -> StorageResult<MemoryBody> {
             decisions,
             pending,
             unknown_outcomes,
+            completed_actions,
+            next_step,
+            active_context,
+            latest_instruction,
         } => MemoryBody::CompactionSummary {
             objective: clean_text(objective, "压缩目标", MAX_TEXT_CHARS)?,
             constraints: clean_text(constraints, "压缩约束", MAX_TEXT_CHARS)?,
             decisions: clean_text(decisions, "压缩决定", MAX_TEXT_CHARS)?,
             pending: clean_text(pending, "压缩待办", MAX_TEXT_CHARS)?,
             unknown_outcomes: clean_text(unknown_outcomes, "未核对结果", MAX_TEXT_CHARS)?,
+            completed_actions: clean_kept(completed_actions, "已完成动作", MAX_COMPACTION_CHARS)?,
+            next_step: clean_kept(next_step, "压缩后的下一步", MAX_TEXT_CHARS)?,
+            active_context: clean_kept(active_context, "当前目标", MAX_COMPACTION_CHARS)?,
+            latest_instruction: clean_kept(latest_instruction, "最新指令", MAX_TEXT_CHARS)?,
         },
         MemoryBody::SafetyRule { statement } => MemoryBody::SafetyRule {
             statement: clean_text(statement, "安全规则", MAX_TEXT_CHARS)?,
@@ -1615,6 +1648,10 @@ mod tests {
                 decisions: "压缩只属于 L0".into(),
                 pending: "继续当前任务".into(),
                 unknown_outcomes: "没有未核对副作用".into(),
+                completed_actions: "核对层级（回执 receipt_schema）".into(),
+                next_step: "保持摘要留在 L0".into(),
+                active_context: "工作区：repo；应用：TextEdit；目标：记忆 Schema".into(),
+                latest_instruction: "不要丢掉未核对结果".into(),
             },
             MemoryRecordKind::SafetyRule => MemoryBody::SafetyRule {
                 statement: "外部副作用默认需要确认".into(),
@@ -1768,6 +1805,44 @@ mod tests {
         assert_eq!(json["layer"], "L0");
         assert_eq!(json["recordKind"], "compaction_summary");
         assert_eq!(json["body"]["kind"], "compaction_summary");
+        match compaction.body {
+            MemoryBody::CompactionSummary {
+                completed_actions,
+                latest_instruction,
+                unknown_outcomes,
+                ..
+            } => {
+                assert!(completed_actions.contains("receipt_schema"));
+                assert_eq!(latest_instruction, "不要丢掉未核对结果");
+                assert_eq!(unknown_outcomes, "没有未核对副作用");
+            }
+            other => panic!("compaction body changed shape: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn older_compaction_json_still_decodes_without_new_slots() {
+        let body: MemoryBody = serde_json::from_str(
+            r#"{"kind":"compaction_summary","objective":"目标","constraints":"约束","decisions":"决定","pending":"待办","unknownOutcomes":"未知"}"#,
+        )
+        .expect("P5.1 compaction JSON should remain readable");
+        match body {
+            MemoryBody::CompactionSummary {
+                objective,
+                completed_actions,
+                next_step,
+                active_context,
+                latest_instruction,
+                ..
+            } => {
+                assert_eq!(objective, "目标");
+                assert!(completed_actions.is_empty());
+                assert!(next_step.is_empty());
+                assert!(active_context.is_empty());
+                assert!(latest_instruction.is_empty());
+            }
+            other => panic!("expected compaction summary, got {other:?}"),
+        }
     }
 
     #[test]
