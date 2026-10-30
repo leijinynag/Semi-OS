@@ -1,6 +1,6 @@
 # Semi-OS MVP 开发任务清单
 
-> 当前状态：4A 已提交并推送；4B 及后台托管优化已实现，真实 Pi 自主合成闭环通过；完整原生与故障联调待验收。所有 4B 改动保留未提交。
+> 当前状态：4A、4B 及后台托管优化已提交；语音优化、Ego Lite 续接和 4C 桌面能力已获用户批准提交，提交记录见下文。完整原生与故障联调待验收，不因提交而视为完成。
 >
 > 使用规则：完成一个功能切片并验证后更新本文件，保留未提交改动供 review；
 > 只有用户明确批准后才创建提交或 push。
@@ -14,6 +14,21 @@
 - 每个完成项都必须记录实现证据、验证命令和 commit hash。
 - 每个 commit 点应足够小，能够独立审查、测试和回滚。
 - 同一阶段内，只有依赖已经满足的任务才能并行开发。
+
+## 本次提交记录（2026-10-30）
+
+用户已明确批准提交和 push。下文历史记录中的“未提交 / 等待 review”
+描述保留为当时状态；本次纳入的改动以以下提交记录为准：
+
+- `40ab880`：桌面与浏览器接管协议、CSP 安全的生成校验器及可空响应修复。
+- `bfe3e32`：语音采集、播放同步、云端适配器与延迟诊断优化。
+- `94f9c01`：Ego Lite 默认后端及同 Space 续接、原生桌面与飞书工具、
+  客户端控制、签名配置、Node 查找和辅助功能观察恢复。
+- 验证：本次提交前重新运行 `pnpm check`，格式、协议生成、类型检查、
+  Lint、Rust 检查、测试、构建与 `git diff --check` 全部通过。
+  121 个变更文件的敏感模式扫描未发现凭证或误入的生成产物。
+- 已有 `14f5e51` 包含 4B 及后台托管相关改动；原生业务动作、真人语音质量、
+  视觉回退、独立 Worker 打包与故障联调仍按各节保留未完成状态。
 
 ## 完成定义
 
@@ -915,26 +930,64 @@
 
 依赖：P2.4 至 P2.12、P3.7 至 P3.10。
 
-- [ ] **P4C.1 添加 macOS 权限能力检查**
-  - 检测麦克风、Accessibility 和 Screen Recording 权限；权限不足时只降级相关能力，不让应用崩溃。
+- [-] **P4C.1 添加 macOS 权限能力检查**
+  - 已实现 `crates/desktop-macos/src/native.rs`、Tauri 权限状态/系统设置入口和
+    `DesktopPermissions.tsx`。
+  - 新增程序化授权入口：`PermissionKind` 闭集（accessibility / inputMonitoring /
+    screenRecording / microphone）与 `request_permission`，仅由客户端「请求授权」
+    按钮触发；`MacDesktop::permissions` 不请求授权，启动与轮询路径不会弹窗。
+  - 授权成功会作废当前桌面租约（`DesktopService::apply_permission_change`），
+    避免授权前的观察和批准被带进新权限继续派发；`crates/host/src/desktop_tests.rs`
+    新增 4 项覆盖（首次读取不误废租约、权限变化作废旧批准、授权成功释放租约、
+    未决请求不影响现有任务）。
+  - 验收通道：`tauri.conf.json` 启用 bundle，当前使用
+    `signingIdentity: "Semi-OS Local Signing"` 固定证书，指定要求包含
+    `Identifier=dev.semios.desktop` 与稳定 certificate root，Info.plist 已密封。
+    不再使用历史 ad-hoc 配置作为当前验收依据。验收产物为工作区共享
+    `target` 下的 `target/debug/bundle/macos/Semi-OS.app`。
+  - 验证：`cargo test -p semi-os-desktop-macos`（4 passed，含一个只读回选项字典、
+    不调用授权 API 的 FFI 测试）、
+    `cargo test -p semi-os-host`（65 passed）、
+    `node --experimental-strip-types --test src/ui/desktop-permission-request.test.ts`
+    （2 passed）、`pnpm check`（exit 0）。已实际执行
+    `pnpm --filter @semi-os/desktop exec tauri build --debug` 并在 `open` 后确认
+    应用从 bundle 启动、退出正常。真实 macOS 权限状态、系统弹窗和重启后权限
+    保持仍需按 `docs/4C-VALIDATION.md` 的 Native Acceptance Procedure 人工验收，
+    暂不标记完成。
   - Commit 点：`feat(macos): add permission capability checks`
-- [ ] **P4C.2 添加 Accessibility 观察**
-  - 观察前台应用、窗口身份和语义控件，并附带观察版本。
+- [-] **P4C.2 添加 Accessibility 观察**
+  - 已实现版本化窗口/元素引用、敏感字段脱敏、截断标记和过期/歧义校验；
+    `crates/host/src/desktop_tests.rs` 覆盖合成 Accessibility Fixture。真实
+    TextEdit 语义树读取仍需人工验收，暂不标记完成。
   - Commit 点：`feat(desktop): add accessibility observation`
-- [ ] **P4C.3 添加原子桌面动作**
-  - 实现点击、输入、按键、滚动、聚焦窗口和启动应用，并遵循重新观察和 Host 验证。
+- [-] **P4C.3 添加原子桌面动作**
+  - 已注册七个工具并接入 Rust Host 租约、真人接管、单动作执行、读回验证和
+    `unknown` 保护；Host Fixture 测试通过。真实 TextEdit 中英文输入、窗口聚焦
+    和用户接管仍需人工验收，暂不标记完成。
   - Commit 点：`feat(desktop): add atomic desktop actions`
-- [ ] **P4C.4 添加受约束的视觉回退**
-  - 只有在语义信息不足时使用截图和受限的低层输入；拒绝过期或歧义目标。
+- [-] **P4C.4 添加受约束的视觉回退**
+  - 协议、能力状态和工具边界已接入；当前实现明确返回 `unavailable`，没有
+    虚假宣称视觉模型可用。需要真实图片调用、目标绑定和敏感界面拒绝证据后
+    才能标记完成。
   - Commit 点：`feat(desktop): add visual fallback`
-- [ ] **P4C.5 添加 Lark CLI 能力适配器**
-  - 检测已安装 CLI，只通过注册表暴露稳定命令，并沿用统一工具和回执契约。
+- [-] **P4C.5 添加 Lark CLI 能力适配器**
+  - 已实现 CLI 能力检测、文档搜索/读取、会话查询、结构化消息发送、幂等键
+    和超时对账；`lark-service.test.ts` 9 项通过。真实 CLI 认证、测试文档和
+    测试会话仍需人工验收。
   - Commit 点：`feat(lark): add cli capability adapter`
-- [ ] **P4C.6 添加通用应用工作流**
-  - 启动或聚焦应用，观察状态，执行一个操作，再次观察并汇报验证结果。
+- [-] **P4C.6 添加通用应用工作流**
+  - 已接入 `desktop.request/result`、客户端权限/桌面状态展示以及观察→单动作→
+    读回验证链路。需要真实 Tauri + TextEdit 闭环后才能标记完成。
   - Commit 点：`feat(desktop): add generic application workflow`
-- [ ] **P4C.7 添加桌面恢复用例**
-  - 覆盖权限拒绝、目标过期、应用关闭、Worker 重启和动作结果不确定等情况。
+- [-] **P4C.7 添加桌面恢复用例**
+  - 已覆盖权限拒绝、人工接管、过期/重复目标、租约代次变化、动作后断连、
+    重启转 `unknown`、重复 request/attempt ID、Worker/Lark 发送未知结果及
+    `userId` 超时不得使用空 chat ID 对账。`cargo test -p semi-os-storage
+--test recovery` 12 项、Agent Worker 124 项通过；真实应用关闭、断网和
+    原生权限等待恢复仍需人工验收。
+  - 全仓 `pnpm check` 已通过，覆盖协议生成校验、格式、类型、ESLint、
+    Rust Clippy、全量 JS/Rust 测试、前端/Rust 构建及 `git diff --check`。
+    自动门禁不替代 `docs/4C-VALIDATION.md` 列出的真人原生验收。
   - Commit 点：`test(desktop): verify native workflow recovery`
 
 ## 阶段 5：记忆、人格与用户偏好
@@ -1205,11 +1258,165 @@
 - [ ] 重启原生客户端，真人验证新一轮调研不逐项播报、过程实时展示、
       Bash 审批续接以及窗口重新打开后执行记录恢复。
 
-## MVP 之后暂缓
+## Ego Lite 默认浏览器适配（等待 review，未提交）
+
+- [x] **P4A.11 提取统一浏览器后端边界**
+  - `BrowserBackend` 与共享页面观察采集器隔离 Ego/Playwright 实现；
+    四个既有浏览器工具、风险策略、Host 审批和来源保存不变。
+  - 验证：Agent Worker 类型检查通过，既有 Playwright 浏览器与调研工作流测试通过。
+- [x] **P4A.12 接入 Ego Lite TaskSpace**
+  - 新增 `EgoBrowserService` 和受控 `ego-browser nodejs` Runner。Ego 操作在
+    用户可见的 TaskSpace 中执行；同一 Space 串行化，引用绑定观察版本，
+    点击/输入后重新观察并校验输入读回。
+  - Ego CLI 取消、超时、控制权交还、过期引用和不确定 action receipt 都不
+    自动重试，也不换 Playwright 重放。
+  - 验证：真实本机 Ego Space fixture 完成 open、observe、fill、click、
+    extract 冒烟；Ego Runner UTF-8、取消测试通过。
+- [x] **P4A.13 自动选择与 Playwright 回退**
+  - Worker 默认通过 `AutomaticBrowserBackend` 选择：Ego Lite 应用与
+    `ego-browser` CLI 同时存在才选 Ego；Ego 未安装时使用原有 Playwright
+    专属 Profile；Ego 已安装但 CLI 缺失时明确报错，不静默回退。
+  - 测试：`browser-selector.test.ts` 覆盖三种选择规则；Worker 支持受控后端注入。
+  - 补充：首次并发浏览器调用共享后端初始化，Worker 提前释放时会清理迟到创建的后端；
+    后端动作失败不会跨驱动重放。
+- [x] **P4A.14 文档与边界说明**
+  - 同步 `AGENTS.md`、`docs/DESIGN.md`、`docs/DECISIONS.md`；
+    关键约束为“默认 Ego、仅未安装时回退、动作不跨后端重放”。
+- [ ] **P4A.15 原生客户端验收**
+  - 待在已安装 Ego Lite 的用户环境启动 Semi-OS，验证真实语音调研、
+    登录接管、来源持久化、确认流程和跨重启行为；完成后再提交本阶段。
+
+### Ego 人工接管与原任务续接（等待 review，未提交）
+
+- [x] **P4A.16 Worker 接管生命周期**
+  - 原工具挂起，票据绑定 session/task，继续只恢复原 Space；新轮次、
+    中断、删除会话和退出撤销旧等待及在途恢复。
+- - 验证：`browser-handoff.test.ts`、`worker-service.test.ts` 通过；同一
+    Pi/VoiceLoop 中恢复，未新建轮次或重放原动作。
+- [x] **P4A.17 客户端继续与显式认领**
+  - 结构化状态和快照；继续使用 takeover，失败后独立确认才 claim。
+  - 不由 WebView 传 Space ID，不将传输 ACK 当成 Pi 已执行。
+- - 验证：`BrowserHandoffPanel.tsx` 接入 `inspect/resume`，协议严格校验
+    resume 票据。
+- [x] **P4A.18 验证与文档**
+  - 覆盖恢复、过期引用、旧票据、重复继续、取消、限制未解除、
+    不确定动作不重试、Playwright 不误入 Space 恢复。
+  - 原生客户端真人登录流程仍需单独验收，不以 fake 测试代替。
+- - 验证：`browser-handoff.test.ts`、`ego-browser-service.test.ts`、
+    `packages/protocol` 测试通过；`pnpm check` 相关子检查通过。
+
+## 客户端白屏与协议校验修复（2026-10-25，等待 review，未提交）
+
+- [x] 定位桌面客户端白屏根因：`packages/protocol` 在运行期调用
+      `ajv.compile()`，它依赖 `new Function`，被桌面版 CSP
+      `script-src 'self'` 拒绝，模块初始化抛 `EvalError`；`pnpm dev` 不发送
+      CSP，因此开发模式看不到。修复方式是用 Ajv standalone 在生成阶段产出
+      普通函数模块（`packages/protocol/src/generated/validators.generated.ts`），
+      运行期不再需要 eval，CSP 保持不变。
+      Ajv 产物里的 `require("ajv/dist/runtime/*")` 由生成器改写成 ESM 静态
+      导入；共享 `$defs` 提取为独立 schema，避免每条消息内联一份（生成物
+      从 2.1 MB 降到 0.52 MB）。
+- [x] 回归门禁：`packages/protocol` 的测试在
+      `--disallow-code-generation-from-strings` 下运行，任何重新引入运行期
+      代码生成的做法都会直接失败。
+- [x] 修复 Rust message registry 对可空载荷的判定：`oneOf: [{type:"null"}]`
+      与 `type: ["object","null"]` 同等对待。此前
+      `browser.session.snapshot` 被当成必须为对象，Worker 合法返回 `null`
+      时被判非法载荷并进入重启循环（`worker.jsonl` 记录
+      `response message browser.session.snapshot has an invalid payload shape`）。
+- [x] 验证：`pnpm check` 全绿（protocol 8 / desktop-macos 4 / host 65 /
+      storage 32+12 / protocol bin 6）；打包后 `apps/desktop/dist` 内
+      `new Function` 计数为 0；`tauri build --debug` 产物启动后
+      `worker.jsonl` 不再新增协议错误。客户端渲染仍需真人目视确认。
+      Commit：未提交，未 push。
+
+## Worker 启动的 Node 解析（2026-10-25，等待 review，未提交）
+
+- [x] 定位「打包后很多功能不正常」的根因：由 launchd 启动的 `.app` 不继承
+      用户 shell 的 PATH（只有 `/usr/bin:/bin:/usr/sbin:/sbin`），Host 直接
+      spawn `node` 因此每次都失败并进入重启上限；`diagnostics/worker.jsonl`
+      记录 `worker_spawn` 的 `No such file or directory (os error 2)`，界面
+      表现为对话、语音、浏览器与桌面操控全部无反应。对照实验：同一 bundle
+      二进制在 PATH 含 `/opt/homebrew/bin` 时零错误，在 GUI 默认 PATH 下
+      4 次启动失败，证据确定。
+- [x] `apps/desktop/src-tauri/src/node_program.rs` 按
+      `SEMI_OS_NODE` → Homebrew 前缀 → nvm 版本目录（高到低）→
+      登录 shell `command -v node` → PATH 扫描解析 Node 绝对路径，
+      只用可执行文件命中，并配套 5 个单测。
+- [x] Worker 启动失败不再中断客户端启动：原因存入 `DesktopState.worker_error`，
+      由 `get_worker_status` 命令拉取、`host://worker-error` 事件补推，
+      客户端挂载时直接显示「Agent Worker 未启动」；
+      `RestartLimitReached` 也会通知，不再静默。
+- [x] 验证：`cargo test -p semi-os-desktop` 11 passed（新增 5），
+      `pnpm check` exit=0。真实验收需 `open` 打包客户端后确认
+      对话与语音可用。
+      Commit：未提交，未 push。
+
+## 麦克风授权与签名身份（2026-10-25，等待 review，未提交）
+
+- [x] 定位麦克风不可用的根因：Tauri 默认开启 hardened runtime
+      （`codesign` 的 `flags=0x10002(adhoc,runtime)`），TCC 在该模式下要求签名
+      携带 `com.apple.security.device.audio-input`，缺失时**不弹窗也不把应用
+      列进麦克风列表**，日志为 `requires entitlement
+com.apple.security.device.audio-input but it is missing` 与
+      `Policy disallows prompt`。
+- [x] 新增 `apps/desktop/src-tauri/entitlements.plist`（只声明该一项权限）并由
+      `tauri.conf.json` 的 `bundle.macOS.entitlements` 引用；不再同时开启
+      App Sandbox。
+- [x] 麦克风纳入可请求闭集：`PermissionKind::Microphone` +
+      `AVCaptureDevice.requestAccessForMediaType`（异步回调转为阻塞等待，
+      超时不视为已授权）。原设计认为麦克风只能由采集路径请求，但 TCC 只把
+      发起过请求的进程列为可授权项，导致系统设置里根本找不到应用。
+- [x] 验证：`codesign -d --entitlements` 含 `audio-input`，签名 flag 仍为
+      `0x10002(adhoc,runtime)`；`pnpm check` exit=0（desktop bin 11 /
+      desktop-macos 4 / host 65 / protocol 8 / storage 32+12 / node_contract 1）；
+      `tauri build --debug` exit=0，重新打开后 worker 无新增错误。
+- [x] 旧 ad-hoc 身份问题已切换为固定证书签名；当时的 cdhash 每次重建变化，
+      而 TCC 把授权绑定到授予时的代码要求，重建后旧记录不再匹配
+      （证据：TCC 日志 `Failed to match existing code requirement`；四轮构建的
+      cdhash 各不相同）。
+- [x] 新增 `scripts/setup-code-signing-cert.sh`：生成自签代码签名证书
+      （CA:false / digitalSignature / codeSigning EKU）并导入登录钥匙串。已在
+      临时钥匙串端到端验证（导入 → find-identity 列出 → codesign 签名成功）。
+      两个实测约束：`security import` 只接受老式 PKCS#12（RC2/3DES + SHA1
+      MAC），OpenSSL 3 默认格式报 “MAC verification failed”；证书未受信任
+      （CSSMERR_TP_NOT_TRUSTED）不影响签名，只需在钥匙串搜索列表内。
+      `tauri.conf.json` 的 `signingIdentity` 改为 `Semi-OS Local Signing`；
+      身份缺失时构建报 `Semi-OS Local Signing: no identity found`。
+- [x] 指定要求稳定性已验证：同一身份签两个不同二进制，DR 均为
+      `certificate root = H"8d08ab62..."`（无 cdhash）；ad-hoc 则为
+      `cdhash H"..." or cdhash H"..."`。根哈希跨重建不变。
+- [-] 当前真实 bundle 已验证 certificate root 固定，LaunchServices 只读
+  自检及再次重建后四项权限均已授权；完整动作仍待真人验收。不例行重置
+  TCC，只有确认旧记录不匹配且用户决定清理时才重置。步骤见
+  `docs/4C-VALIDATION.md` 的 Ad-hoc signing and TCC identity。
+
+## 辅助功能授权后的观察与恢复（2026-10-26，等待 review，未提交）
+
+- [x] 前台应用改用 NSWorkspace PID 创建应用级 AX 根，同应用主窗口回退；
+      错误按权限、无窗口、通信失败和前台变化分别反馈。`native.rs` 新增
+      AX 错误映射测试，不能把 `CannotComplete` 等同于授权拒绝或仅指超时。
+- [x] 输入监听显式恢复：重建前废弃旧租约/引用，不自动恢复暂停任务；
+      权限页自动刷新不触发重建，用户“重新检查”才触发。Host 新增三个
+      回归测试覆盖错误分型、监听恢复和暂停保持。
+- [x] 新增客户端“只读自检”及 bundle `--desktop-diagnostic` 入口；
+      不启动模型、录音或变更动作，不输出窗口正文。
+- [x] 两次重建后的 LaunchServices 只读观察通过：四项权限 granted、
+      监听健康、分别读取前台 Codex 11/12 个控件；固定证书指定要求已核对。
+- [x] `pnpm check` exit=0（desktop-macos 5 / Host 68 /
+      agent-worker 140 tests），最新 `tauri build --debug` exit=0，
+      `codesign --verify --deep --strict` 通过。验收记录见
+      `docs/4C-VALIDATION.md`。未提交或 push。
+- [ ] 真人验收 TextEdit 启动/输入/读回、人工接管和跨重建授权；
+      只读观察通过不代表以上业务动作已验收。
+- [ ] 发行打包：Worker 仍依赖本地源码、Node 与依赖，尚未成为独立资源包。
 
 - [ ] 唤醒词和自动检测说话结束。
 - [ ] 微信专用适配器和消息工作流。
 - [ ] 第三方 Skill/插件市场。
+
+## MVP 之后暂缓
+
 - [ ] MCP 生态集成。
 - [ ] Windows 和 Linux 原生自动化。
 - [ ] 远程执行和多设备控制。
