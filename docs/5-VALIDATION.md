@@ -170,6 +170,8 @@ P5.8 的客户端控制在 `crates/host/src/memory_controls.rs`，并由桌面�
 人格只以编号和版本展示，偏好正文不会写进人格定义。Agent 改用户行仍然被
 P5.2 的所有权门禁拒绝。
 
+实现提交为 `3acb61f`。
+
 P5.9 的可重复评估在 `crates/storage/tests/memory_acceptance.rs`。一次运行覆盖
 相关召回、无关排除、纠正新增行并链接、压缩后 L0 连续性，以及 Agent 不能修改
 用户记录。主观感觉不能代替这组断言。

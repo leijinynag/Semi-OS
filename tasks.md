@@ -1033,12 +1033,12 @@
   - 客户端可以创建、编辑、删除用户自己的偏好，并查看 Agent 与系统记忆。每条记录展示作者和可变更性。命令固定以用户身份执行，不能改 Agent 行。偏好写入不碰人格表，人格只以编号和版本出现在快照里。
   - 证据：`crates/host/src/memory_controls.rs`、`apps/desktop/src/ui/MemoryControls.tsx`；`cargo test --locked -p semi-os-host --lib memory_controls` 与 `node --experimental-strip-types --test apps/desktop/src/ui/memory-controls.test.ts` 通过。
   - 本项不代表阶段 5 完成；抽查演示仍未发生。
-  - Commit 点：`feat(client): add memory controls`
+  - Commit 点：`feat(client): add memory controls`（`3acb61f`）
 - [x] **P5.9 记忆验收评估**
   - `memory_acceptance` 一次运行覆盖相关召回、无关排除、纠正新增行并链接、压缩后 L0 连续性，以及 Agent 不能修改用户记录。主观感觉不能代替这组断言。
   - 证据：`crates/storage/tests/memory_acceptance.rs`；`cargo test --locked -p semi-os-storage --test memory_acceptance` 通过。
   - 本项不代表阶段 5 完成。
-  - Commit 点：`test(memory): verify useful recall`
+  - Commit 点：`test(memory): verify useful recall`（`3acb61f`）
 
 ## 阶段 6：统一交互与可观测性
 
