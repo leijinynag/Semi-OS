@@ -34,6 +34,10 @@ pub enum StorageError {
     InvalidEventStream { task_id: String, reason: String },
     #[error("invalid persisted enum {kind}: {value}")]
     InvalidEnum { kind: &'static str, value: String },
+    #[error("找不到记忆：{0}")]
+    MemoryNotFound(String),
+    #[error("记忆记录无效：{0}")]
+    InvalidMemory(String),
 }
 
 pub type StorageResult<T> = Result<T, StorageError>;

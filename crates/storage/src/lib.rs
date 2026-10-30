@@ -6,6 +6,7 @@
 mod desktop;
 mod error;
 mod execution;
+mod memory;
 mod migrations;
 mod models;
 mod outbound_rpc;
@@ -19,6 +20,11 @@ mod workflow_queries;
 pub use desktop::DesktopActionRecord;
 pub use error::{StorageError, StorageResult};
 pub use execution::{ExecutionProgress, ExecutionSnapshot};
+pub use memory::{
+    MemoryActor, MemoryAuthor, MemoryBody, MemoryDetail, MemoryLayer, MemoryLink, MemoryMutability,
+    MemoryQuery, MemoryRecord, MemoryRecordKind, MemoryRelation, MemoryScope, MemorySource,
+    MemorySourceKind, NewMemory, NewMemoryLink, NewMemorySource,
+};
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,
 };
