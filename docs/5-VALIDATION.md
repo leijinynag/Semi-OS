@@ -8,6 +8,7 @@
 PR3（P5.6、P5.7）均有产品通过记录，对应实现 PR 均已合入 `main`。
 文档「实现证据」已有 PR1 与 PR2，本次只追加 PR3。
 PR3 只覆盖 P5.6 与 P5.7，不覆盖 P5.8、P5.9，也不表示阶段 5 完成。
+PR4 提供 P5.8 与 P5.9 的自动切片，见「PR4 切片证据」。抽查演示尚未发生。
 阶段 5 的完成定义仍未满足。
 
 来源：
@@ -132,7 +133,8 @@ L0；客户端和评估对着已经落地的记录，而不是尚未存在的记
 每个 PR 的门禁是 `pnpm check` 通过。门禁通过只说明该切片可以审阅，不表示阶段 5
 完成，也不授权跳过尚未合并的后续 PR。PR1、PR2、PR3 均已合并，产品通过见「实现证据」。
 PR2 的切片证据见下节。本次只追加 PR3 的产品通过。PR3 只覆盖 P5.6 与 P5.7。
-P5.8、P5.9 尚未开始。阶段 5 仍未完成。
+PR4 覆盖 P5.8 与 P5.9，切片证据见下节。抽查演示尚未发生，
+完成定义的第 2 条仍未满足。阶段 5 仍未完成。
 
 ## PR2 切片证据
 
@@ -159,6 +161,28 @@ Dream Cycle、图记忆、复杂衰减、自动 Skill 晋升、
 `cargo test --locked -p semi-os-storage` 与
 `cargo clippy --locked -p semi-os-storage --all-targets -- -D warnings`
 只说明该切片可以审阅，不把阶段 5 记为完成。
+
+## PR4 切片证据
+
+P5.8 的客户端控制在 `crates/host/src/memory_controls.rs`，并由桌面客户端的
+记忆页调用。用户可以创建、编辑、删除自己的偏好。Agent 与系统记录出现在同一页
+快照里，并带作者和可变更性。界面不能指定调用者。偏好写入不调用人格接口，
+人格只以编号和版本展示，偏好正文不会写进人格定义。Agent 改用户行仍然被
+P5.2 的所有权门禁拒绝。
+
+实现提交为 `3acb61f`。
+
+P5.9 的可重复评估在 `crates/storage/tests/memory_acceptance.rs`。一次运行覆盖
+相关召回、无关排除、纠正新增行并链接、压缩后 L0 连续性，以及 Agent 不能修改
+用户记录。主观感觉不能代替这组断言。
+
+`cargo test --locked -p semi-os-host --lib memory_controls`、
+`cargo test --locked -p semi-os-storage --test memory_acceptance`、
+`cargo clippy --locked -p semi-os-host --all-targets -- -D warnings` 与
+`cargo clippy --locked -p semi-os-storage --all-targets -- -D warnings`
+只说明该切片可以审阅。完整 `pnpm check` 由 macOS CI 执行。
+本切片没有抽查演示，不把阶段 5 记为完成。Dream Cycle、图记忆、复杂衰减、
+自动 Skill 晋升、4C 验收、视觉回退、PV.6 和 Worker 发行打包都不在本切片。
 
 ## 完成定义
 
@@ -209,6 +233,7 @@ P5.2 归属：通过。
 本条只说明有序四个 PR 里的第一份已经合并，并且 P5.1、P5.2 产品验收通过。
 写这段时 PR2、PR3、PR4 都还没有产品通过记录。其后 PR2 已合并，产品通过见下一小节；
 PR3 的产品通过见 PR2 小节之后。P5.8、P5.9 与抽查演示仍不存在。
+PR4 的自动切片见「PR4 切片证据」，但没有产品通过记录。
 上文完成定义的两条都未凑齐，阶段 5 仍未完成。
 
 ### 2026-10-30：PR2（P5.3、P5.4、P5.5）产品通过

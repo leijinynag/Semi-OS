@@ -320,7 +320,10 @@ html[data-surface="assistant"] #root {
 }
 
 .client-sidebar-footer {
+  display: flex;
   flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
   margin-top: auto;
   padding: 14px;
 }
@@ -328,6 +331,9 @@ html[data-surface="assistant"] #root {
 .client-sidebar.is-collapsed .client-sidebar-footer,
 .client-sidebar.is-collapsed .client-sidebar-head {
   padding-inline: 5px;
+}
+.client-sidebar.is-collapsed .client-sidebar-footer {
+  flex-direction: column;
 }
 .client-sidebar.is-collapsed .client-sidebar-head {
   height: auto;
@@ -1426,6 +1432,105 @@ html[data-surface="assistant"] #root {
   color: var(--client-ink);
   cursor: pointer;
   font-size: 14px;
+}
+
+.client-settings.memory-controls {
+  width: min(560px, calc(100% - 40px));
+}
+
+.memory-controls-body,
+.memory-section,
+.memory-form,
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 8px;
+}
+
+.memory-controls h3,
+.memory-note,
+.memory-status,
+.memory-empty,
+.memory-persona {
+  margin: 0;
+}
+
+.memory-controls h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.memory-note,
+.memory-status,
+.memory-empty,
+.memory-persona,
+.memory-row small {
+  color: var(--client-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-section + .memory-section {
+  margin-top: 18px;
+}
+
+.memory-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-row,
+.memory-empty {
+  min-height: 72px;
+}
+
+.memory-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--client-line);
+}
+
+.memory-row-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memory-row-copy strong,
+.memory-row-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-row-actions,
+.memory-form-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.memory-error {
+  display: flex;
+  min-height: 72px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.memory-form input {
+  height: 36px;
+  width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--client-line);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .client-mobile-settings {

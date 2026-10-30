@@ -1,4 +1,5 @@
 use semi_os_host::conversation::Conversation;
+use semi_os_host::memory_controls::{self, ClientMemoryPage, UserPreferenceInput};
 use semi_os_host::{
     route_lifecycle, DiagnosticRecord, DiagnosticStore, HostLifecycle, HostLifecycleSnapshot,
     LifecycleCommand, RestartPolicy, WorkerCommand, WorkerEvent, WorkerSupervisor,
@@ -315,6 +316,77 @@ async fn submit_text_message(
         .map_err(|_| "text relay unavailable")?
         .remove(&id);
     result
+}
+
+/// 记忆页只从客户端窗口进入。调用者固定是用户，WebView 不能改成 Agent。
+fn with_client_memory<T>(
+    window: &tauri::WebviewWindow,
+    state: &State<'_, Arc<DesktopState>>,
+    operation: impl FnOnce(&mut Storage) -> semi_os_storage::StorageResult<T>,
+) -> Result<T, String> {
+    if window.label() != CLIENT_WINDOW {
+        return Err("只有客户端可以管理记忆".into());
+    }
+    let mut guard = state
+        .storage
+        .lock()
+        .map_err(|_| "本地存储暂不可用".to_owned())?;
+    let storage = guard.as_mut().ok_or("本地存储暂不可用")?;
+    operation(storage).map_err(|error| memory_controls::client_memory_message(&error).to_owned())
+}
+
+#[tauri::command]
+fn list_client_memory(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+) -> Result<ClientMemoryPage, String> {
+    with_client_memory(&window, &state, |storage| {
+        memory_controls::list_client_memory(storage)
+    })
+}
+
+/// 沿用本模块已有的 `unix_time_ms`。同名再定义会让桌面其余时间戳调用点无法编译。
+#[tauri::command]
+fn create_user_preference(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    key: String,
+    value: String,
+) -> Result<ClientMemoryPage, String> {
+    let now = unix_time_ms();
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::create_user_preference(storage, &UserPreferenceInput { key, value }, now)
+    })
+}
+
+#[tauri::command]
+fn revise_user_preference(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    memory_id: String,
+    key: String,
+    value: String,
+) -> Result<ClientMemoryPage, String> {
+    let now = unix_time_ms();
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::revise_user_preference(
+            storage,
+            &memory_id,
+            &UserPreferenceInput { key, value },
+            now,
+        )
+    })
+}
+
+#[tauri::command]
+fn delete_user_preference(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    memory_id: String,
+) -> Result<ClientMemoryPage, String> {
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::delete_user_preference(storage, &memory_id)
+    })
 }
 
 #[tauri::command]
@@ -1734,6 +1806,10 @@ fn main() {
             publish_voice_snapshot,
             get_voice_conversations,
             get_client_sessions,
+            list_client_memory,
+            create_user_preference,
+            revise_user_preference,
+            delete_user_preference,
             change_client_session,
             rename_client_session,
             activate_client_session,
