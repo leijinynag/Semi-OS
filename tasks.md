@@ -1029,11 +1029,15 @@
   - `load_compact_persona` 只读当前生效的 `personality_records`，按身份、语气、详略、语言、主动程度、行为、工具和语音偏好组装紧凑文本。演化备注和记忆事实不进入人格槽。`load_memory_pack` 的顺序仍是 Host 策略、紧凑人格、L1、L0，再按阶段追加 L2–L5。普通轮次停在基础包，超出 token 预算则截断。组装不写人格，也不放宽作者约束。
   - 证据：`memory_access.rs` 的人格组装测试；同上 cargo 命令通过。
   - Commit 点：`feat(personality): add runtime personality`（`62db3f7`）
-- [ ] **P5.8 添加客户端记忆与偏好控制**
-  - 允许用户创建、编辑和删除自己的偏好，查看 Agent 创建的记忆，并展示每条记录的归属。
+- [x] **P5.8 添加客户端记忆与偏好控制**
+  - 客户端可以创建、编辑、删除用户自己的偏好，并查看 Agent 与系统记忆。每条记录展示作者和可变更性。命令固定以用户身份执行，不能改 Agent 行。偏好写入不碰人格表，人格只以编号和版本出现在快照里。
+  - 证据：`crates/host/src/memory_controls.rs`、`apps/desktop/src/ui/MemoryControls.tsx`；`cargo test --locked -p semi-os-host --lib memory_controls` 与 `node --experimental-strip-types --test apps/desktop/src/ui/memory-controls.test.ts` 通过。
+  - 本项不代表阶段 5 完成；抽查演示仍未发生。
   - Commit 点：`feat(client): add memory controls`
-- [ ] **P5.9 记忆验收评估**
-  - 验证相关记忆召回、无关记忆排除、纠正处理、压缩后上下文连续性和用户记录不可被 Agent 修改。
+- [x] **P5.9 记忆验收评估**
+  - `memory_acceptance` 一次运行覆盖相关召回、无关排除、纠正新增行并链接、压缩后 L0 连续性，以及 Agent 不能修改用户记录。主观感觉不能代替这组断言。
+  - 证据：`crates/storage/tests/memory_acceptance.rs`；`cargo test --locked -p semi-os-storage --test memory_acceptance` 通过。
+  - 本项不代表阶段 5 完成。
   - Commit 点：`test(memory): verify useful recall`
 
 ## 阶段 6：统一交互与可观测性

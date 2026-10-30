@@ -10,6 +10,7 @@ pub use semi_os_desktop_macos as desktop_macos;
 mod diagnostics;
 mod error;
 mod lifecycle;
+pub mod memory_controls;
 mod outbound_rpc;
 pub mod research;
 pub mod research_router;

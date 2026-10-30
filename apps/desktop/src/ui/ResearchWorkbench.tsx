@@ -16,6 +16,7 @@ import {
   DismissIcon,
   LinkIcon,
   NewSessionIcon,
+  MemoryIcon,
   PanelIcon,
   SettingsIcon,
 } from "./icons";
@@ -32,6 +33,7 @@ import {
 import { useWorkflows, WorkflowPanel } from "./WorkflowPanel";
 import { DesktopPermissions } from "./DesktopPermissions";
 import { BrowserHandoffPanel } from "./BrowserHandoffPanel";
+import { MemoryControls } from "./MemoryControls";
 
 // 与 Host 的 WorkerStatus 保持对齐；state 用闭集，界面不得靠字符串包含关系推断。
 type WorkerStatus = {
@@ -222,6 +224,7 @@ export function ResearchWorkbench() {
   const [leftWidth, setLeftWidth] = useState(248);
   const settingsDialog = useRef<HTMLDialogElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [workflowNotice, setWorkflowNotice] = useState<{
     workflowId: string;
@@ -686,6 +689,14 @@ export function ResearchWorkbench() {
           <div className="client-sidebar-footer">
             <button
               className="client-icon-button"
+              aria-label="记忆与偏好"
+              title="记忆与偏好"
+              onClick={() => setMemoryOpen(true)}
+            >
+              <MemoryIcon size={20} weight="regular" />
+            </button>
+            <button
+              className="client-icon-button"
               aria-label="设置"
               title="设置"
               onClick={() => {
@@ -1083,6 +1094,7 @@ export function ResearchWorkbench() {
           </p>
         )}
       </dialog>
+      <MemoryControls open={memoryOpen} onClose={() => setMemoryOpen(false)} />
       {sessionMenu && (
         <SessionContextMenu
           position={sessionMenu}
