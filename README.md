@@ -9,6 +9,7 @@ reviewed.
 
 ## Design
 
+- [Docs index](docs/README.md)
 - [Detailed design](docs/DESIGN.md)
 - [Decision log](docs/DECISIONS.md)
 - [Architecture diagrams](docs/assets/architecture/)
