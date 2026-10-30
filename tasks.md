@@ -1006,7 +1006,7 @@
     原文和旧版本保持不变；修正只能新增 Agent 记录并建立关系。系统不能改写用户记录。
   - 证据：`crates/storage/migrations/0014_personality_ownership.sql`、
     `memory.rs` 的所有权测试；`cargo test --locked -p semi-os-storage` 通过。
-  - Commit 点：`feat(memory): enforce memory ownership`
+  - Commit 点：`feat(memory): enforce memory ownership`（`39cd692`）
 - [ ] **P5.3 添加自动记忆写入流水线**
   - 从对话、纠正和验证结果提取候选记忆，过滤秘密、噪音和无依据的身份推断，执行去重并关联冲突。
   - Commit 点：`feat(memory): add automatic memory writes`
