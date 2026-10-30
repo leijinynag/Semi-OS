@@ -930,6 +930,8 @@
 
 依赖：P2.4 至 P2.12、P3.7 至 P3.10。
 
+2026-10-30 最小演示审计：本轮无运行时改动。A1+A2、B1+B2、B4 为 code ready / still human-only。P4C.1–P4C.6 仍未完成，4C 真人 macOS 验收挂账；过线标准见 `docs/4C-VALIDATION.md` 的「最小过线」。
+
 - [-] **P4C.1 添加 macOS 权限能力检查**
   - 已实现 `crates/desktop-macos/src/native.rs`、Tauri 权限状态/系统设置入口和
     `DesktopPermissions.tsx`。

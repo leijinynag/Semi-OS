@@ -1,20 +1,111 @@
 # 4C Native Desktop and Lark Validation
 
-## Scope
+## 2026-10-30：最小演示过线定稿
 
-This document records the current validation boundary for 4C. Semi-OS is the
-target repository; LumiCore is only a reference for design ideas. The desktop
-path remains Host-owned and follows:
+定稿来源：产品负责人草稿，锦阳于 Semi-OS 群聊确认「可以定稿」。
 
-1. fresh semantic observation;
-2. one atomic action;
-3. Host-owned readback verification;
-4. `unknown` plus reconciliation when proof is insufficient.
+**本轮最小演示过线：**
 
-No visual capability is considered available merely because Screen Recording is
-granted or a screenshot Artifact exists.
+1. A1+A2：四项权限 + 重建后授权保持（固定证书、`open` 启动）
+2. B1+B2：TextEdit 观察 + 英文原子输入 + Host 读回
+3. B4：一条用户可见通用应用闭环
+
+**不进本轮：**视觉回退（保持 unavailable）、PV.6、Worker 发行打包。
+
+**口径：**观察 → 单原子动作 → Host 读回；unknown 禁止盲重试。
+
+下文只使用三个标签：
+
+- **最小过线**：本轮演示必须由真人在真实 macOS `.app` 上通过。
+- **第二轮**：仍然要做，但不计入本轮过线。
+- **不验**：本轮明确不做。不能写成过线条件，也不能用历史证据算成已验。
+
+Semi-OS 是目标仓库；LumiCore 只作设计参考。桌面路径仍由 Host 拥有。
+屏幕录制已授权，或已经存在截图 Artifact，都不表示视觉能力可用。
+
+历史自动证据、签名与 TCC 说明、P4C.1 步骤，以及 2026-10-26 诊断都保留。
+它们分别是 A1+A2 的操作步骤或当时的证据，不能互相替代，也不能代替
+B1+B2 或 B4。
+
+## 最小过线
+
+### A1+A2：四项权限 + 重建后授权保持
+
+本轮要验：
+
+- Accessibility、Input Monitoring、Screen Recording、Microphone 四项都由
+  客户端显式请求；回到应用里重新检查后，四项均为已授权。
+- 签名身份是固定证书 `Semi-OS Local Signing`。指定要求里是
+  `certificate root`，不是 `cdhash`。
+- 用 `open` / LaunchServices 启动
+  `target/debug/bundle/macos/Semi-OS.app`。`tauri dev` 和直接启动包内
+  可执行文件都不是验收入口。
+- 退出、不改内容重建、再次 `open` 后，四项授权仍然保持。这一步才是
+  签名身份稳定的证明。
+
+屏幕录制属于这四项权限。它只证明 TCC 允许采集，不打开视觉回退
+（见「不验」）。
+
+操作步骤见「Native Acceptance Procedure (P4C.1)」。走完该步骤只表示
+A1+A2 通过，不代替 B1+B2 或 B4。
+
+### B1+B2：TextEdit 观察 + 英文原子输入 + Host 读回
+
+本轮要验的是 **英文** TextEdit 路径：
+
+1. 对 TextEdit 做一次新鲜语义观察。观察对象必须是 TextEdit，不是
+   Semi-OS 自己的窗口，也不是 2026-10-26 对 Codex 的只读诊断。
+2. 一次原子英文输入。
+3. Host 持有的读回，能核对刚刚写入的英文文本。
+
+中文输入、Retina、多显示器，以及把启动/聚焦单独做成验收矩阵，都不在
+这条过线里，见「第二轮」。
+
+### B4：一条用户可见通用应用闭环
+
+本轮只要求 **一条** 用户可见的通用应用闭环，顺序就是口径：
+
+1. 新鲜观察；
+2. 一个原子动作；
+3. Host 读回。
+
+证明不足时结果是 `unknown`，先对账，禁止盲重试。这一条通过，不表示
+多应用矩阵、人工接管或动作中途重启已经验收。
+
+## 第二轮
+
+下列项仍然要做，不计入 2026-10-30 最小演示过线：
+
+- TextEdit 中文输入。
+- 英文原子路径之外的 TextEdit 专项：把窗口聚焦、Retina、多显示器做成
+  独立验收。最小过线只要求能对 TextEdit 完成一次英文观察、原子输入和
+  Host 读回。
+- 真人接管，以及接管后桌面租约和元素引用失效。
+- 原生动作进行中的 Worker 或应用重启。
+- 应用启动后窗口异步出现。这时仍可能返回 `unknown`。禁止因为窗口暂时
+  未就绪而自动重复启动；必须重新观察或人工核对。
+- 真实 Lark CLI：身份、文档搜索/读取、经确认的测试会话发送，以及超时
+  对账。下文的 Lark Fixture 不能代替这一项。
+- 真实应用关闭、断网，以及权限等待中的恢复。
+
+## 不验
+
+本轮明确不验收，保持现状，不写入过线清单：
+
+- **视觉回退 / 受约束视觉模型路径。** 保持 `unavailable`。不要求真实
+  图片模型调用、窗口或观察版本绑定、敏感界面拒绝证据。Screen Recording
+  授权、截图 Artifact 或截图变化，都不是这项的通过证明，也不是消息已
+  发送或业务已成功的证明。
+- **PV.6** 原生真人语音体验（麦克风按键、扬声器、透明窗口等）。记录仍在
+  `docs/VOICE-OPTIMIZATION-VALIDATION.md`，不计入 4C 最小演示过线。
+- **Worker 发行打包。** bundle 的 Resources 当前不含 Worker；
+  `start_worker` 仍依赖编译期仓库、本地 Node 与依赖。当前构建可以用于
+  本机验证，本轮不把它当成可移植发行包来验收。
 
 ## Automated Evidence
+
+历史自动证据，不是最小过线的替代品。它说明策略和恢复在 Fixture 里成立，
+不能证明真实 TCC 授权、TextEdit 英文输入，或那一条用户可见闭环。
 
 - `pnpm check`: passed on 2026-10-24, including workspace command checks,
   generated protocol verification, Prettier, TypeScript, ESLint, Rust Clippy,
@@ -37,7 +128,16 @@ changes that invalidate a lease issued before them. Storage recovery proves
 that `possibly_dispatched` becomes `unknown` after restart and cannot
 transition back to a dispatchable stage.
 
+Lark fixtures cover bounded structured commands, credential-shaped field
+redaction, stable idempotency keys, exact chat-history reconciliation,
+unreconcilable timeout, unavailable CLI, authentication failure, user-target
+timeout without an empty chat lookup, and invalid or oversized parameters.
+真实 Lark 身份和测试会话发送属于「第二轮」。
+
 ## Native Permission Request
+
+本节支撑 **最小过线 A1**。它说明显式请求路径和 hardened runtime 约束。
+它不说明视觉能力，也不说明 Worker 发行打包。
 
 The client exposes an explicit `request_desktop_permission` command for
 Accessibility, Input Monitoring, Screen Recording and Microphone. The closed
@@ -74,7 +174,9 @@ Microphone list and every capture request is denied with
 entitlement. Accessibility, Input Monitoring and Screen Recording are not
 gated by entitlements and must not be added there.
 
-### Ad-hoc signing and TCC identity
+## Ad-hoc signing and TCC identity
+
+本节支撑 **最小过线 A2**。稳定证书让重建后 TCC 仍能匹配已有授权。
 
 With `signingIdentity: "-"` the bundle is ad-hoc signed and its cdhash changes on
 every rebuild. TCC binds a stored grant to the code requirement of the grantor,
@@ -140,6 +242,10 @@ tccutil reset Microphone dev.semios.desktop
 
 ## Native Acceptance Procedure (P4C.1)
 
+**最小过线 A1+A2 的必做步骤。** 完成下面 1–9 步只表示四项权限和重建后
+授权保持通过。B1+B2 与 B4 另验。视觉回退、PV.6、Worker 发行打包不在本
+步骤里。
+
 TCC attributes permission to the bundle, not to a bare binary, so acceptance
 runs against a debug `.app`:
 
@@ -188,6 +294,11 @@ Screen Recording may need an application restart before it takes effect.
 
 ## 2026-10-26：授权后无法使用的排查
 
+**历史诊断，不是本轮过线记录。** 当时用 `open` 启动的只读观察证明：固定
+证书下四项权限为 `granted`，并能读到前台 Codex 的控件。这不能代替
+TextEdit 的 B1+B2，也不能代替 B4 的用户可见闭环。直接从 shell 启动包内
+可执行文件的权限结果，仍然不能当作验收。
+
 ### 已修复的代码路径
 
 - `native.rs` 优先由 NSWorkspace 前台 PID 创建 AX 应用根，焦点窗口缺失时
@@ -215,8 +326,8 @@ open -n -g -W target/debug/bundle/macos/Semi-OS.app \
 2026-10-26 实测：四项权限均为 `granted`，`takeoverDetection: true`，
 `status: observed`，前台应用 `com.openai.codex`，读取 11 个控件，未截断。
 相同可执行文件直接由 shell 启动时 Accessibility/Input Monitoring 为 denied；
-该结果不能替代由 LaunchServices 启动 App 的授权验收。本轮未重置 TCC 或改动
-钥匙串，也没有以控件数量冒充实际业务动作验证。
+该结果不能替代由 LaunchServices 启动 App 的授权验收。该次诊断未重置 TCC
+或改动钥匙串，也没有以控件数量冒充实际业务动作验证。
 
 最新代码再次 `tauri build --debug` exit=0 后，以同一启动方式复测仍为四项
 `granted`、监听健康、`observed`，前台 Codex 12 个控件，未截断。
@@ -229,39 +340,17 @@ open -n -g -W target/debug/bundle/macos/Semi-OS.app \
 应用，请让目标保持前台并通过上面的后台启动命令运行诊断。不要根据对自己
 窗口的观察成功宣布 TextEdit 或其他目标已通过。
 
-### 未完成的边界
+### 和当前过线边界的关系
 
-- TextEdit 中文输入、真实动作批准、人工接管、跨重启授权仍需真人完整验收。
-- 应用启动后的窗口异步出现仍可能返回 `unknown`；禁止因窗口暂时未就绪
-  自动重复启动，必须重新观察或人工核对。
-- bundle 的 Resources 当前不含 Worker；`start_worker` 仍依赖编译期仓库、
-  本地 Node 与依赖。当前可用于本机验证，不是独立可移植的发行包。
-
-Lark fixtures cover bounded structured commands, credential-shaped field
-redaction, stable idempotency keys, exact chat-history reconciliation,
-unreconcilable timeout, unavailable CLI, authentication failure, user-target
-timeout without an empty chat lookup, and invalid or oversized parameters.
-
-## Manual Acceptance Still Required
-
-The following are intentionally not marked as complete in `tasks.md`:
-
-- macOS Accessibility, Screen Recording, Input Monitoring and microphone
-  permission states in the real Tauri application. The app can now request the
-  four explicitly, but a human must still run the native acceptance
-  procedure above and observe the real TCC panes;
-- TextEdit launch/focus, semantic observation, Chinese and English input,
-  readback verification, Retina/multi-display behavior and real user takeover;
-- Worker or application restart while a native action is in flight;
-- real Lark CLI identity, document search/read, confirmed test-session send and
-  timeout reconciliation;
-- a real image-capable model call for the constrained visual fallback.
-
-A real permission grant is not evidence that a visual model can interpret an
-image. A changed screenshot is not evidence that a message was sent or that a
-business operation succeeded.
+- 重建后四项 `granted` 是 A2 的支持证据。最小过线仍须按 P4C.1 由真人走完
+  请求、重新检查，以及不改内容的再重建。
+- 只读自检和 Codex 控件计数不是 B1+B2，也不是 B4。
+- 中文输入、真人接管、动作中重启、真实 Lark：第二轮。
+- 视觉回退、PV.6、把 Worker 打进 bundle：不验。
 
 ## Known Conservative Behavior
+
+这些约束在最小过线和后续轮次都有效：
 
 - Background workflows must obtain a fresh user-approved desktop lease for each
   desktop occupation. The general 4B hosted grant does not silently authorize
