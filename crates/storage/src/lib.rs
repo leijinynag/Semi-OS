@@ -22,8 +22,9 @@ pub use error::{StorageError, StorageResult};
 pub use execution::{ExecutionProgress, ExecutionSnapshot};
 pub use memory::{
     MemoryActor, MemoryAuthor, MemoryBody, MemoryDetail, MemoryLayer, MemoryLink, MemoryMutability,
-    MemoryQuery, MemoryRecord, MemoryRecordKind, MemoryRelation, MemoryScope, MemorySource,
-    MemorySourceKind, NewMemory, NewMemoryLink, NewMemorySource,
+    MemoryQuery, MemoryRecord, MemoryRecordKind, MemoryRelation, MemoryRevision, MemoryScope,
+    MemorySource, MemorySourceKind, NewMemory, NewMemoryLink, NewMemorySource, PersonalityDraft,
+    PersonalityRecord,
 };
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,

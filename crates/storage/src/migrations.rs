@@ -68,6 +68,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "six layer memory",
         include_str!("../migrations/0013_memory_layers.sql"),
     ),
+    (
+        14,
+        "personality ownership",
+        include_str!("../migrations/0014_personality_ownership.sql"),
+    ),
 ];
 
 /// 在单个排他事务中依次执行迁移。

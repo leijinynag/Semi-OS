@@ -9,9 +9,12 @@
 //! supersedes / contradicts / consolidates / associates，不构成图记忆，
 //! 也不会在写入关系时改写另一条记录的正文。
 //!
-//! 作者和可变更性成对保存：用户记录永远是 `user_readonly`。后续提示词
-//! 组装顺序是 Host 策略、紧凑人格、L1、L0、再渐进加载 L2–L5。人格不在
-//! 本表，本模块也不组装提示词、不执行检索排序或自动写入。
+//! 作者和可变更性成对保存。用户创建的偏好，以及 `personality_records` 里的
+//! 用户人格，都拒绝 Agent 改写；Agent 只能改写自己创建的记忆。修正写成新记录
+//! 并建立关系，不能覆盖用户原文，也不能原地改掉旧的人格版本。
+//!
+//! 人格不进入 `memories`。本模块不组装提示词、不执行检索排序或自动写入。
+//! 后续顺序仍是 Host 策略、紧凑人格、L1、L0，再渐进加载 L2–L5。
 
 use crate::{Storage, StorageError, StorageResult};
 use rusqlite::{params, OptionalExtension, Row};
@@ -23,6 +26,7 @@ const MAX_TEXT_CHARS: usize = 2_000;
 const MAX_EXCERPT_CHARS: usize = 500;
 
 const MEMORY_COLUMNS: &str = "memory_id, layer, record_kind, content_json, author_kind, mutability, user_id, workspace_id, application_id, task_id, skill_id, created_at_ms, updated_at_ms";
+const PERSONALITY_COLUMNS: &str = "personality_id, version, author_kind, mutability, identity, tone, verbosity, language, initiative, behavior_boundary, tool_policy, voice, evolution_note, active, created_at_ms";
 
 /// 调用写入接口的真实身份。
 ///
@@ -549,6 +553,52 @@ pub struct MemoryQuery {
     pub skill_id: Option<String>,
 }
 
+/// 改写记忆时只能更换正文和范围。层、种类和作者保持不变。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRevision {
+    pub body: MemoryBody,
+    pub scope: MemoryScope,
+}
+
+/// 人格配置。它描述说话方式，不承载用户事实。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalityDraft {
+    pub identity: String,
+    pub tone: String,
+    pub verbosity: String,
+    pub language: String,
+    pub initiative: String,
+    pub behavior_boundary: String,
+    pub tool_policy: String,
+    pub voice: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evolution_note: Option<String>,
+    pub active: bool,
+}
+
+/// 一份已落库的人格版本。旧版本保留原文，新版本只追加。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalityRecord {
+    pub personality_id: String,
+    pub version: i64,
+    pub author: MemoryAuthor,
+    pub mutability: MemoryMutability,
+    pub identity: String,
+    pub tone: String,
+    pub verbosity: String,
+    pub language: String,
+    pub initiative: String,
+    pub behavior_boundary: String,
+    pub tool_policy: String,
+    pub voice: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evolution_note: Option<String>,
+    pub active: bool,
+    pub created_at_ms: i64,
+}
+
 struct RawMemory {
     memory_id: String,
     layer: String,
@@ -615,15 +665,80 @@ impl Storage {
 
     pub fn load_memory(&self, memory_id: &str) -> StorageResult<Option<MemoryRecord>> {
         validate_id(memory_id, "记忆编号")?;
-        let raw = self
-            .connection
-            .query_row(
-                &format!("SELECT {MEMORY_COLUMNS} FROM memories WHERE memory_id = ?1"),
-                [memory_id],
-                raw_memory_from_row,
-            )
-            .optional()?;
-        raw.map(decode_memory).transpose()
+        load_memory_on(&self.connection, memory_id)
+    }
+
+    /// 改写已有记忆。用户偏好和系统规则拒绝其他作者；种类不能借改写换层。
+    pub fn revise_memory(
+        &mut self,
+        actor: MemoryActor,
+        memory_id: &str,
+        revision: &MemoryRevision,
+        now: i64,
+    ) -> StorageResult<MemoryRecord> {
+        validate_id(memory_id, "记忆编号")?;
+        let body = normalize_body(&revision.body)?;
+        let scope = normalize_scope(&revision.scope)?;
+        require_timestamp(now)?;
+        let content = serde_json::to_string(&body)?;
+        let transaction = self.connection.transaction()?;
+        let existing = load_memory_on(&transaction, memory_id)?
+            .ok_or_else(|| StorageError::MemoryNotFound(memory_id.to_owned()))?;
+        ensure_can_mutate(
+            actor,
+            existing.author,
+            memory_record_class(existing.record_kind),
+        )?;
+        if body.kind() != existing.record_kind {
+            return Err(StorageError::InvalidMemory("记录种类不能改变".into()));
+        }
+        let changed = transaction.execute(
+            "UPDATE memories
+             SET content_json = ?2,
+                 user_id = ?3, workspace_id = ?4, application_id = ?5, task_id = ?6, skill_id = ?7,
+                 updated_at_ms = ?8
+             WHERE memory_id = ?1 AND author_kind = ?9 AND record_kind = ?10",
+            params![
+                memory_id,
+                content,
+                scope.user_id,
+                scope.workspace_id,
+                scope.application_id,
+                scope.task_id,
+                scope.skill_id,
+                now,
+                existing.author.as_str(),
+                existing.record_kind.as_str(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StorageError::InvalidMemory("记忆在写入前已变化".into()));
+        }
+        transaction.commit()?;
+        self.load_memory(memory_id)?
+            .ok_or_else(|| StorageError::InvalidMemory("写入后读不回记忆".into()))
+    }
+
+    /// 删除记忆及其来源、关系。Agent 不能借删除清掉用户记录。
+    pub fn delete_memory(&mut self, actor: MemoryActor, memory_id: &str) -> StorageResult<()> {
+        validate_id(memory_id, "记忆编号")?;
+        let transaction = self.connection.transaction()?;
+        let existing = load_memory_on(&transaction, memory_id)?
+            .ok_or_else(|| StorageError::MemoryNotFound(memory_id.to_owned()))?;
+        ensure_can_mutate(
+            actor,
+            existing.author,
+            memory_record_class(existing.record_kind),
+        )?;
+        let changed = transaction.execute(
+            "DELETE FROM memories WHERE memory_id = ?1 AND author_kind = ?2",
+            params![memory_id, existing.author.as_str()],
+        )?;
+        if changed != 1 {
+            return Err(StorageError::InvalidMemory("记忆在删除前已变化".into()));
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn list_memories(&self, query: &MemoryQuery) -> StorageResult<Vec<MemoryRecord>> {
@@ -672,8 +787,10 @@ impl Storage {
         })
     }
 
+    /// 追加来源。来源会改变记录的证据，因此沿用正文的作者限制。
     pub fn attach_memory_source(
         &mut self,
+        actor: MemoryActor,
         memory_id: &str,
         source: &NewMemorySource,
         now: i64,
@@ -681,10 +798,14 @@ impl Storage {
         validate_id(memory_id, "记忆编号")?;
         let source = normalize_source(source)?;
         require_timestamp(now)?;
-        if self.load_memory(memory_id)?.is_none() {
-            return Err(StorageError::MemoryNotFound(memory_id.to_owned()));
-        }
         let transaction = self.connection.transaction()?;
+        let existing = load_memory_on(&transaction, memory_id)?
+            .ok_or_else(|| StorageError::MemoryNotFound(memory_id.to_owned()))?;
+        ensure_can_mutate(
+            actor,
+            existing.author,
+            memory_record_class(existing.record_kind),
+        )?;
         insert_source(&transaction, memory_id, &source, now)?;
         transaction.commit()?;
         self.load_source(&source.source_id)
@@ -701,8 +822,16 @@ impl Storage {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    /// 建立关系。只新增关系行，不更新两端记忆的正文。
-    pub fn link_memories(&mut self, link: &NewMemoryLink, now: i64) -> StorageResult<MemoryLink> {
+    /// 建立关系。只新增关系行，不更新两端正文。
+    ///
+    /// 起点必须是调用者可以改写的记录。这样 Agent 可以用自己的新记录指向用户记录，
+    /// 但不能从用户记录向外声明 supersedes。
+    pub fn link_memories(
+        &mut self,
+        actor: MemoryActor,
+        link: &NewMemoryLink,
+        now: i64,
+    ) -> StorageResult<MemoryLink> {
         let link_id = normalize_id(&link.link_id, "关系编号")?;
         let from_memory_id = normalize_id(&link.from_memory_id, "关系起点")?;
         let to_memory_id = normalize_id(&link.to_memory_id, "关系终点")?;
@@ -710,9 +839,14 @@ impl Storage {
         if from_memory_id == to_memory_id {
             return Err(StorageError::InvalidMemory("记忆不能关联到自己".into()));
         }
-        self.require_memory(&from_memory_id)?;
-        self.require_memory(&to_memory_id)?;
-        self.connection
+        let transaction = self.connection.transaction()?;
+        let from = load_memory_on(&transaction, &from_memory_id)?
+            .ok_or_else(|| StorageError::MemoryNotFound(from_memory_id.clone()))?;
+        if load_memory_on(&transaction, &to_memory_id)?.is_none() {
+            return Err(StorageError::MemoryNotFound(to_memory_id));
+        }
+        ensure_can_mutate(actor, from.author, memory_record_class(from.record_kind))?;
+        transaction
             .execute(
                 "INSERT INTO memory_links(
                     link_id, from_memory_id, to_memory_id, relation, created_at_ms
@@ -726,7 +860,132 @@ impl Storage {
                 ],
             )
             .map_err(|err| map_constraint(err, "同一关系已存在"))?;
+        transaction.commit()?;
         self.load_link(&link_id)
+    }
+
+    /// 创建人格。Agent 不能创建，避免模型推断被写成用户人格。
+    pub fn create_personality(
+        &mut self,
+        actor: MemoryActor,
+        personality_id: &str,
+        draft: &PersonalityDraft,
+        now: i64,
+    ) -> StorageResult<PersonalityRecord> {
+        if matches!(actor, MemoryActor::Agent) {
+            return Err(StorageError::OwnershipDenied {
+                actor: "agent",
+                record_class: "人格",
+                author: "agent",
+            });
+        }
+        let personality_id = normalize_id(personality_id, "人格编号")?;
+        let draft = normalize_personality(draft)?;
+        require_timestamp(now)?;
+        let author = MemoryAuthor::from_actor(actor);
+        let transaction = self.connection.transaction()?;
+        if load_personality_on(&transaction, &personality_id)?.is_some() {
+            return Err(StorageError::InvalidMemory("人格记录已存在".into()));
+        }
+        insert_personality(&transaction, &personality_id, 1, author, &draft, now)?;
+        transaction.commit()?;
+        self.load_personality(&personality_id)?
+            .ok_or_else(|| StorageError::InvalidMemory("写入后读不回人格".into()))
+    }
+
+    /// 追加人格新版本。历史版本保留原文，Agent 对用户版本直接拒绝。
+    pub fn revise_personality(
+        &mut self,
+        actor: MemoryActor,
+        personality_id: &str,
+        draft: &PersonalityDraft,
+        now: i64,
+    ) -> StorageResult<PersonalityRecord> {
+        let personality_id = normalize_id(personality_id, "人格编号")?;
+        let draft = normalize_personality(draft)?;
+        require_timestamp(now)?;
+        let transaction = self.connection.transaction()?;
+        let existing = load_personality_on(&transaction, &personality_id)?
+            .ok_or_else(|| StorageError::PersonalityNotFound(personality_id.clone()))?;
+        ensure_personality_actor(actor, existing.author)?;
+        insert_personality(
+            &transaction,
+            &personality_id,
+            existing.version + 1,
+            existing.author,
+            &draft,
+            now,
+        )?;
+        transaction.commit()?;
+        self.load_personality(&personality_id)?
+            .ok_or_else(|| StorageError::InvalidMemory("写入后读不回人格".into()))
+    }
+
+    pub fn delete_personality(
+        &mut self,
+        actor: MemoryActor,
+        personality_id: &str,
+    ) -> StorageResult<()> {
+        validate_id(personality_id, "人格编号")?;
+        let transaction = self.connection.transaction()?;
+        let existing = load_personality_on(&transaction, personality_id)?
+            .ok_or_else(|| StorageError::PersonalityNotFound(personality_id.to_owned()))?;
+        ensure_personality_actor(actor, existing.author)?;
+        let changed = transaction.execute(
+            "DELETE FROM personality_records WHERE personality_id = ?1 AND author_kind = ?2",
+            params![personality_id, existing.author.as_str()],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::InvalidMemory("人格记录在删除前已变化".into()));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn load_personality(
+        &self,
+        personality_id: &str,
+    ) -> StorageResult<Option<PersonalityRecord>> {
+        validate_id(personality_id, "人格编号")?;
+        load_personality_on(&self.connection, personality_id)
+    }
+
+    pub fn list_personalities(&self) -> StorageResult<Vec<PersonalityRecord>> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {PERSONALITY_COLUMNS} FROM personality_records AS current
+             WHERE version = (
+                 SELECT MAX(version) FROM personality_records
+                 WHERE personality_id = current.personality_id
+             )
+             ORDER BY personality_id ASC"
+        ))?;
+        let rows = statement.query_map([], raw_personality_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(decode_personality(row?)?);
+        }
+        Ok(records)
+    }
+
+    /// 按版本返回人格。记录不存在时是错误，不能用空列表表示缺失。
+    pub fn list_personality_versions(
+        &self,
+        personality_id: &str,
+    ) -> StorageResult<Vec<PersonalityRecord>> {
+        validate_id(personality_id, "人格编号")?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {PERSONALITY_COLUMNS} FROM personality_records
+             WHERE personality_id = ?1 ORDER BY version ASC"
+        ))?;
+        let rows = statement.query_map([personality_id], raw_personality_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(decode_personality(row?)?);
+        }
+        if records.is_empty() {
+            return Err(StorageError::PersonalityNotFound(personality_id.to_owned()));
+        }
+        Ok(records)
     }
 
     pub fn list_memory_links(&self, memory_id: &str) -> StorageResult<Vec<MemoryLink>> {
@@ -800,6 +1059,63 @@ impl Storage {
             created_at_ms,
         })
     }
+}
+
+fn load_memory_on(
+    connection: &rusqlite::Connection,
+    memory_id: &str,
+) -> StorageResult<Option<MemoryRecord>> {
+    let raw = connection
+        .query_row(
+            &format!("SELECT {MEMORY_COLUMNS} FROM memories WHERE memory_id = ?1"),
+            [memory_id],
+            raw_memory_from_row,
+        )
+        .optional()?;
+    raw.map(decode_memory).transpose()
+}
+
+/// 只有与作者相同的调用者可以改写。系统身份不能代替用户，Agent 也不能。
+fn ensure_can_mutate(
+    actor: MemoryActor,
+    author: MemoryAuthor,
+    record_class: &'static str,
+) -> StorageResult<()> {
+    let allowed = matches!(
+        (actor, author),
+        (MemoryActor::User, MemoryAuthor::User)
+            | (MemoryActor::Agent, MemoryAuthor::Agent)
+            | (MemoryActor::System, MemoryAuthor::System)
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(StorageError::OwnershipDenied {
+            actor: actor.as_str(),
+            record_class,
+            author: author.as_str(),
+        })
+    }
+}
+
+fn memory_record_class(kind: MemoryRecordKind) -> &'static str {
+    if kind == MemoryRecordKind::Preference {
+        "偏好"
+    } else {
+        "记忆"
+    }
+}
+
+/// 人格没有 Agent 可写路径。即使用户记录被误标成 Agent，写入仍要拒绝。
+fn ensure_personality_actor(actor: MemoryActor, author: MemoryAuthor) -> StorageResult<()> {
+    if matches!(actor, MemoryActor::Agent) {
+        return Err(StorageError::OwnershipDenied {
+            actor: actor.as_str(),
+            record_class: "人格",
+            author: author.as_str(),
+        });
+    }
+    ensure_can_mutate(actor, author, "人格")
 }
 
 fn insert_source(
@@ -1019,6 +1335,154 @@ fn normalize_source(source: &NewMemorySource) -> StorageResult<NewMemorySource> 
         kind: source.kind,
         source_ref: clean_text(&source.source_ref, "来源引用", MAX_TEXT_CHARS)?,
         note: clean_optional(&source.note, "来源摘录", MAX_EXCERPT_CHARS)?,
+    })
+}
+
+struct RawPersonality {
+    personality_id: String,
+    version: i64,
+    author_kind: String,
+    mutability: String,
+    identity: String,
+    tone: String,
+    verbosity: String,
+    language: String,
+    initiative: String,
+    behavior_boundary: String,
+    tool_policy: String,
+    voice: String,
+    evolution_note: Option<String>,
+    active: i64,
+    created_at_ms: i64,
+}
+
+fn load_personality_on(
+    connection: &rusqlite::Connection,
+    personality_id: &str,
+) -> StorageResult<Option<PersonalityRecord>> {
+    let raw = connection
+        .query_row(
+            &format!(
+                "SELECT {PERSONALITY_COLUMNS} FROM personality_records
+                 WHERE personality_id = ?1 ORDER BY version DESC LIMIT 1"
+            ),
+            [personality_id],
+            raw_personality_from_row,
+        )
+        .optional()?;
+    raw.map(decode_personality).transpose()
+}
+
+fn insert_personality(
+    connection: &rusqlite::Connection,
+    personality_id: &str,
+    version: i64,
+    author: MemoryAuthor,
+    draft: &PersonalityDraft,
+    now: i64,
+) -> StorageResult<()> {
+    if draft.active {
+        connection.execute(
+            "UPDATE personality_records SET active = 0 WHERE active = 1",
+            [],
+        )?;
+    }
+    connection
+        .execute(
+            "INSERT INTO personality_records(
+                personality_id, version, author_kind, mutability,
+                identity, tone, verbosity, language, initiative,
+                behavior_boundary, tool_policy, voice, evolution_note,
+                active, created_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            params![
+                personality_id,
+                version,
+                author.as_str(),
+                author.mutability().as_str(),
+                draft.identity,
+                draft.tone,
+                draft.verbosity,
+                draft.language,
+                draft.initiative,
+                draft.behavior_boundary,
+                draft.tool_policy,
+                draft.voice,
+                draft.evolution_note,
+                i64::from(draft.active),
+                now,
+            ],
+        )
+        .map_err(|err| map_constraint(err, "人格版本已存在"))?;
+    Ok(())
+}
+
+fn raw_personality_from_row(row: &Row<'_>) -> rusqlite::Result<RawPersonality> {
+    Ok(RawPersonality {
+        personality_id: row.get(0)?,
+        version: row.get(1)?,
+        author_kind: row.get(2)?,
+        mutability: row.get(3)?,
+        identity: row.get(4)?,
+        tone: row.get(5)?,
+        verbosity: row.get(6)?,
+        language: row.get(7)?,
+        initiative: row.get(8)?,
+        behavior_boundary: row.get(9)?,
+        tool_policy: row.get(10)?,
+        voice: row.get(11)?,
+        evolution_note: row.get(12)?,
+        active: row.get(13)?,
+        created_at_ms: row.get(14)?,
+    })
+}
+
+fn decode_personality(raw: RawPersonality) -> StorageResult<PersonalityRecord> {
+    let author = MemoryAuthor::parse(&raw.author_kind)?;
+    let mutability = MemoryMutability::parse(&raw.mutability)?;
+    if matches!(author, MemoryAuthor::Agent) || author.mutability() != mutability {
+        return Err(StorageError::InvalidMemory(
+            "人格作者与可变更性不一致".into(),
+        ));
+    }
+    let active = match raw.active {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(StorageError::InvalidMemory("人格启用标记无效".into()));
+        }
+    };
+    Ok(PersonalityRecord {
+        personality_id: raw.personality_id,
+        version: raw.version,
+        author,
+        mutability,
+        identity: raw.identity,
+        tone: raw.tone,
+        verbosity: raw.verbosity,
+        language: raw.language,
+        initiative: raw.initiative,
+        behavior_boundary: raw.behavior_boundary,
+        tool_policy: raw.tool_policy,
+        voice: raw.voice,
+        evolution_note: raw.evolution_note,
+        active,
+        created_at_ms: raw.created_at_ms,
+    })
+}
+
+fn normalize_personality(draft: &PersonalityDraft) -> StorageResult<PersonalityDraft> {
+    Ok(PersonalityDraft {
+        identity: clean_text(&draft.identity, "人格身份", MAX_TEXT_CHARS)?,
+        tone: clean_text(&draft.tone, "语气", MAX_TEXT_CHARS)?,
+        verbosity: clean_text(&draft.verbosity, "详略", MAX_TEXT_CHARS)?,
+        language: clean_text(&draft.language, "语言", MAX_TEXT_CHARS)?,
+        initiative: clean_text(&draft.initiative, "主动程度", MAX_TEXT_CHARS)?,
+        behavior_boundary: clean_text(&draft.behavior_boundary, "行为边界", MAX_TEXT_CHARS)?,
+        tool_policy: clean_text(&draft.tool_policy, "工具偏好", MAX_TEXT_CHARS)?,
+        voice: clean_text(&draft.voice, "语音偏好", MAX_TEXT_CHARS)?,
+        evolution_note: clean_optional(&draft.evolution_note, "演化备注", MAX_TEXT_CHARS)?,
+        active: draft.active,
     })
 }
 
@@ -1325,6 +1789,7 @@ mod tests {
         let before_summary = summary.body.clone();
         let before_evidence = evidence.body.clone();
         db.attach_memory_source(
+            MemoryActor::System,
             &evidence.memory_id,
             &NewMemorySource {
                 source_id: "source_turn".into(),
@@ -1337,6 +1802,7 @@ mod tests {
         .unwrap();
         let link = db
             .link_memories(
+                MemoryActor::Agent,
                 &NewMemoryLink {
                     link_id: "link_1".into(),
                     from_memory_id: summary.memory_id.clone(),
@@ -1368,6 +1834,7 @@ mod tests {
         ));
         assert!(db
             .link_memories(
+                MemoryActor::Agent,
                 &NewMemoryLink {
                     link_id: "link_self".into(),
                     from_memory_id: summary.memory_id.clone(),
@@ -1448,6 +1915,390 @@ mod tests {
         );
         assert!(matches!(rejected, Err(StorageError::InvalidMemory(_))));
         assert!(db.load_memory("mem_long_turn").unwrap().is_none());
+    }
+
+    #[test]
+    fn agent_cannot_rewrite_user_preferences_or_personality() {
+        let mut db = open();
+        let preference = db
+            .create_memory(
+                MemoryActor::User,
+                &NewMemory {
+                    memory_id: "pref_user".into(),
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "zh-CN".into(),
+                    },
+                    scope: MemoryScope::default(),
+                    sources: vec![NewMemorySource {
+                        source_id: "src_user".into(),
+                        kind: MemorySourceKind::UserEntry,
+                        source_ref: "settings".into(),
+                        note: None,
+                    }],
+                },
+                40,
+            )
+            .unwrap();
+        let personality = db
+            .create_personality(
+                MemoryActor::User,
+                "persona_user",
+                &personality_draft("助手", true),
+                41,
+            )
+            .unwrap();
+        assert_eq!(personality.version, 1);
+        assert_eq!(personality.author, MemoryAuthor::User);
+        assert_eq!(personality.mutability, MemoryMutability::UserReadonly);
+
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::Agent,
+                &preference.memory_id,
+                &MemoryRevision {
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "en".into(),
+                    },
+                    scope: MemoryScope::default(),
+                },
+                42,
+            ),
+            Err(StorageError::OwnershipDenied {
+                actor: "agent",
+                record_class: "偏好",
+                author: "user",
+            })
+        ));
+        assert!(matches!(
+            db.delete_memory(MemoryActor::Agent, &preference.memory_id),
+            Err(StorageError::OwnershipDenied {
+                record_class: "偏好",
+                ..
+            })
+        ));
+        assert!(matches!(
+            db.attach_memory_source(
+                MemoryActor::Agent,
+                &preference.memory_id,
+                &NewMemorySource {
+                    source_id: "src_agent".into(),
+                    kind: MemorySourceKind::System,
+                    source_ref: "guess".into(),
+                    note: None,
+                },
+                43,
+            ),
+            Err(StorageError::OwnershipDenied { .. })
+        ));
+        let stored = db.load_memory(&preference.memory_id).unwrap().unwrap();
+        assert_eq!(stored.body, preference.body);
+        assert_eq!(stored.updated_at_ms, preference.updated_at_ms);
+        assert_eq!(
+            db.list_memory_sources(&preference.memory_id).unwrap().len(),
+            1
+        );
+
+        assert!(matches!(
+            db.create_personality(
+                MemoryActor::Agent,
+                "persona_agent",
+                &personality_draft("冒充", true),
+                44,
+            ),
+            Err(StorageError::OwnershipDenied {
+                actor: "agent",
+                record_class: "人格",
+                ..
+            })
+        ));
+        assert!(matches!(
+            db.revise_personality(
+                MemoryActor::Agent,
+                "persona_user",
+                &personality_draft("改写", true),
+                45,
+            ),
+            Err(StorageError::OwnershipDenied {
+                actor: "agent",
+                record_class: "人格",
+                author: "user",
+            })
+        ));
+        assert!(matches!(
+            db.delete_personality(MemoryActor::Agent, "persona_user"),
+            Err(StorageError::OwnershipDenied {
+                record_class: "人格",
+                ..
+            })
+        ));
+        let denied_history = db.list_personality_versions("persona_user").unwrap();
+        assert_eq!(denied_history.len(), 1);
+        assert_eq!(denied_history[0].identity, "助手");
+
+        let revised = db
+            .revise_personality(
+                MemoryActor::User,
+                "persona_user",
+                &personality_draft("研究员", true),
+                46,
+            )
+            .unwrap();
+        assert_eq!(revised.version, 2);
+        assert_eq!(revised.identity, "研究员");
+        let history = db.list_personality_versions("persona_user").unwrap();
+        assert_eq!(history[0].identity, "助手");
+        assert!(!history[0].active);
+        assert_eq!(history[1].identity, "研究员");
+        assert!(history[1].active);
+
+        let updated = db
+            .revise_memory(
+                MemoryActor::User,
+                &preference.memory_id,
+                &MemoryRevision {
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "zh-Hans".into(),
+                    },
+                    scope: MemoryScope::default(),
+                },
+                47,
+            )
+            .unwrap();
+        match updated.body {
+            MemoryBody::Preference { value, .. } => assert_eq!(value, "zh-Hans"),
+            other => panic!("preference body changed kind: {other:?}"),
+        }
+        assert!(db
+            .list_memories(&MemoryQuery::default())
+            .unwrap()
+            .iter()
+            .all(|record| record.memory_id != "persona_user"));
+        assert!(db
+            .list_personalities()
+            .unwrap()
+            .iter()
+            .any(|record| record.personality_id == "persona_user"));
+        assert!(db.connection.execute(
+            "INSERT INTO personality_records(
+                personality_id, version, author_kind, mutability,
+                identity, tone, verbosity, language, initiative,
+                behavior_boundary, tool_policy, voice, active, created_at_ms
+             ) VALUES ('persona_bad',1,'agent','agent_mutable','a','b','c','d','e','f','g','h',0,1)",
+            [],
+        ).is_err());
+    }
+
+    #[test]
+    fn agent_correction_does_not_rewrite_user_or_system_records() {
+        let mut db = open();
+        let user_preference = db
+            .create_memory(
+                MemoryActor::User,
+                &NewMemory {
+                    memory_id: "pref_keep".into(),
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "zh-CN".into(),
+                    },
+                    scope: MemoryScope::default(),
+                    sources: Vec::new(),
+                },
+                50,
+            )
+            .unwrap();
+        let profile = db
+            .create_memory(
+                MemoryActor::User,
+                &NewMemory {
+                    memory_id: "profile_user".into(),
+                    body: body_for(MemoryRecordKind::Profile),
+                    scope: MemoryScope::default(),
+                    sources: Vec::new(),
+                },
+                51,
+            )
+            .unwrap();
+        let rule = create_kind(&mut db, MemoryRecordKind::SafetyRule, MemoryActor::System);
+        let agent_preference = db
+            .create_memory(
+                MemoryActor::Agent,
+                &NewMemory {
+                    memory_id: "pref_agent".into(),
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "agent-note".into(),
+                    },
+                    scope: MemoryScope::default(),
+                    sources: Vec::new(),
+                },
+                52,
+            )
+            .unwrap();
+        let revised = db
+            .revise_memory(
+                MemoryActor::Agent,
+                &agent_preference.memory_id,
+                &MemoryRevision {
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "agent-revised".into(),
+                    },
+                    scope: MemoryScope::default(),
+                },
+                53,
+            )
+            .unwrap();
+        assert_eq!(revised.author, MemoryAuthor::Agent);
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::Agent,
+                &agent_preference.memory_id,
+                &MemoryRevision {
+                    body: body_for(MemoryRecordKind::Profile),
+                    scope: MemoryScope::default(),
+                },
+                54,
+            ),
+            Err(StorageError::InvalidMemory(_))
+        ));
+        assert!(matches!(
+            db.load_memory(&agent_preference.memory_id).unwrap().unwrap().body,
+            MemoryBody::Preference { ref value, .. } if value == "agent-revised"
+        ));
+
+        db.link_memories(
+            MemoryActor::Agent,
+            &NewMemoryLink {
+                link_id: "link_correction".into(),
+                from_memory_id: agent_preference.memory_id.clone(),
+                to_memory_id: user_preference.memory_id.clone(),
+                relation: MemoryRelation::Supersedes,
+            },
+            55,
+        )
+        .unwrap();
+        match db
+            .load_memory(&user_preference.memory_id)
+            .unwrap()
+            .unwrap()
+            .body
+        {
+            MemoryBody::Preference { value, .. } => assert_eq!(value, "zh-CN"),
+            other => panic!("user preference was rewritten: {other:?}"),
+        }
+        assert!(matches!(
+            db.link_memories(
+                MemoryActor::Agent,
+                &NewMemoryLink {
+                    link_id: "link_from_user".into(),
+                    from_memory_id: user_preference.memory_id,
+                    to_memory_id: agent_preference.memory_id,
+                    relation: MemoryRelation::Supersedes,
+                },
+                56,
+            ),
+            Err(StorageError::OwnershipDenied {
+                actor: "agent",
+                record_class: "偏好",
+                author: "user",
+            })
+        ));
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::Agent,
+                &profile.memory_id,
+                &MemoryRevision {
+                    body: body_for(MemoryRecordKind::Profile),
+                    scope: MemoryScope::default(),
+                },
+                57,
+            ),
+            Err(StorageError::OwnershipDenied {
+                record_class: "记忆",
+                author: "user",
+                ..
+            })
+        ));
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::Agent,
+                &rule.memory_id,
+                &MemoryRevision {
+                    body: body_for(MemoryRecordKind::SafetyRule),
+                    scope: MemoryScope::default(),
+                },
+                58,
+            ),
+            Err(StorageError::OwnershipDenied {
+                author: "system",
+                ..
+            })
+        ));
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::User,
+                &rule.memory_id,
+                &MemoryRevision {
+                    body: MemoryBody::SafetyRule {
+                        statement: "用户改写系统规则".into(),
+                    },
+                    scope: MemoryScope::default(),
+                },
+                59,
+            ),
+            Err(StorageError::OwnershipDenied { .. })
+        ));
+        let system_revision = db
+            .revise_memory(
+                MemoryActor::System,
+                &rule.memory_id,
+                &MemoryRevision {
+                    body: MemoryBody::SafetyRule {
+                        statement: "系统更新后的确认边界".into(),
+                    },
+                    scope: MemoryScope::default(),
+                },
+                60,
+            )
+            .unwrap();
+        assert_eq!(system_revision.author, MemoryAuthor::System);
+        assert!(matches!(
+            db.revise_memory(
+                MemoryActor::System,
+                "pref_keep",
+                &MemoryRevision {
+                    body: MemoryBody::Preference {
+                        key: "reply.language".into(),
+                        value: "system-override".into(),
+                    },
+                    scope: MemoryScope::default(),
+                },
+                61,
+            ),
+            Err(StorageError::OwnershipDenied {
+                actor: "system",
+                record_class: "偏好",
+                author: "user",
+            })
+        ));
+    }
+
+    fn personality_draft(identity: &str, active: bool) -> PersonalityDraft {
+        PersonalityDraft {
+            identity: identity.into(),
+            tone: "平静".into(),
+            verbosity: "简短".into(),
+            language: "zh-CN".into(),
+            initiative: "低".into(),
+            behavior_boundary: "先确认外部副作用".into(),
+            tool_policy: "只读默认可执行".into(),
+            voice: "不自动播报后台任务".into(),
+            evolution_note: None,
+            active,
+        }
     }
 
     fn layer_index(layer: MemoryLayer) -> usize {
