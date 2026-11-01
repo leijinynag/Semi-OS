@@ -85,6 +85,7 @@ test("validates direct text input without requiring audio metadata", () => {
       cwd: "/tmp",
       text: "查一下天气",
       action: "prompt",
+      memoryContext: "[preference]\n语气\n活泼",
     },
   };
   assert.doesNotThrow(() => parseVoiceRequest(request));
@@ -93,6 +94,9 @@ test("validates direct text input without requiring audio metadata", () => {
     assert.throws(() => parseVoiceRequest({ ...request, payload: { ...payload, text } }));
   }
   assert.throws(() => parseVoiceRequest({ ...request, payload: { ...payload, action: "bypass" } }));
+  assert.throws(() =>
+    parseVoiceRequest({ ...request, payload: { ...payload, memoryContext: 1 } as JsonValue }),
+  );
 });
 
 test("session disposal requires an explicit nonempty session identity", () => {

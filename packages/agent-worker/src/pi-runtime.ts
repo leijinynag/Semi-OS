@@ -35,6 +35,7 @@ import {
   ToolExecutionError,
   type ToolAttemptIdentity,
 } from "./tool-execution.ts";
+import { appendMemoryContext } from "./voice/system-prompt.ts";
 
 interface ToolPolicySubject {
   name: string;
@@ -324,6 +325,8 @@ export class PiAgentRuntime extends EventedAgentRuntime {
   #productSessionId?: string;
   #taskId?: string;
   #cwd?: string;
+  // 每轮由 Host 下发，before_agent_start 时追加到系统提示；不写入用户消息。
+  #memoryContext?: string;
   // sequence 是产品级工具尝试序号；成功、失败、拦截和 unknown 都必须占号。
   #sequence = 0;
   // Pi 只允许在 Session 创建时注册工具，运行中只能切换已注册工具的活跃状态。
@@ -462,6 +465,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     const session = this.#requireSession();
     // Pi 工具事件本身不携带 Semi-OS TaskRun ID，调用前需保存当前任务归属。
     this.#taskId = input.taskId;
+    this.#memoryContext = input.memoryContext;
     this.#operation = new AbortController();
     try {
       await session.prompt(input.text);
@@ -482,6 +486,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       return;
     }
     this.#taskId = input.taskId;
+    this.#memoryContext = input.memoryContext;
     await this.#requireSession().steer(input.text);
   }
 
@@ -492,6 +497,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       return;
     }
     this.#taskId = input.taskId;
+    this.#memoryContext = input.memoryContext;
     await this.#requireSession().followUp(input.text);
   }
 
@@ -564,6 +570,7 @@ export class PiAgentRuntime extends EventedAgentRuntime {
     this.#cwd = undefined;
     this.#nativeAttempts.clear();
     this.#registeredToolNames.clear();
+    this.#memoryContext = undefined;
   }
 
   #requireSession(): AgentSession {
@@ -665,8 +672,20 @@ export class PiAgentRuntime extends EventedAgentRuntime {
       name: "semi-os-native-tool-policy",
       // 这是 Runtime 基础设施，不应作为用户可选择的普通 Pi 扩展显示。
       hidden: true,
-      factory: (pi) => this.#registerNativeToolHooks(pi),
+      factory: (pi) => {
+        this.#registerMemoryContextHooks(pi);
+        this.#registerNativeToolHooks(pi);
+      },
     };
+  }
+
+  /** 每轮把 Host 记忆包接到 Pi 的系统提示，避免只改静态启动常量。 */
+  #registerMemoryContextHooks(pi: ExtensionAPI): void {
+    pi.on("before_agent_start", (event) => {
+      const context = this.#memoryContext?.trim();
+      if (!context) return;
+      return { systemPrompt: appendMemoryContext(event.systemPrompt, context) };
+    });
   }
 
   #registerNativeToolHooks(pi: ExtensionAPI): void {

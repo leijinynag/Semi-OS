@@ -4,10 +4,10 @@ import type { RequestId } from "@semi-os/shared";
 export type RequestPayloads = {
 "desktop.result": { "operationId": string; "result": { "status": "observed" | "verified" | "failure" | "needs_user" | "unknown"; "summary": string; "leaseGeneration": number; "observation"?: { "version": string; "observedAtMs": number; "bundleId": string; "processId": number; "windowId": string; "title": string; "elements": Array<{ "reference": string; "role": string; "label": string; "value"?: string; "valueTruncated": boolean; "focused": boolean; "enabled": boolean; "sensitive": boolean; "actions": Array<"press" | "set_value" | "focus" | "scroll">; "bounds"?: { "x": number; "y": number; "width": number; "height": number }; "depth": number }>; "truncated": boolean }; "evidence"?: string }; "permissions"?: { "accessibility": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "screenRecording": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "microphone": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "inputMonitoring": "granted" | "denied" | "not_determined" | "restricted" | "unavailable"; "takeoverDetection": boolean; "visualFallback": { "status": "available" | "needs_user" | "unavailable"; "reason": string }; "checkedAtMs": number } };
 "health.check": { "includeCapabilities"?: boolean } | null;
-"voice.turn.start": { "sessionId": string; "taskId": string; "cwd": string; "mimeType": string; "sampleRateHz"?: number; "action"?: "prompt" | "steer" | "follow_up" };
+"voice.turn.start": { "sessionId": string; "taskId": string; "cwd": string; "mimeType": string; "sampleRateHz"?: number; "action"?: "prompt" | "steer" | "follow_up"; "memoryContext"?: string };
 "voice.audio.append": { "sequence": number; "audioBase64": string };
 "voice.turn.commit": { "lastSequence": number };
-"voice.text.submit": { "sessionId": string; "taskId": string; "cwd": string; "text": string; "action"?: "prompt" | "steer" | "follow_up" };
+"voice.text.submit": { "sessionId": string; "taskId": string; "cwd": string; "text": string; "action"?: "prompt" | "steer" | "follow_up"; "memoryContext"?: string };
 "voice.interrupt": { "taskId": string; "mode": "pause" | "cancel" | "steer"; "text"?: string };
 "voice.session.dispose": { "sessionId": string };
 "workflow.control": { "workflowId": string; "sessionId": string; "action": "approved" | "rejected" | "needs_revision" | "pause" | "resume" | "resume_coordinator" | "cancel" | "observe" | "reconcile_application" | "answer_decision"; "requestId"?: string };

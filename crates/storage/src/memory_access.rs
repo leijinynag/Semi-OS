@@ -14,8 +14,9 @@
 //! 其他仓库的行，也没有“倒出整库”的接口；返回条数有上限，并且每条都带来源。
 //!
 //! 渐进包是给 Host 的有序材料，不是完整提示词组装。顺序固定为 Host 策略、
-//! 紧凑人格、L1、L0、再按阶段追加 L2–L5。普通轮次只用基础包：紧凑人格、L1、
-//! 当前项目身份和少量高置信 L2。超出调用方给出的 token 预算时截断，不能靠把
+//! 紧凑人格、用户偏好、L1、L0、再按阶段追加 L2–L5。普通轮次只用基础包：
+//! 紧凑人格、用户偏好、L1、当前项目身份和少量高置信 L2。偏好单独成槽，不占用
+//! `BASE_L2_LIMIT` 的少量名额。超出调用方给出的 token 预算时截断，不能靠把
 //! 预算调大来一次性装入全部 L2–L5。具体预算数字仍未决，所以预算由 Host 传入。
 //! 紧凑人格只读当前生效的 `personality_records`，组装过程不写人格、不改作者。
 
@@ -198,7 +199,7 @@ pub struct MemoryHit {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryPackStage {
-    /// 普通轮次：紧凑人格、L1、当前任务 L0、项目身份和少量高置信 L2。
+    /// 普通轮次：紧凑人格、用户偏好、L1、当前任务 L0、项目身份和少量高置信 L2。
     Base,
     /// 请求已经点名项目、应用或任务时，额外带上该范围的 L2/L3。
     Context,
@@ -215,6 +216,8 @@ pub enum MemoryPackStage {
 pub enum MemoryPackSlot {
     HostPolicy,
     CompactPersona,
+    /// 用户偏好独立成槽，不占用基础 L2 的少量高置信名额。
+    Preference,
     L1,
     L0,
     L2,
@@ -228,12 +231,13 @@ impl MemoryPackSlot {
         match self {
             Self::HostPolicy => 0,
             Self::CompactPersona => 1,
-            Self::L1 => 2,
-            Self::L0 => 3,
-            Self::L2 => 4,
-            Self::L3 => 5,
-            Self::L4 => 6,
-            Self::L5 => 7,
+            Self::Preference => 2,
+            Self::L1 => 3,
+            Self::L0 => 4,
+            Self::L2 => 5,
+            Self::L3 => 6,
+            Self::L4 => 7,
+            Self::L5 => 8,
         }
     }
 
@@ -241,6 +245,7 @@ impl MemoryPackSlot {
         match self {
             Self::HostPolicy => "host_policy",
             Self::CompactPersona => "compact_persona",
+            Self::Preference => "preference",
             Self::L1 => "L1",
             Self::L0 => "L0",
             Self::L2 => "L2",
@@ -720,6 +725,24 @@ impl Storage {
                 Vec::new(),
             ));
         }
+        // 用户明确写下的偏好必须每轮进入基础包。Agent 推断的偏好只保留高置信项，
+        // 低置信候选仍留在库中，但不能借 L2 名额或偏好槽影响普通对话。
+        let preferences = ranked_records(
+            records.iter().filter(|record| {
+                record.record_kind == MemoryRecordKind::Preference
+                    && !superseded.contains(&record.memory_id)
+                    && (record.author == MemoryAuthor::User
+                        || confidence_of(record, &admission) >= HIGH_CONFIDENCE)
+            }),
+            &admission,
+        );
+        push_records(
+            &mut entries,
+            &mut included,
+            MemoryPackSlot::Preference,
+            preferences,
+            self,
+        )?;
         push_records(
             &mut entries,
             &mut included,
@@ -779,6 +802,7 @@ impl Storage {
                 let extra = ranked_records(
                     records.iter().filter(|record| {
                         record.layer == MemoryLayer::L2
+                            && record.record_kind != MemoryRecordKind::Preference
                             && !included.contains(&record.memory_id)
                             && !superseded.contains(&record.memory_id)
                             && confidence_of(record, &admission) >= 40
@@ -1212,6 +1236,7 @@ fn push_search_hits(
         let matched = ranked_records(
             records.iter().filter(|record| {
                 record.layer == layer
+                    && record.record_kind != MemoryRecordKind::Preference
                     && !superseded.contains(&record.memory_id)
                     && text_matches(&render_body(&record.body), tokens)
             }),
@@ -1293,6 +1318,7 @@ fn high_confidence_l2<'a>(
     ranked_records(
         records.iter().filter(|record| {
             record.layer == MemoryLayer::L2
+                && record.record_kind != MemoryRecordKind::Preference
                 && !superseded.contains(&record.memory_id)
                 && confidence_of(record, admission) >= HIGH_CONFIDENCE
         }),
@@ -2698,8 +2724,20 @@ mod tests {
                     .is_some_and(|id| id.starts_with("pref_extra_"))
             })
             .count();
-        assert!(preference_count <= BASE_L2_LIMIT);
-        assert!(preference_count >= 1);
+        assert_eq!(
+            preference_count, 6,
+            "high-confidence preferences use their own slot instead of BASE_L2_LIMIT"
+        );
+        assert!(pack
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .memory_id
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with("pref_extra_"))
+            })
+            .all(|entry| entry.slot == MemoryPackSlot::Preference));
         assert!(pack
             .entries
             .iter()
@@ -2719,6 +2757,51 @@ mod tests {
             6,
             "deeper rows stay stored while the base pack leaves them out"
         );
+    }
+
+    #[test]
+    fn user_tone_preference_has_a_dedicated_slot_outside_l2_limit() {
+        let mut db = open();
+        seed_pack(&mut db);
+        db.create_memory(
+            MemoryActor::User,
+            &NewMemory {
+                memory_id: "pref_user_tone".into(),
+                body: preference("语气", "活泼"),
+                scope: scope("user_a", Some("repo_a"), None, None, None),
+                sources: vec![NewMemorySource {
+                    source_id: "src_pref_user_tone".into(),
+                    kind: MemorySourceKind::UserEntry,
+                    source_ref: "client-preference".into(),
+                    note: None,
+                }],
+            },
+            200,
+        )
+        .unwrap();
+
+        let pack = db
+            .load_memory_pack(&request(MemoryPackStage::Base, 100_000, "", None))
+            .unwrap();
+        let preferences: Vec<_> = pack
+            .entries
+            .iter()
+            .filter(|entry| entry.slot == MemoryPackSlot::Preference)
+            .collect();
+        assert_eq!(preferences.len(), 7);
+        assert!(preferences
+            .iter()
+            .any(|entry| entry.text.contains("语气") && entry.text.contains("活泼")));
+        assert!(pack
+            .entries
+            .iter()
+            .filter(|entry| entry.slot == MemoryPackSlot::L2)
+            .all(|entry| {
+                entry
+                    .memory_id
+                    .as_deref()
+                    .is_none_or(|id| !id.starts_with("pref_"))
+            }));
     }
 
     #[test]

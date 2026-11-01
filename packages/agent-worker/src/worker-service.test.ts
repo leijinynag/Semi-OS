@@ -244,6 +244,7 @@ test("routes interruption to the active voice loop before acknowledging it", asy
 
 class ClosedLoopRuntimeFixture extends EventedAgentRuntime {
   readonly prompts: string[] = [];
+  readonly contexts: Array<string | undefined> = [];
   readonly sessions: string[] = [];
 
   async startSession(input: Parameters<EventedAgentRuntime["startSession"]>[0]) {
@@ -251,8 +252,9 @@ class ClosedLoopRuntimeFixture extends EventedAgentRuntime {
     return { sessionId: input.sessionId };
   }
 
-  async prompt(input: { taskId: string; text: string }) {
+  async prompt(input: { taskId: string; text: string; memoryContext?: string }) {
     this.prompts.push(input.text);
+    this.contexts.push(input.memoryContext);
     this.publish({
       kind: "assistant.text_delta",
       text: "资料已经整理完成。这里是摘要。",
@@ -309,6 +311,7 @@ test("runs the fake audio acceptance loop through the worker boundary", async ()
       taskId: "task_voice",
       cwd: "/tmp/semi-os",
       mimeType: "audio/fake",
+      memoryContext: "[preference]\n语气\n活泼",
     }),
   );
   await service.handle(
@@ -331,6 +334,7 @@ test("runs the fake audio acceptance loop through the worker boundary", async ()
 
   assert.deepEqual(runtime.sessions, ["session_voice"]);
   assert.deepEqual(runtime.prompts, ["搜索并整理这份资料"]);
+  assert.deepEqual(runtime.contexts, ["[preference]\n语气\n活泼"]);
   assert.deepEqual(tts.spoken, ["资料已经整理完成。", "这里是摘要。"]);
   assert.ok(
     emitted.some(

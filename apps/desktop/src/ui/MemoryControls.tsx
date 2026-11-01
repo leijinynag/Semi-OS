@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DismissIcon } from "./icons";
+import { DeleteIcon, DismissIcon, RenameIcon } from "./icons";
 import {
   parseClientMemoryPage,
   projectMemoryPanel,
@@ -12,6 +12,10 @@ import {
 
 /**
  * 记忆与偏好对话框。成功与否只看 Host 返回的快照；人格区没有输入框。
+ *
+ * 添加表单是偏好 section 的一部分，默认收起；只有空偏好列表在首次加载时
+ * 自动展开一次，避免用户面对空白 section 找不到入口。编辑复用同一表单，
+ * 因此界面上始终只有一个偏好编辑区。
  */
 export function MemoryControls({ open, onClose }: { open: boolean; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -21,6 +25,7 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
   const [preferenceKey, setPreferenceKey] = useState("");
   const [preferenceValue, setPreferenceValue] = useState("");
   const [editingId, setEditingId] = useState<string>();
+  const [editorOpen, setEditorOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [reload, setReload] = useState(0);
 
@@ -33,13 +38,27 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
 
   useEffect(() => {
     if (!open) return;
+    setPage(undefined);
+    setStatus("loading");
+    setEditingId(undefined);
+    setPreferenceKey("");
+    setPreferenceValue("");
+    setEditorOpen(false);
+    setError("");
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
     setStatus("loading");
     setError("");
     invoke("list_client_memory")
       .then((payload) => {
         if (cancelled) return;
-        setPage(parseClientMemoryPage(payload));
+        const next = parseClientMemoryPage(payload);
+        setPage(next);
+        // 空列表才自动展开；有数据时保持 section 紧凑，由“添加”显式打开。
+        setEditorOpen(next.preferences.length === 0);
         setStatus("ready");
       })
       .catch((reason: unknown) => {
@@ -55,17 +74,28 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
 
   const view: MemoryPanelView | undefined = page ? projectMemoryPanel(page) : undefined;
 
+  function beginAdd() {
+    setEditingId(undefined);
+    setPreferenceKey("");
+    setPreferenceValue("");
+    setEditorOpen(true);
+    setError("");
+  }
+
   function beginEdit(memoryId: string, key: string, value: string) {
     setEditingId(memoryId);
     setPreferenceKey(key);
     setPreferenceValue(value);
+    setEditorOpen(true);
     setError("");
   }
 
-  function resetForm() {
+  function cancelEdit() {
     setEditingId(undefined);
     setPreferenceKey("");
     setPreferenceValue("");
+    setEditorOpen(false);
+    setError("");
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -86,7 +116,10 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
       );
       setPage(parseClientMemoryPage(payload));
       setStatus("ready");
-      resetForm();
+      setEditingId(undefined);
+      setPreferenceKey("");
+      setPreferenceValue("");
+      setEditorOpen(false);
     } catch (reason) {
       setError(readMemoryError(reason));
     } finally {
@@ -101,7 +134,7 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
       const payload = await invoke("delete_user_preference", { memoryId });
       setPage(parseClientMemoryPage(payload));
       setStatus("ready");
-      if (editingId === memoryId) resetForm();
+      if (editingId === memoryId) cancelEdit();
     } catch (reason) {
       setError(readMemoryError(reason));
     } finally {
@@ -117,7 +150,7 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
       aria-busy={status === "loading" || pending}
       onClose={onClose}
     >
-      <header>
+      <header className="memory-controls-header">
         <h2 id="memory-controls-title">记忆与偏好</h2>
         <button
           type="button"
@@ -152,39 +185,52 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
             </p>
           )}
           <p className="memory-persona">{view.personaLine}</p>
-          <section className="memory-section" aria-label="我的偏好">
-            <h3>我的偏好</h3>
-            <p className="memory-note">偏好只改这条记录，不会改人格。</p>
-            {view.preferenceEmpty ? (
-              <p className="memory-empty">{view.preferenceEmpty}</p>
+          <section className="memory-section" aria-labelledby="memory-preferences-heading">
+            <div className="memory-section-head">
+              <h3 id="memory-preferences-heading">偏好</h3>
+              {!editorOpen && (
+                <button
+                  type="button"
+                  className="memory-ghost-button"
+                  disabled={pending}
+                  onClick={beginAdd}
+                >
+                  添加
+                </button>
+              )}
+            </div>
+            {view.preferences.length === 0 ? (
+              !editorOpen && <p className="memory-empty">{view.preferenceEmpty}</p>
             ) : (
-              <ul className="memory-list">
+              <ul className="memory-list memory-preference-list">
                 {view.preferences.map((row) => (
-                  <li key={row.memoryId} className="memory-row">
-                    <div className="memory-row-copy">
-                      <strong>{row.key}</strong>
-                      <span>{row.value}</span>
-                      <small>
-                        {row.authorLabel} · {row.mutabilityLabel}
-                      </small>
+                  <li key={row.memoryId} className="memory-preference-row">
+                    <div className="memory-preference-copy">
+                      <span className="memory-preference-key">{row.key}</span>
+                      <span className="memory-preference-value">{row.value}</span>
+                      <small className="memory-preference-meta">{row.metaLabel}</small>
                     </div>
                     {row.editable && (
                       <div className="memory-row-actions">
                         <button
                           type="button"
-                          className="client-subtle-button"
+                          className="memory-icon-button"
+                          aria-label={`编辑偏好 ${row.key}`}
+                          title={`编辑偏好 ${row.key}`}
                           disabled={pending}
                           onClick={() => beginEdit(row.memoryId, row.key, row.value)}
                         >
-                          编辑
+                          <RenameIcon size={16} />
                         </button>
                         <button
                           type="button"
-                          className="client-subtle-button"
+                          className="memory-icon-button is-destructive"
+                          aria-label={`删除偏好 ${row.key}`}
+                          title={`删除偏好 ${row.key}`}
                           disabled={pending}
                           onClick={() => void remove(row.memoryId)}
                         >
-                          删除
+                          <DeleteIcon size={16} />
                         </button>
                       </div>
                     )}
@@ -192,55 +238,60 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
                 ))}
               </ul>
             )}
-            <form className="memory-form" onSubmit={(event) => void submit(event)}>
-              <label htmlFor="memory-preference-key">名称</label>
-              <input
-                id="memory-preference-key"
-                value={preferenceKey}
-                disabled={pending}
-                onChange={(event) => setPreferenceKey(event.target.value)}
-              />
-              <label htmlFor="memory-preference-value">内容</label>
-              <input
-                id="memory-preference-value"
-                value={preferenceValue}
-                disabled={pending}
-                onChange={(event) => setPreferenceValue(event.target.value)}
-              />
-              <div className="memory-form-actions">
-                {editingId && (
+            {editorOpen && (
+              <form className="memory-form" onSubmit={(event) => void submit(event)}>
+                <label className="memory-field" htmlFor="memory-preference-key">
+                  <span>名称</span>
+                  <input
+                    id="memory-preference-key"
+                    value={preferenceKey}
+                    disabled={pending}
+                    autoFocus
+                    onChange={(event) => setPreferenceKey(event.target.value)}
+                  />
+                </label>
+                <label className="memory-field" htmlFor="memory-preference-value">
+                  <span>内容</span>
+                  <input
+                    id="memory-preference-value"
+                    value={preferenceValue}
+                    disabled={pending}
+                    onChange={(event) => setPreferenceValue(event.target.value)}
+                  />
+                </label>
+                <div className="memory-form-actions">
                   <button
                     type="button"
-                    className="client-subtle-button"
+                    className="memory-ghost-button"
                     disabled={pending}
-                    onClick={resetForm}
+                    onClick={cancelEdit}
                   >
-                    取消编辑
+                    取消
                   </button>
-                )}
-                <button type="submit" className="client-dark-button" disabled={pending}>
-                  {editingId ? "保存修改" : "添加偏好"}
-                </button>
-              </div>
-            </form>
+                  <button type="submit" className="client-dark-button" disabled={pending}>
+                    {editingId ? "保存" : "添加"}
+                  </button>
+                </div>
+              </form>
+            )}
           </section>
-          <section className="memory-section" aria-label="记忆">
-            <h3>记忆</h3>
-            <p className="memory-note">只读。每条记录标明作者和谁可以改。</p>
+          <section className="memory-section" aria-labelledby="memory-records-heading">
+            <div className="memory-section-head">
+              <h3 id="memory-records-heading">记忆</h3>
+            </div>
+            <p className="memory-note">只读 · 含作者与权限</p>
             {view.memoryEmpty ? (
               <p className="memory-empty">{view.memoryEmpty}</p>
             ) : (
-              <ul className="memory-list">
+              <ul className="memory-list memory-record-list">
                 {view.memories.map((row) => (
-                  <li key={row.memoryId} className="memory-row">
-                    <div className="memory-row-copy">
-                      <strong>
+                  <li key={row.memoryId} className="memory-record-row">
+                    <div className="memory-record-copy">
+                      <span className="memory-record-kind">
                         {row.layer} · {row.recordKind}
-                      </strong>
-                      <span>{row.summary}</span>
-                      <small>
-                        {row.authorLabel} · {row.mutabilityLabel}
-                      </small>
+                      </span>
+                      <span className="memory-record-summary">{row.summary}</span>
+                      <small className="memory-record-meta">{row.metaLabel}</small>
                     </div>
                   </li>
                 ))}

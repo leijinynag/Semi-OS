@@ -16,6 +16,8 @@ export interface AgentSessionHandle {
 export interface AgentPrompt {
   taskId: string;
   text: string;
+  /** Host 的当轮基础记忆包；只能进入系统上下文，不能冒充用户文本。 */
+  memoryContext?: string;
 }
 // 引导类提示，用于初始化会话或设置上下文
 export interface AgentSteering extends AgentPrompt {}

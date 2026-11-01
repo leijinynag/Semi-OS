@@ -580,6 +580,7 @@ export class WorkerService {
           mimeType: payload.mimeType,
           sampleRateHz: payload.sampleRateHz,
           action: payload.action ?? "prompt",
+          memoryContext: payload.memoryContext,
           chunks: [],
           audio: new AudioInput(),
           nextSequence: 0,

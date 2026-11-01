@@ -1506,7 +1506,7 @@ fn get_assistant_visibility(app: tauri::AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn send_worker_request(
     state: State<'_, Arc<DesktopState>>,
-    envelope: Envelope,
+    mut envelope: Envelope,
 ) -> Result<(), String> {
     validate_envelope(&envelope).map_err(|error| error.message)?;
     if !matches!(envelope, Envelope::Request { .. }) {
@@ -1525,6 +1525,18 @@ fn send_worker_request(
             return Err("internal Host messages cannot be sent by a WebView".into());
         }
     }
+    // UI 只能表达用户输入；偏好和人格是否进入提示词由 Host 读取记忆库后决定。
+    // 读取失败时本轮直接失败，避免“偏好已经保存但对话继续忽略”的静默降级。
+    {
+        let guard = state
+            .storage
+            .lock()
+            .map_err(|_| "storage unavailable".to_owned())?;
+        let storage = guard.as_ref().ok_or("storage unavailable")?;
+        semi_os_host::memory_context::attach_turn_memory_context(storage, &mut envelope)
+            .map_err(|_| "本轮记忆读取失败，请检查本地存储".to_owned())?;
+    }
+    validate_envelope(&envelope).map_err(|error| error.message)?;
     state
         .worker
         .lock()
