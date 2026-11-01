@@ -1018,7 +1018,7 @@
   - 证据：`memory_access.rs` 的范围检索测试；`cargo test --locked -p semi-os-storage` 通过。
   - Commit 点：`feat(memory): add scoped retrieval`（`6297618`）
 - [x] **P5.5 添加渐进式记忆加载**
-  - `load_memory_pack` 供 Host 按固定顺序取用：Host 策略、紧凑人格、L1、当前任务 L0，再是项目身份和少量高置信 L2。普通轮次停在基础包。上下文、搜索、L4 和选中的 L5 只在对应阶段出现，超出 token 预算则截断。
+  - `load_memory_pack` 供 Host 按固定顺序取用：Host 策略、紧凑人格、用户偏好、L1、当前任务 L0，再是项目身份和少量高置信 L2。普通轮次停在基础包。上下文、搜索、L4 和选中的 L5 只在对应阶段出现，超出 token 预算则截断。
   - 证据：`memory_access.rs` 的基础包与截断测试；`cargo test --locked -p semi-os-storage` 通过。
   - Commit 点：`feat(memory): add progressive loading`（`6297618`）
 - [x] **P5.6 添加简单 Pi Session 压缩**
@@ -1026,7 +1026,7 @@
   - 证据：`crates/storage/src/memory_access.rs`；`cargo test --locked -p semi-os-storage` 与 `cargo clippy --locked -p semi-os-storage --all-targets -- -D warnings` 通过。
   - Commit 点：`feat(memory): add session compaction`（`62db3f7`）
 - [x] **P5.7 添加人格配置**
-  - `load_compact_persona` 只读当前生效的 `personality_records`，按身份、语气、详略、语言、主动程度、行为、工具和语音偏好组装紧凑文本。演化备注和记忆事实不进入人格槽。`load_memory_pack` 的顺序仍是 Host 策略、紧凑人格、L1、L0，再按阶段追加 L2–L5。普通轮次停在基础包，超出 token 预算则截断。组装不写人格，也不放宽作者约束。
+  - `load_compact_persona` 只读当前生效的 `personality_records`，按身份、语气、详略、语言、主动程度、行为、工具和语音偏好组装紧凑文本。演化备注和记忆事实不进入人格槽。`load_memory_pack` 的顺序仍是 Host 策略、紧凑人格、用户偏好、L1、L0，再按阶段追加 L2–L5。普通轮次停在基础包，超出 token 预算则截断。组装不写人格，也不放宽作者约束。
   - 证据：`memory_access.rs` 的人格组装测试；同上 cargo 命令通过。
   - Commit 点：`feat(personality): add runtime personality`（`62db3f7`）
 - [x] **P5.8 添加客户端记忆与偏好控制**
@@ -1039,6 +1039,20 @@
   - 证据：`crates/storage/tests/memory_acceptance.rs`；`cargo test --locked -p semi-os-storage --test memory_acceptance` 通过。
   - 本项不代表阶段 5 完成。
   - Commit 点：`test(memory): verify useful recall`（`3acb61f`）
+
+- [x] **P5.10 修复偏好只存不进对话**
+  - Host 在每个 `voice.turn.start` / `voice.text.submit` 转发前读取
+    `MemoryPackStage::Base`，把 Host 策略、紧凑人格、用户偏好和基础记忆压成
+    `memoryContext` 随协议下发；Worker 在 Pi `before_agent_start` 时把它追加到
+    系统提示，而不是只使用启动时的静态常量。用户偏好使用独立
+    `MemoryPackSlot::Preference`，不再与 `BASE_L2_LIMIT=4` 抢名额；偏好写入
+    仍不修改人格表或人格版本。
+  - 证据：`crates/host/src/memory_context.rs`、
+    `apps/desktop/src-tauri/src/main.rs`、`packages/agent-worker/src/pi-runtime.ts`；
+    `cargo test -p semi-os-storage`、`cargo test -p semi-os-host`、
+    `pnpm --filter @semi-os/protocol test`，以及 Agent Worker 的
+    `pi-runtime`、`worker-service`、`system-prompt`、`voice-loop` 测试通过。
+  - 本项只覆盖基础包注入；人格编辑、深层 L2–L5 按需加载不变。
 
 ## 阶段 6：统一交互与可观测性
 

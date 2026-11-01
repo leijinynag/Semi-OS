@@ -1013,8 +1013,9 @@ Recall is scoped by user, workspace, application, task and active Skill. The
 Agent never receives the entire memory store. Loading proceeds in small
 stages:
 
-1. **Base pack:** compact personality, L1 rules, active project identity and a
-   few high-confidence L2 memories.
+1. **Base pack:** compact personality, user-authored preferences, L1 rules,
+   active project identity and a few high-confidence L2 memories. Preferences
+   use their own slot so they cannot be displaced by the small L2 limit.
 2. **Context pack:** when the request mentions a known project, app, person,
    file or workflow, retrieve additional L2/L3 memories for that scope.
 3. **On-demand search:** expose `memory_search` for ambiguous or complex tasks;

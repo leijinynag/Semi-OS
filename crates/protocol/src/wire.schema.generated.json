@@ -1055,6 +1055,10 @@
         },
         "action": {
           "enum": ["prompt", "steer", "follow_up"]
+        },
+        "memoryContext": {
+          "type": "string",
+          "maxLength": 48000
         }
       }
     },
@@ -1079,6 +1083,10 @@
         },
         "action": {
           "enum": ["prompt", "steer", "follow_up"]
+        },
+        "memoryContext": {
+          "type": "string",
+          "maxLength": 48000
         }
       }
     },

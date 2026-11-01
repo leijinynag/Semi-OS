@@ -1436,16 +1436,42 @@ html[data-surface="assistant"] #root {
 
 .client-settings.memory-controls {
   width: min(560px, calc(100% - 40px));
+  padding: 0;
+  overflow-y: auto;
 }
 
-.memory-controls-body,
-.memory-section,
-.memory-form,
-.memory-list {
+/* 标题栏留在滚动容器顶部，正文滚动时关闭按钮始终可达。 */
+.memory-controls > header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+
+.memory-controls-body {
   display: flex;
-  flex-direction: column;
   min-width: 0;
-  gap: 8px;
+  flex-direction: column;
+  gap: 24px;
+  padding: 20px 24px 24px;
+}
+
+.memory-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .memory-controls h3,
@@ -1457,80 +1483,225 @@ html[data-surface="assistant"] #root {
 }
 
 .memory-controls h3 {
+  color: var(--client-ink);
   font-size: 14px;
   font-weight: 600;
 }
 
+/* 人格关系只做一行提示，不抢偏好和记忆两个 section 的层级。 */
+.memory-persona {
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--client-faint);
+  background: rgb(243 244 245 / 55%);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .memory-note,
 .memory-status,
-.memory-empty,
-.memory-persona,
-.memory-row small {
+.memory-empty {
   color: var(--client-muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.memory-section + .memory-section {
-  margin-top: 18px;
-}
-
-.memory-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.memory-row,
-.memory-empty {
-  min-height: 72px;
-}
-
-.memory-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 0;
-  border-top: 1px solid var(--client-line);
-}
-
-.memory-row-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.memory-row-copy strong,
-.memory-row-copy span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-row-actions,
-.memory-form-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 8px;
+.memory-status,
+.memory-error {
+  padding: 20px 24px;
 }
 
 .memory-error {
   display: flex;
-  min-height: 72px;
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
 }
 
+.memory-empty {
+  padding: 10px 0;
+  font-size: 13px;
+}
+
+.memory-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 自有偏好是一组可编辑记录，用浅底容器与只读记忆列表区分。 */
+.memory-preference-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgb(243 244 245 / 40%);
+}
+
+.memory-preference-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.memory-preference-row + .memory-preference-row {
+  border-top: 1px solid var(--border);
+}
+
+.memory-preference-copy,
+.memory-record-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.memory-preference-key {
+  color: var(--client-muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.memory-preference-value {
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.memory-preference-meta,
+.memory-record-meta {
+  color: var(--client-faint);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.memory-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: center;
+}
+
+.memory-icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--client-muted);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.memory-icon-button:hover {
+  color: var(--client-ink);
+  background: rgb(255 255 255 / 82%);
+}
+
+.memory-icon-button.is-destructive {
+  color: #b53645;
+}
+
+.memory-icon-button.is-destructive:hover {
+  color: #8f2735;
+  background: rgb(181 54 69 / 8%);
+}
+
+.memory-icon-button:disabled,
+.memory-ghost-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.memory-record-list {
+  border-top: 1px solid var(--border);
+}
+
+.memory-record-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-record-kind {
+  color: var(--client-faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.memory-record-summary {
+  color: var(--client-ink);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.memory-form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.memory-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-field > span {
+  color: var(--client-muted);
+  font-size: 12px;
+}
+
 .memory-form input {
-  height: 36px;
   width: 100%;
+  height: 36px;
   padding: 0 10px;
-  border: 1px solid var(--client-line);
+  border: 1px solid var(--border);
   border-radius: 8px;
+  color: var(--foreground);
   background: #fff;
+  font-size: 14px;
+}
+
+.memory-form input:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.memory-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.memory-ghost-button {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--client-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.memory-ghost-button:hover {
+  color: var(--client-ink);
+  background: var(--muted);
 }
 
 .client-mobile-settings {

@@ -60,17 +60,22 @@ test("memory page shows ownership and only edits consistent user preferences", (
   assert.equal(view.preferences[0]?.editable, true);
   assert.equal(view.preferences[0]?.authorLabel, "用户");
   assert.equal(view.preferences[0]?.mutabilityLabel, "用户可改，Agent 只读");
+  assert.equal(view.preferences[0]?.metaLabel, "你可改 · Agent 只读");
   assert.equal(view.preferences[0]?.ownership, "user / user_readonly");
   assert.equal(view.preferences[1]?.editable, false);
+  assert.equal(view.preferences[1]?.metaLabel, "用户 · Agent 可改");
   assert.equal(view.memories[0]?.editable, false);
   assert.equal(view.memories[0]?.authorLabel, "Agent");
   assert.equal(view.memories[0]?.mutabilityLabel, "Agent 可改");
+  assert.equal(view.memories[0]?.metaLabel, "Agent · Agent 可改");
   assert.equal(view.memories[0]?.ownership, "agent / agent_mutable");
   assert.equal(view.memories[1]?.authorLabel, "系统");
   assert.equal(view.memories[1]?.mutabilityLabel, "系统只读");
+  assert.equal(view.memories[1]?.metaLabel, "系统 · 系统只读");
   assert.equal(view.preferenceEmpty, null);
   assert.equal(view.memoryEmpty, null);
   assert.match(view.personaLine, /人格 persona_local · 版本 1 · 用户/);
+  assert.match(view.personaLine, /偏好不会写入人格$/);
   assert.equal(view.personaLine.includes("活泼"), false);
   assert.equal(view.personaLine.includes("pnpm"), false);
 });
@@ -79,9 +84,9 @@ test("empty memory page keeps preference and persona separate", () => {
   const view = projectMemoryPanel(
     parseClientMemoryPage({ preferences: [], memories: [], persona: null }),
   );
-  assert.equal(view.preferenceEmpty, "还没有自己的偏好。");
-  assert.equal(view.memoryEmpty, "还没有可查看的记忆。");
-  assert.equal(view.personaLine, "尚未配置人格。偏好不会写入人格。");
+  assert.equal(view.preferenceEmpty, "还没有偏好");
+  assert.equal(view.memoryEmpty, "还没有记忆");
+  assert.equal(view.personaLine, "尚未配置人格 · 偏好不会写入人格");
 });
 
 test("memory snapshots reject unknown ownership and duplicate rows", () => {

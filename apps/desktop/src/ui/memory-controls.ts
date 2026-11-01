@@ -72,6 +72,8 @@ export interface MemoryPanelPreference {
   value: string;
   authorLabel: string;
   mutabilityLabel: string;
+  /** 列表行展示的权限文案；自有偏好用第二人称，避免重复作者信息。 */
+  metaLabel: string;
   ownership: string;
   editable: boolean;
 }
@@ -83,6 +85,7 @@ export interface MemoryPanelMemory {
   summary: string;
   authorLabel: string;
   mutabilityLabel: string;
+  metaLabel: string;
   ownership: string;
   editable: false;
 }
@@ -123,6 +126,15 @@ export function preferenceEditable(row: ClientPreferenceRow): boolean {
   return row.author === "user" && row.mutability === "user_readonly";
 }
 
+function preferenceMetaLabel(row: ClientPreferenceRow): string {
+  if (preferenceEditable(row)) return "你可改 · Agent 只读";
+  return `${authorLabel(row.author)} · ${mutabilityLabel(row.mutability)}`;
+}
+
+function memoryMetaLabel(row: ClientMemoryRow): string {
+  return `${authorLabel(row.author)} · ${mutabilityLabel(row.mutability)}`;
+}
+
 export function projectMemoryPanel(page: ClientMemoryPage): MemoryPanelView {
   return {
     preferences: page.preferences.map((row) => ({
@@ -131,6 +143,7 @@ export function projectMemoryPanel(page: ClientMemoryPage): MemoryPanelView {
       value: row.value,
       authorLabel: authorLabel(row.author),
       mutabilityLabel: mutabilityLabel(row.mutability),
+      metaLabel: preferenceMetaLabel(row),
       ownership: `${row.author} / ${row.mutability}`,
       editable: preferenceEditable(row),
     })),
@@ -141,12 +154,13 @@ export function projectMemoryPanel(page: ClientMemoryPage): MemoryPanelView {
       summary: row.summary,
       authorLabel: authorLabel(row.author),
       mutabilityLabel: mutabilityLabel(row.mutability),
+      metaLabel: memoryMetaLabel(row),
       ownership: `${row.author} / ${row.mutability}`,
       editable: false,
     })),
     personaLine: personaLine(page.persona),
-    preferenceEmpty: page.preferences.length === 0 ? "还没有自己的偏好。" : null,
-    memoryEmpty: page.memories.length === 0 ? "还没有可查看的记忆。" : null,
+    preferenceEmpty: page.preferences.length === 0 ? "还没有偏好" : null,
+    memoryEmpty: page.memories.length === 0 ? "还没有记忆" : null,
   };
 }
 
@@ -181,8 +195,8 @@ export function parseClientMemoryPage(value: unknown): ClientMemoryPage {
 }
 
 function personaLine(persona: ClientPersonaFingerprint | null): string {
-  if (!persona) return "尚未配置人格。偏好不会写入人格。";
-  return `人格 ${persona.personalityId} · 版本 ${persona.version} · ${authorLabel(persona.author)} · ${mutabilityLabel(persona.mutability)}`;
+  if (!persona) return "尚未配置人格 · 偏好不会写入人格";
+  return `人格 ${persona.personalityId} · 版本 ${persona.version} · ${authorLabel(persona.author)} · ${mutabilityLabel(persona.mutability)} · 偏好不会写入人格`;
 }
 
 function cleanPreferenceText(value: string, label: string): string {

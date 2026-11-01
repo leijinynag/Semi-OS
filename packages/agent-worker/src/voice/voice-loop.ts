@@ -58,11 +58,16 @@ export interface VoiceTurn {
   mimeType: string;
   sampleRateHz?: number;
   action: VoiceTurnAction;
+  /** Host 在轮次开始前组装的偏好、人格和基础记忆材料。 */
+  memoryContext?: string;
   chunks: SttAudioChunk[];
   audio?: AsyncIterable<SttAudioChunk>;
 }
 
-export type TextTurn = Pick<VoiceTurn, "requestId" | "sessionId" | "taskId" | "cwd" | "action"> & {
+export type TextTurn = Pick<
+  VoiceTurn,
+  "requestId" | "sessionId" | "taskId" | "cwd" | "action" | "memoryContext"
+> & {
   text: string;
 };
 
@@ -219,7 +224,11 @@ export class VoiceLoop {
     this.#recordTiming("session.ready", sessionStarted);
     this.#emit({ kind: "voice.state", payload: { state: "thinking" } });
 
-    const input = { taskId: turn.taskId, text: transcript };
+    const input = {
+      taskId: turn.taskId,
+      text: transcript,
+      ...(turn.memoryContext ? { memoryContext: turn.memoryContext } : {}),
+    };
     this.#acceptRuntimeEvents = true;
     this.#modelStarted = performance.now();
     if (turn.action === "steer") {
@@ -286,7 +295,11 @@ export class VoiceLoop {
     try {
       await this.#ensureSession(input);
       controller.signal.throwIfAborted();
-      await this.#runtime.followUp({ taskId: input.taskId, text: input.text });
+      await this.#runtime.followUp({
+        taskId: input.taskId,
+        text: input.text,
+        ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
+      });
       if (controller.signal.aborted || failed) throw new Error("supervision interrupted");
     } finally {
       unsubscribe();

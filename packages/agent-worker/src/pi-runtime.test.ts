@@ -45,10 +45,19 @@ type ToolEndHandler = (event: {
   isError: boolean;
 }) => Promise<void>;
 
+type BeforeAgentStartHandler = (event: {
+  type: "before_agent_start";
+  messageType: "user";
+  prompt: string;
+  systemPrompt: string;
+  systemPromptOptions: Record<string, unknown>;
+}) => Promise<{ systemPrompt?: string } | undefined> | { systemPrompt?: string } | undefined;
+
 interface ExtensionFixture {
   resourceLoader: ResourceLoader;
   toolCall?: ToolCallHandler;
   toolEnd?: ToolEndHandler;
+  beforeAgentStart?: BeforeAgentStartHandler;
 }
 
 function createExtensionFixture(): ExtensionFixture {
@@ -70,6 +79,9 @@ async function loadExtension(
       }
       if (event === "tool_execution_end") {
         fixture.toolEnd = handler as ToolEndHandler;
+      }
+      if (event === "before_agent_start") {
+        fixture.beforeAgentStart = handler as BeforeAgentStartHandler;
       }
     },
   } as unknown as ExtensionAPI;
@@ -612,6 +624,46 @@ test("native Bash waits for the correlated Host decision and attempt IDs survive
     receipts.map((receipt) => receipt.policyDecision),
     ["approved", "rejected"],
   );
+});
+
+test("injects the Host memory context into the per-turn system prompt", async () => {
+  const fixture = createSessionFixture();
+  const extensionFixture = createExtensionFixture();
+  const basePrompt = "BASE SYSTEM PROMPT";
+  const runtime = new PiAgentRuntime({
+    systemPrompt: basePrompt,
+    createSession: (async () => ({
+      session: fixture.session,
+      extensionsResult: { extensions: [] },
+    })) as never,
+    createSessionManager: () => sessionManagerFixture(),
+    createResourceLoader: ({ extension }) => {
+      const factory = typeof extension === "function" ? extension : extension.factory;
+      void loadExtension(extensionFixture, factory);
+      return extensionFixture.resourceLoader;
+    },
+  });
+  await runtime.startSession({
+    sessionId: "session_product",
+    cwd: "/tmp/semi-os",
+    tools: [],
+  });
+  await runtime.prompt({
+    taskId: "task_1",
+    text: "你好",
+    memoryContext: "[preference]\n语气\n活泼",
+  });
+
+  const result = await extensionFixture.beforeAgentStart?.({
+    type: "before_agent_start",
+    messageType: "user",
+    prompt: "你好",
+    systemPrompt: basePrompt,
+    systemPromptOptions: {},
+  });
+  assert.ok(result?.systemPrompt?.startsWith(basePrompt));
+  assert.match(result?.systemPrompt ?? "", /语气\n活泼/);
+  assert.deepEqual(fixture.prompts, ["你好"], "memory context must not become user text");
 });
 
 test("verifies Pi native writes against the exact file postcondition", async () => {

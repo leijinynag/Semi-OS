@@ -33,6 +33,40 @@
     }
   },
   {
+    "name": "text submit carries Host memory context",
+    "valid": true,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "voice.text.submit",
+      "payload": {
+        "sessionId": "session_test",
+        "taskId": "task_test",
+        "cwd": "/tmp/semi-os",
+        "text": "你好",
+        "memoryContext": "[preference]\n语气\n活泼"
+      }
+    }
+  },
+  {
+    "name": "text submit rejects non-string memory context",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "voice.text.submit",
+      "payload": {
+        "sessionId": "session_test",
+        "taskId": "task_test",
+        "cwd": "/tmp/semi-os",
+        "text": "你好",
+        "memoryContext": 1
+      }
+    }
+  },
+  {
     "name": "missing text",
     "valid": false,
     "message": {

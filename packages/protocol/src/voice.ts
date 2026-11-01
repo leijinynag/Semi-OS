@@ -48,6 +48,8 @@ export interface VoiceTextSubmitPayload {
   cwd: string;
   text: string;
   action?: VoiceTurnAction;
+  /** Host 组装的当轮基础记忆包；不属于用户输入，Worker 只注入系统上下文。 */
+  memoryContext?: string;
 }
 
 /** 固定 PCM 契约：有符号 16 位小端、单声道；禁止播放器猜测采样率。 */
@@ -60,6 +62,8 @@ export interface VoiceTurnStartPayload {
   mimeType: string;
   sampleRateHz?: number;
   action?: VoiceTurnAction;
+  /** 录音开始前由 Host 注入，确保偏好与紧凑人格在实际轮次生效。 */
+  memoryContext?: string;
 }
 
 export interface VoiceAudioAppendPayload {
@@ -186,6 +190,13 @@ export function parseVoiceRequest(envelope: RequestEnvelope): VoiceRequestEnvelo
         action !== "follow_up"
       ) {
         throw new ProtocolValidationError("action is invalid", "invalid_payload");
+      }
+      const memoryContext = envelope.payload.memoryContext;
+      if (
+        memoryContext !== undefined &&
+        (typeof memoryContext !== "string" || memoryContext.length > 48_000)
+      ) {
+        throw new ProtocolValidationError("memoryContext is invalid", "invalid_payload");
       }
       break;
     }
