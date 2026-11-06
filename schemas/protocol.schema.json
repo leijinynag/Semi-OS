@@ -109,7 +109,10 @@
         "desktop.request",
         "desktop.result",
         "desktop.acknowledged",
-        "desktop.cancelled"
+        "desktop.cancelled",
+        "memory.candidate.submit",
+        "memory.candidate.result",
+        "memory.candidate.received"
       ]
     },
     "payload": {
@@ -205,6 +208,7 @@
       },
       "research.confirmation.required": { "$ref": "#/$defs/taskIdentity" },
       "research.persisted": { "$ref": "#/$defs/ack" },
+      "memory.candidate.result": { "$ref": "#/$defs/memoryCandidateResult" },
       "browser.login.open": {
         "type": "object",
         "properties": { "url": { "$ref": "#/$defs/nonempty" } }
@@ -267,6 +271,7 @@
       },
       "research.confirmation.announced": { "$ref": "#/$defs/accepted" },
       "research.acknowledged": { "$ref": "#/$defs/accepted" },
+      "memory.candidate.received": { "$ref": "#/$defs/accepted" },
       "browser.login.accepted": { "$ref": "#/$defs/accepted" },
       "browser.session.resume.accepted": { "$ref": "#/$defs/accepted" },
       "browser.session.snapshot": {
@@ -305,6 +310,7 @@
         "additionalProperties": false
       },
       "fixture.echo": { "type": "object" },
+      "memory.candidate.submit": { "$ref": "#/$defs/memoryCandidateSubmit" },
       "voice.state": {
         "type": "object",
         "required": ["state"],
@@ -1257,6 +1263,125 @@
         "tool": { "$ref": "#/$defs/nonempty" },
         "input": { "type": "object" }
       }
+    },
+    "memoryRecordKind": {
+      "type": "string",
+      "enum": [
+        "pi_session",
+        "recent_turn",
+        "current_plan",
+        "compaction_summary",
+        "safety_rule",
+        "tool_boundary",
+        "confirmation_policy",
+        "profile",
+        "preference",
+        "project_fact",
+        "application_habit",
+        "task_summary",
+        "decision",
+        "verified_outcome",
+        "message_evidence",
+        "task_event_evidence",
+        "artifact_evidence",
+        "receipt_evidence",
+        "workflow_candidate",
+        "skill_candidate"
+      ]
+    },
+    "memoryLayer": { "enum": ["L0", "L1", "L2", "L3", "L4", "L5"] },
+    "memoryScope": {
+      "type": "object",
+      "properties": {
+        "userId": { "type": ["string", "null"] },
+        "workspaceId": { "type": ["string", "null"] },
+        "applicationId": { "type": ["string", "null"] },
+        "taskId": { "type": ["string", "null"] },
+        "skillId": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "memoryBody": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": { "kind": { "$ref": "#/$defs/memoryRecordKind" } },
+      "additionalProperties": {}
+    },
+    "memorySourceKind": {
+      "type": "string",
+      "enum": [
+        "task",
+        "task_event",
+        "conversation_turn",
+        "artifact",
+        "receipt",
+        "user_entry",
+        "system",
+        "pi_session"
+      ]
+    },
+    "memorySourceRef": {
+      "type": "object",
+      "required": ["sourceRef"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/nonempty" },
+        "kind": { "$ref": "#/$defs/memorySourceKind" },
+        "sourceRef": { "$ref": "#/$defs/nonempty" },
+        "note": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "memoryConflictTarget": {
+      "type": "object",
+      "required": ["targetMemoryId"],
+      "properties": {
+        "targetMemoryId": { "$ref": "#/$defs/nonempty" },
+        "relation": { "enum": ["supersedes", "contradicts", "consolidates", "associates"] }
+      },
+      "additionalProperties": false
+    },
+    "memoryCandidateSubmit": {
+      "type": "object",
+      "required": [
+        "memoryId",
+        "recordKind",
+        "layer",
+        "content",
+        "scope",
+        "confidence",
+        "importance",
+        "sourceRefs",
+        "conflictTarget",
+        "origin"
+      ],
+      "properties": {
+        "operationId": { "$ref": "#/$defs/nonempty" },
+        "memoryId": { "$ref": "#/$defs/nonempty" },
+        "recordKind": { "$ref": "#/$defs/memoryRecordKind" },
+        "layer": { "$ref": "#/$defs/memoryLayer" },
+        "content": { "$ref": "#/$defs/memoryBody" },
+        "scope": { "$ref": "#/$defs/memoryScope" },
+        "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "importance": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "sourceRefs": { "type": "array", "items": { "$ref": "#/$defs/memorySourceRef" } },
+        "conflictTarget": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/memoryConflictTarget" }]
+        },
+        "origin": { "$ref": "#/$defs/nonempty" }
+      },
+      "additionalProperties": false
+    },
+    "memoryCandidateResult": {
+      "type": "object",
+      "required": ["operationId", "status"],
+      "properties": {
+        "operationId": { "$ref": "#/$defs/nonempty" },
+        "memoryId": { "$ref": "#/$defs/nonempty" },
+        "status": { "enum": ["accepted", "stored", "duplicate", "rejected"] },
+        "reason": { "type": ["string", "null"] },
+        "existingId": { "$ref": "#/$defs/nonempty" }
+      },
+      "additionalProperties": false
     },
     "nonempty": { "type": "string", "minLength": 1 },
     "sessionIdentity": {

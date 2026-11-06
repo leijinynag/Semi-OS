@@ -23,7 +23,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod desktop;
 mod node_program;
 mod router;
-use router::{handle_research_message, handle_workflow_message};
+use router::{handle_memory_candidate_message, handle_research_message, handle_workflow_message};
 mod text_input;
 mod voice_settings;
 use voice_settings::VoiceSettings;
@@ -1717,6 +1717,14 @@ fn start_worker(app: &tauri::AppHandle) -> Result<WorkerSupervisorHandle, String
                 let _ = message_app_handle.emit("host://research-error", error);
             }
             match handle_research_message(&message_app_handle, &message) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(error) => {
+                    let _ = message_app_handle.emit("host://research-error", error);
+                    return;
+                }
+            }
+            match handle_memory_candidate_message(&message_app_handle, &message) {
                 Ok(true) => return,
                 Ok(false) => {}
                 Err(error) => {

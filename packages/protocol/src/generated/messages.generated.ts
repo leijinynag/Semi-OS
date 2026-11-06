@@ -20,6 +20,7 @@ export type RequestPayloads = {
 "workflow.application.apply": { "sessionId": string; "workflowId": string; "applicationId": string };
 "research.confirmation.required": { "taskId": string };
 "research.persisted": { "operationId": string; "ok": boolean; "value"?: JsonValue; "error"?: string | null };
+"memory.candidate.result": { "operationId": string; "memoryId"?: string; "status": "accepted" | "stored" | "duplicate" | "rejected"; "reason"?: string | null; "existingId"?: string };
 "browser.login.open": { "url"?: string };
 "browser.session.resume": { "resumeId": string; "sessionId": string; "taskId": string; "mode": "takeover" | "claim" };
 "browser.session.inspect": { [key: string]: JsonValue };
@@ -43,6 +44,7 @@ export type ResponsePayloads = {
 "workflow.run.result": { "ok": true; "value": JsonValue } | { "ok": false; "error": string };
 "research.confirmation.announced": { "accepted": true };
 "research.acknowledged": { "accepted": true };
+"memory.candidate.received": { "accepted": true };
 "browser.login.accepted": { "accepted": true };
 "browser.session.resume.accepted": { "accepted": true };
 "browser.session.snapshot": null | { "resumeId": string; "sessionId": string; "taskId": string; "status": "waiting_user" | "resuming" | "resumed" | "failed" | "cancelled"; "message": string };
@@ -57,6 +59,7 @@ export type EventPayloads = {
 "desktop.cancelled": { "operationId": string; "taskId": string };
 "desktop.request": { "operationId": string; "taskId": string; "attemptId": string; "inputJson": string; "inputDigest": string; "approvalId"?: string; "action": { "kind": "observe" } | { "kind": "click" | "focus_window"; "version": string; "reference": string } | { "kind": "type"; "version": string; "reference": string; "text": string } | { "kind": "key"; "version": string; "reference": string; "key": "return" | "tab" | "escape" | "space" | "left" | "right" | "up" | "down" | "backspace" | "a" | "c" | "v" | "s" | "z"; "modifiers": Array<"command" | "shift" | "option" | "control"> } | { "kind": "scroll"; "version": string; "reference": string; "direction": "up" | "down" | "left" | "right"; "amount": number } | { "kind": "launch_app"; "bundleId": string } };
 "fixture.echo": { [key: string]: JsonValue };
+"memory.candidate.submit": { "operationId"?: string; "memoryId": string; "recordKind": "pi_session" | "recent_turn" | "current_plan" | "compaction_summary" | "safety_rule" | "tool_boundary" | "confirmation_policy" | "profile" | "preference" | "project_fact" | "application_habit" | "task_summary" | "decision" | "verified_outcome" | "message_evidence" | "task_event_evidence" | "artifact_evidence" | "receipt_evidence" | "workflow_candidate" | "skill_candidate"; "layer": "L0" | "L1" | "L2" | "L3" | "L4" | "L5"; "content": { "kind": "pi_session" | "recent_turn" | "current_plan" | "compaction_summary" | "safety_rule" | "tool_boundary" | "confirmation_policy" | "profile" | "preference" | "project_fact" | "application_habit" | "task_summary" | "decision" | "verified_outcome" | "message_evidence" | "task_event_evidence" | "artifact_evidence" | "receipt_evidence" | "workflow_candidate" | "skill_candidate"; [key: string]: JsonValue }; "scope": { "userId"?: string | null; "workspaceId"?: string | null; "applicationId"?: string | null; "taskId"?: string | null; "skillId"?: string | null }; "confidence": number; "importance": number; "sourceRefs": Array<{ "sourceId"?: string; "kind"?: "task" | "task_event" | "conversation_turn" | "artifact" | "receipt" | "user_entry" | "system" | "pi_session"; "sourceRef": string; "note"?: string | null }>; "conflictTarget": null | { "targetMemoryId": string; "relation"?: "supersedes" | "contradicts" | "consolidates" | "associates" }; "origin": string };
 "voice.state": { "state": "idle" | "listening" | "transcribing" | "thinking" | "speaking" | "interrupted" | "error" };
 "voice.transcript.partial": { "text": string };
 "voice.transcript.final": { "text": string };

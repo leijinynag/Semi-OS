@@ -236,3 +236,43 @@ pub(super) fn handle_research_message(
     result?;
     Ok(false)
 }
+
+/// Worker 提交记忆候选后，Host 校验并落库（或明确拒绝），再回执结果。
+pub(super) fn handle_memory_candidate_message(
+    app: &tauri::AppHandle,
+    message: &Envelope,
+) -> Result<bool, String> {
+    let Envelope::Event {
+        kind, request_id, ..
+    } = message
+    else {
+        return Ok(false);
+    };
+    if kind != "memory.candidate.submit" {
+        return Ok(false);
+    }
+    let state = app.state::<Arc<DesktopState>>();
+    let now = unix_time_ms();
+    let result = match state.storage.lock() {
+        Ok(mut guard) => match guard.as_mut() {
+            Some(storage) => {
+                semi_os_host::memory_candidate::apply_memory_candidate(storage, message, now)
+            }
+            None => {
+                semi_os_host::memory_candidate::unavailable_result(message, "storage unavailable")
+            }
+        },
+        Err(_) => {
+            semi_os_host::memory_candidate::unavailable_result(message, "storage unavailable")
+        }
+    };
+    let reply = semi_os_host::memory_candidate::result_envelope(request_id.clone(), &result);
+    state
+        .worker
+        .lock()
+        .map_err(|_| "worker unavailable")?
+        .as_ref()
+        .ok_or("worker unavailable")?
+        .send(reply)?;
+    Ok(true)
+}

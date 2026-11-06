@@ -199,5 +199,97 @@
         }
       }
     }
+  },
+  {
+    "name": "valid memory candidate submit",
+    "valid": true,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "memory.candidate.submit",
+      "payload": {
+        "operationId": "req_memory_pref_1",
+        "memoryId": "mem_pref_editor",
+        "recordKind": "preference",
+        "layer": "L2",
+        "content": { "kind": "preference", "key": "editor", "value": "use rustfmt" },
+        "scope": { "userId": "user_eval", "workspaceId": "repo_eval" },
+        "confidence": 90,
+        "importance": 70,
+        "sourceRefs": [{ "sourceRef": "turn_pref_1", "kind": "conversation_turn" }],
+        "conflictTarget": null,
+        "origin": "conversation_turn"
+      }
+    }
+  },
+  {
+    "name": "memory candidate submit missing origin",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "memory.candidate.submit",
+      "payload": {
+        "memoryId": "mem_pref_editor",
+        "recordKind": "preference",
+        "layer": "L2",
+        "content": { "kind": "preference", "key": "editor", "value": "use rustfmt" },
+        "scope": { "userId": "user_eval" },
+        "confidence": 90,
+        "importance": 70,
+        "sourceRefs": [{ "sourceRef": "turn_pref_1" }],
+        "conflictTarget": null
+      }
+    }
+  },
+  {
+    "name": "memory candidate submit invalid record kind",
+    "valid": false,
+    "message": {
+      "direction": "event",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "memory.candidate.submit",
+      "payload": {
+        "memoryId": "mem_pref_editor",
+        "recordKind": "future_kind",
+        "layer": "L2",
+        "content": { "kind": "preference", "key": "editor", "value": "use rustfmt" },
+        "scope": {},
+        "confidence": 90,
+        "importance": 70,
+        "sourceRefs": [{ "sourceRef": "turn_pref_1" }],
+        "conflictTarget": null,
+        "origin": "conversation_turn"
+      }
+    }
+  },
+  {
+    "name": "valid memory candidate stored result",
+    "valid": true,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "memory.candidate.result",
+      "payload": {
+        "operationId": "req_memory_pref_1",
+        "memoryId": "mem_pref_editor",
+        "status": "stored"
+      }
+    }
+  },
+  {
+    "name": "memory candidate result invalid status",
+    "valid": false,
+    "message": {
+      "direction": "request",
+      "protocolVersion": 1,
+      "requestId": "req_contract",
+      "kind": "memory.candidate.result",
+      "payload": { "operationId": "req_memory_pref_1", "status": "ok" }
+    }
   }
 ]

@@ -1054,6 +1054,20 @@
     `pi-runtime`、`worker-service`、`system-prompt`、`voice-loop` 测试通过。
   - 本项只覆盖基础包注入；人格编辑、深层 L2–L5 按需加载不变。
 
+- [x] **P5.11 定义记忆候选协议**
+  - 落地 Worker → Host `memory.candidate.submit`（10 个必填字段）与 Host → Worker
+    `memory.candidate.result`。Host 校验后映射到 `MemoryWriteCandidate` 并调用
+    `write_memory`；非法或缺字段返回明确 `rejected`，不静默吞。用户记录不会被
+    Agent 候选覆盖。第一版用确定性结构化输入提交 L2 preference / project_fact，
+    不改 Pi Agent Loop，不引入额外 LLM。
+  - 证据：`crates/host/src/memory_candidate.rs`、
+    `packages/agent-worker/src/memory-candidate.ts`、
+    `schemas/protocol.schema.json`；
+    `cargo test -p semi-os-host memory_candidate`、
+    `cargo test -p semi-os-protocol`、
+    Agent Worker 的 `memory-candidate` 测试。
+  - Commit 点：`feat(memory): define candidate protocol`
+
 ## 阶段 6：统一交互与可观测性
 
 依赖：阶段 4A、4B、4C 至少各完成一条代表性工作流。

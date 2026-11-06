@@ -22,6 +22,11 @@ import { AutomaticBrowserBackend } from "./browser/browser-selector.ts";
 import { createBrowserTools, type BrowserUserWait } from "./browser/browser-tools.ts";
 import { BrowserHandoff } from "./browser/browser-handoff.ts";
 import { ResearchHost } from "./research-host.ts";
+import {
+  MemoryCandidateHost,
+  buildStructuredMemoryCandidate,
+  type StructuredMemoryInput,
+} from "./memory-candidate.ts";
 import { DesktopHost } from "./desktop/desktop-host.ts";
 import { createDesktopTools } from "./desktop/desktop-tools.ts";
 import { LarkService } from "./lark/lark-service.ts";
@@ -112,6 +117,7 @@ export class WorkerService {
   #activeTaskId?: string;
   #activeSessionId?: string;
   readonly #researchHost: ResearchHost;
+  readonly #memoryCandidates: MemoryCandidateHost;
   readonly #desktopHost: DesktopHost;
   readonly #lark: LarkService;
   readonly #browser: BrowserBackend;
@@ -131,6 +137,7 @@ export class WorkerService {
     this.#environment = options.environment ?? process.env;
     this.#emitEnvelope = options.emit;
     this.#researchHost = new ResearchHost(options.emit);
+    this.#memoryCandidates = new MemoryCandidateHost(options.emit);
     this.#desktopHost = new DesktopHost(options.emit);
     this.#lark = new LarkService({ environment: this.#environment });
     this.#workflowHost = new WorkflowHost(options.emit);
@@ -424,6 +431,10 @@ export class WorkerService {
         this.#researchHost.acknowledge(request.payload);
         return response(request, "research.acknowledged", { accepted: true });
       }
+      case "memory.candidate.result": {
+        this.#memoryCandidates.receiveResult(request.payload);
+        return response(request, "memory.candidate.received", { accepted: true });
+      }
       case "desktop.result": {
         this.#desktopHost.receive(request.payload);
         return response(request, "desktop.acknowledged", {
@@ -680,6 +691,14 @@ export class WorkerService {
     });
   }
 
+  /**
+   * 确定性测试钩子：根据结构化输入提交一条 L2 preference / project_fact 候选。
+   * 不经过 Pi Agent Loop，也不等待或打断首句语音。
+   */
+  submitStructuredMemoryCandidate(input: StructuredMemoryInput, signal: AbortSignal) {
+    return this.#memoryCandidates.submit(buildStructuredMemoryCandidate(input), signal);
+  }
+
   async dispose(): Promise<void> {
     this.#disposed = true;
     this.#browserHandoff.cancel();
@@ -697,6 +716,7 @@ export class WorkerService {
     await this.#collaboration.dispose();
     await Promise.allSettled(this.#operations);
     this.#researchHost.dispose();
+    this.#memoryCandidates.dispose();
     this.#desktopHost.dispose();
     this.#workflowHost.dispose();
     await this.#browser.dispose();

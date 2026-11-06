@@ -185,6 +185,18 @@ pub struct PayloadTaskIdentity {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PayloadMemoryCandidateResult {
+    pub operation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_id: Option<String>,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RequestBrowserLoginOpenPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -237,6 +249,8 @@ pub enum RequestMessage {
     ResearchConfirmationRequired(PayloadTaskIdentity),
     #[serde(rename = "research.persisted")]
     ResearchPersisted(PayloadAck),
+    #[serde(rename = "memory.candidate.result")]
+    MemoryCandidateResult(PayloadMemoryCandidateResult),
     #[serde(rename = "browser.login.open")]
     BrowserLoginOpen(RequestBrowserLoginOpenPayload),
     #[serde(rename = "browser.session.resume")]
@@ -357,6 +371,8 @@ pub enum ResponseMessage {
     ResearchConfirmationAnnounced(PayloadAccepted),
     #[serde(rename = "research.acknowledged")]
     ResearchAcknowledged(PayloadAccepted),
+    #[serde(rename = "memory.candidate.received")]
+    MemoryCandidateReceived(PayloadAccepted),
     #[serde(rename = "browser.login.accepted")]
     BrowserLoginAccepted(PayloadAccepted),
     #[serde(rename = "browser.session.resume.accepted")]
@@ -439,6 +455,65 @@ pub struct EventDesktopRequestPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
     pub action: PayloadDesktopAction,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadMemoryBody {
+    pub kind: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadMemoryScope {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<Option<String>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadMemorySourceRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub source_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Option<String>>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadMemoryConflictTarget {
+    pub target_memory_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PayloadMemoryCandidateSubmitConflictTarget {
+    Variant0(serde_json::Value),
+    Variant1(PayloadMemoryConflictTarget),
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadMemoryCandidateSubmit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    pub memory_id: String,
+    pub record_kind: String,
+    pub layer: String,
+    pub content: PayloadMemoryBody,
+    pub scope: PayloadMemoryScope,
+    pub confidence: u64,
+    pub importance: u64,
+    pub source_refs: Vec<PayloadMemorySourceRef>,
+    pub conflict_target: PayloadMemoryCandidateSubmitConflictTarget,
+    pub origin: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1157,6 +1232,8 @@ pub enum EventMessage {
     DesktopRequest(EventDesktopRequestPayload),
     #[serde(rename = "fixture.echo")]
     FixtureEcho(std::collections::BTreeMap<String, serde_json::Value>),
+    #[serde(rename = "memory.candidate.submit")]
+    MemoryCandidateSubmit(PayloadMemoryCandidateSubmit),
     #[serde(rename = "voice.state")]
     VoiceState(EventVoiceStatePayload),
     #[serde(rename = "voice.transcript.partial")]
