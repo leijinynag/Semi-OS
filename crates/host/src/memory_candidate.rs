@@ -6,8 +6,8 @@
 
 use semi_os_protocol::{Envelope, EnvelopeContext, RequestId};
 use semi_os_storage::{
-    MemoryActor, MemoryBody, MemoryLayer, MemoryRecordKind, MemoryRelation, MemoryScope,
-    MemorySourceKind, MemoryWriteCandidate, MemoryWriteConflict, MemoryWriteOutcome,
+    MemoryActor, MemoryAuthor, MemoryBody, MemoryLayer, MemoryRecordKind, MemoryRelation,
+    MemoryScope, MemorySourceKind, MemoryWriteCandidate, MemoryWriteConflict, MemoryWriteOutcome,
     NewMemorySource, Storage, StorageError,
 };
 use serde::Serialize;
@@ -104,6 +104,29 @@ pub fn result_envelope(request_id: RequestId, result: &MemoryCandidateResult) ->
     }
 }
 
+/// Desktop 路由挂载的入口：识别 submit、落库或拒绝，并组装回执信封。
+/// 非候选消息返回 `None`，让后续 router 继续处理。
+pub fn dispatch_memory_candidate(
+    storage: Option<&mut Storage>,
+    message: &Envelope,
+    now: i64,
+) -> Option<Envelope> {
+    let Envelope::Event {
+        kind, request_id, ..
+    } = message
+    else {
+        return None;
+    };
+    if kind != "memory.candidate.submit" {
+        return None;
+    }
+    let result = match storage {
+        Some(storage) => apply_memory_candidate(storage, message, now),
+        None => unavailable_result(message, "storage unavailable"),
+    };
+    Some(result_envelope(request_id.clone(), &result))
+}
+
 fn persist_candidate(
     storage: &mut Storage,
     payload: &Value,
@@ -115,6 +138,12 @@ fn persist_candidate(
     let memory_id = required_string(payload, "memoryId")?;
     let record_kind = required_enum::<MemoryRecordKind>(payload, "recordKind")?;
     let layer = required_enum::<MemoryLayer>(payload, "layer")?;
+    if !matches!(
+        record_kind,
+        MemoryRecordKind::Preference | MemoryRecordKind::ProjectFact
+    ) {
+        return Err(format!("unsupported_record_kind:{}", record_kind.as_str()));
+    }
     if layer != record_kind.layer() {
         return Err(format!(
             "layer_mismatch: {} requires {}",
@@ -138,6 +167,9 @@ fn persist_candidate(
         return Err("empty_source_refs".into());
     }
     let origin = required_string(payload, "origin")?;
+    if impersonates_user_origin(&origin) {
+        return Err("impersonated_user_entry".into());
+    }
     let sources = map_sources(&memory_id, source_refs, &origin)?;
     let conflict = parse_conflict(payload)?;
 
@@ -150,6 +182,17 @@ fn persist_candidate(
         importance,
         conflict,
     };
+    if let Some(existing) = storage
+        .load_memory(&candidate.memory_id)
+        .map_err(map_storage_error)?
+    {
+        if existing.author == MemoryAuthor::Agent && existing.body == candidate.body {
+            return Ok(MemoryWriteOutcome::Duplicate {
+                existing_id: existing.memory_id,
+            });
+        }
+        return Err("记忆编号已存在，自动写入不能覆盖已有行".into());
+    }
     storage
         .write_memory(MemoryActor::Agent, &candidate, now)
         .map_err(map_storage_error)
@@ -186,8 +229,6 @@ fn map_sources(
     refs: &[Value],
     origin: &str,
 ) -> Result<Vec<NewMemorySource>, String> {
-    let default_kind = serde_json::from_value::<MemorySourceKind>(Value::String(origin.to_owned()))
-        .unwrap_or(MemorySourceKind::ConversationTurn);
     refs.iter()
         .enumerate()
         .map(|(index, item)| {
@@ -214,7 +255,10 @@ fn map_sources(
                         .map_err(|_| "invalid_enum:sourceRefs.kind".to_string())
                 })
                 .transpose()?
-                .unwrap_or(default_kind);
+                .unwrap_or(MemorySourceKind::ConversationTurn);
+            if kind == MemorySourceKind::UserEntry {
+                return Err("impersonated_user_entry".into());
+            }
             let note = source_note(item.get("note").and_then(Value::as_str), origin);
             Ok(NewMemorySource {
                 source_id,
@@ -224,6 +268,11 @@ fn map_sources(
             })
         })
         .collect()
+}
+
+fn impersonates_user_origin(origin: &str) -> bool {
+    let normalized = origin.trim().to_ascii_lowercase().replace('-', "_");
+    matches!(normalized.as_str(), "user_entry" | "user" | "userentry")
 }
 
 fn source_note(note: Option<&str>, origin: &str) -> Option<String> {
@@ -535,6 +584,148 @@ mod tests {
                 value: "sans".into(),
             }
         );
+    }
+
+    #[test]
+    fn rejects_non_whitelisted_kinds_including_skill_candidates() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        for (record_kind, layer, content) in [
+            (
+                "skill_candidate",
+                "L5",
+                json!({ "kind": "skill_candidate", "name": "search", "summary": "自动晋升" }),
+            ),
+            (
+                "workflow_candidate",
+                "L5",
+                json!({ "kind": "workflow_candidate", "name": "review", "summary": "候选工作流" }),
+            ),
+            (
+                "task_summary",
+                "L3",
+                json!({ "kind": "task_summary", "summary": "本不应写入" }),
+            ),
+        ] {
+            let mut payload = preference_payload();
+            payload["memoryId"] = json!(format!("mem_{record_kind}"));
+            payload["recordKind"] = json!(record_kind);
+            payload["layer"] = json!(layer);
+            payload["content"] = content;
+            let result = apply_memory_candidate(&mut storage, &event(payload), 18);
+            assert_eq!(result.status, MemoryCandidateStatus::Rejected);
+            let expected = format!("unsupported_record_kind:{record_kind}");
+            assert_eq!(result.reason.as_deref(), Some(expected.as_str()));
+            assert!(storage
+                .load_memory(&format!("mem_{record_kind}"))
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn rejects_origin_impersonating_user_entry_without_writing() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        for origin in ["user_entry", "user", "User-Entry"] {
+            let mut payload = preference_payload();
+            payload["memoryId"] = json!(format!("mem_impersonate_{origin}"));
+            payload["origin"] = json!(origin);
+            let result = apply_memory_candidate(&mut storage, &event(payload), 19);
+            assert_eq!(result.status, MemoryCandidateStatus::Rejected);
+            assert_eq!(result.reason.as_deref(), Some("impersonated_user_entry"));
+            assert!(storage
+                .load_memory(&format!("mem_impersonate_{origin}"))
+                .unwrap()
+                .is_none());
+        }
+
+        let mut via_source = preference_payload();
+        via_source["memoryId"] = json!("mem_impersonate_source");
+        via_source["sourceRefs"] = json!([{
+            "sourceRef": "client-preference",
+            "kind": "user_entry"
+        }]);
+        let result = apply_memory_candidate(&mut storage, &event(via_source), 19);
+        assert_eq!(result.status, MemoryCandidateStatus::Rejected);
+        assert_eq!(result.reason.as_deref(), Some("impersonated_user_entry"));
+        assert!(storage
+            .load_memory("mem_impersonate_source")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn replay_of_stored_memory_id_returns_existing_receipt() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        let payload = preference_payload();
+        let first = apply_memory_candidate(&mut storage, &event(payload.clone()), 23);
+        assert_eq!(first.status, MemoryCandidateStatus::Stored);
+        let replay = apply_memory_candidate(&mut storage, &event(payload), 24);
+        assert_eq!(replay.status, MemoryCandidateStatus::Duplicate);
+        assert_eq!(replay.memory_id.as_deref(), Some("mem_pref_editor"));
+        assert_eq!(replay.existing_id.as_deref(), Some("mem_pref_editor"));
+        assert!(storage.load_memory("mem_pref_editor").unwrap().is_some());
+    }
+
+    #[test]
+    fn dispatch_mount_stores_valid_submit_and_rejects_invalid() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        let submit = event(preference_payload());
+        let reply = dispatch_memory_candidate(Some(&mut storage), &submit, 30)
+            .expect("desktop router should mount memory.candidate.submit");
+        let Envelope::Request {
+            kind,
+            payload,
+            request_id,
+            ..
+        } = reply
+        else {
+            panic!("dispatch should return a Host-to-Worker result request");
+        };
+        assert_eq!(kind, "memory.candidate.result");
+        assert_eq!(request_id.0, "req_memory_candidate");
+        assert_eq!(payload["status"], "stored");
+        assert_eq!(payload["memoryId"], "mem_pref_editor");
+        assert!(storage.load_memory("mem_pref_editor").unwrap().is_some());
+        semi_os_protocol::validate_envelope(&Envelope::Request {
+            protocol_version: 1,
+            request_id: request_id.clone(),
+            kind,
+            payload: payload.clone(),
+            context: EnvelopeContext {
+                task_id: None,
+                task_run_id: None,
+                trace_id: None,
+            },
+        })
+        .expect("mounted result should be protocol-valid");
+
+        let mut invalid = preference_payload();
+        invalid["memoryId"] = json!("mem_skill_denied");
+        invalid["recordKind"] = json!("skill_candidate");
+        invalid["layer"] = json!("L5");
+        invalid["content"] =
+            json!({ "kind": "skill_candidate", "name": "search", "summary": "自动晋升" });
+        let reply = dispatch_memory_candidate(Some(&mut storage), &event(invalid), 31)
+            .expect("invalid submit still goes through the mounted router");
+        let Envelope::Request { payload, .. } = reply else {
+            panic!("dispatch should return a result request");
+        };
+        assert_eq!(payload["status"], "rejected");
+        assert_eq!(payload["reason"], "unsupported_record_kind:skill_candidate");
+        assert!(storage.load_memory("mem_skill_denied").unwrap().is_none());
+
+        let unrelated = Envelope::Event {
+            protocol_version: 1,
+            request_id: RequestId("req_other".into()),
+            kind: "workflow.request".into(),
+            payload: json!({"operation": "list"}),
+            context: EnvelopeContext {
+                task_id: None,
+                task_run_id: None,
+                trace_id: None,
+            },
+        };
+        assert!(dispatch_memory_candidate(Some(&mut storage), &unrelated, 32).is_none());
     }
 
     #[test]

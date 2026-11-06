@@ -1363,7 +1363,11 @@
         "scope": { "$ref": "#/$defs/memoryScope" },
         "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
         "importance": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "sourceRefs": { "type": "array", "items": { "$ref": "#/$defs/memorySourceRef" } },
+        "sourceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/memorySourceRef" }
+        },
         "conflictTarget": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/memoryConflictTarget" }]
         },

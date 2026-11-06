@@ -49,7 +49,7 @@ Worker 通过事件 `memory.candidate.submit` 向 Host 提交结构化候选；H
 - `importance` ← importance（0–100）
 - `sourceRefs` ← source_refs（数组，元素至少包含 `sourceRef`）
 - `conflictTarget` ← conflict_target（对象或 `null`，字段本身必填）
-- `origin` ← origin（必填；存储层无独立列，写入来源 `note`，形如 `origin=...`，并在未指定 `kind` 时尝试映射为 `MemorySourceKind`）
+- `origin` ← origin（必填；只写入来源 `note`，形如 `origin=...`，不映射为 `MemorySourceKind`。`user_entry` / `user` 等冒充用户来源的值会被拒绝。本刀 Host 只接受 L2 `preference` / `project_fact`）
 
 可选 `operationId` 用于关联回执；缺省时 Host 使用信封 `requestId`。
 回执 `status` 为 `accepted` / `stored` / `duplicate` / `rejected`，拒绝时带 `reason`。
