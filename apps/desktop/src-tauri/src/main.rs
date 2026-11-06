@@ -838,6 +838,22 @@ fn handle_voice_message(app: &tauri::AppHandle, message: &Envelope) -> Result<()
     if update.persist {
         save_voice_conversation(&state, &update.conversation)?;
     }
+    // 语音转写完成后写入纠正，不挡 STT/首句合成；下一轮注入会用上新记录。
+    if kind == "voice.transcript.final" {
+        if let Some(text) = payload.get("text").and_then(Value::as_str) {
+            let now = unix_time_ms();
+            if let Ok(mut guard) = state.storage.lock() {
+                if let Some(storage) = guard.as_mut() {
+                    let _ = semi_os_host::memory_correction::apply_explicit_correction(
+                        storage,
+                        text,
+                        &format!("turn_{}", request_id.0),
+                        now,
+                    );
+                }
+            }
+        }
+    }
     if update.refresh_sessions {
         let sessions = state
             .storage
@@ -1525,14 +1541,17 @@ fn send_worker_request(
             return Err("internal Host messages cannot be sent by a WebView".into());
         }
     }
-    // UI 只能表达用户输入；偏好和人格是否进入提示词由 Host 读取记忆库后决定。
-    // 读取失败时本轮直接失败，避免“偏好已经保存但对话继续忽略”的静默降级。
+    // UI 只能表达用户输入；明确纠正先按用户身份落库，再由 Host 读取记忆包。
+    // 读写失败时本轮直接失败，避免“偏好已经保存但对话继续忽略”的静默降级。
     {
-        let guard = state
+        let mut guard = state
             .storage
             .lock()
             .map_err(|_| "storage unavailable".to_owned())?;
-        let storage = guard.as_ref().ok_or("storage unavailable")?;
+        let storage = guard.as_mut().ok_or("storage unavailable")?;
+        let now = unix_time_ms();
+        semi_os_host::memory_correction::apply_turn_explicit_corrections(storage, &envelope, now)
+            .map_err(|_| "本轮记忆写入失败，请检查本地存储".to_owned())?;
         semi_os_host::memory_context::attach_turn_memory_context(storage, &mut envelope)
             .map_err(|_| "本轮记忆读取失败，请检查本地存储".to_owned())?;
     }

@@ -1068,6 +1068,20 @@
     Agent Worker 的 `memory-candidate` 测试。
   - Commit 点：`feat(memory): define candidate protocol`
 
+- [x] **P5.12 用户纠正闭环**
+  - Host 用确定性规则识别「以后」「记住」「不是 X，是 Y」等明确纠正，以用户
+    作者调用 `write_memory` 新增记录，旧行保留，并用 supersedes / contradicts
+    指向被替换版本。`load_memory_pack` 优先有效偏好，同键冲突不会同时进入
+    提示词。接线在 `voice.text.submit`（本轮即可注入）和
+    `voice.transcript.final`（不挡首句语音，下一轮生效）。不改 Pi loop，
+    不另起 LLM。客户端完整纠正入口仍属 P5.15。
+  - 证据：`crates/host/src/memory_correction.rs`、
+    `crates/storage/src/memory_access.rs`、
+    `apps/desktop/src-tauri/src/main.rs`；
+    `cargo test -p semi-os-host memory_correction`、
+    `cargo test -p semi-os-storage`。
+  - Commit 点：`feat(memory): learn explicit corrections`
+
 ## 阶段 6：统一交互与可观测性
 
 依赖：阶段 4A、4B、4C 至少各完成一条代表性工作流。
