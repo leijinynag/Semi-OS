@@ -17,11 +17,10 @@ const isolationFlag = supportsTestIsolation() ? ["--test-isolation=none"] : [];
 for (const file of files) {
   let status = 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const result = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "--test", ...isolationFlag, file],
-      { cwd: desktopRoot, stdio: "inherit" },
-    );
+    const result = spawnSync(process.execPath, nodeArgsFor(file), {
+      cwd: desktopRoot,
+      stdio: "inherit",
+    });
     if (result.error) {
       console.error(result.error);
       process.exit(1);
@@ -37,8 +36,20 @@ for (const file of files) {
   }
 }
 
+function nodeArgsFor(file) {
+  const normalized = file.replaceAll("\\", "/");
+  // Voice tests emit diagnostic objects; run them in-process so the test
+  // runner never clones console payloads over a worker IPC channel.
+  if (normalized.includes("/voice/")) {
+    return ["--experimental-strip-types", file];
+  }
+  return ["--experimental-strip-types", "--test", ...isolationFlag, file];
+}
+
 function supportsTestIsolation() {
-  const help = spawnSync(process.execPath, ["--test", "--help"], { encoding: "utf8" });
-  const text = `${help.stdout ?? ""}${help.stderr ?? ""}`;
-  return text.includes("isolation");
+  const probe = spawnSync(process.execPath, ["--test", "--test-isolation=none", "--help"], {
+    encoding: "utf8",
+  });
+  const text = `${probe.stdout ?? ""}${probe.stderr ?? ""}`;
+  return probe.status === 0 && text.includes("--test-isolation") && !text.includes("bad option");
 }
