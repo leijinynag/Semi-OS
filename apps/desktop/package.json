@@ -9,7 +9,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test src/**/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 --test-isolation=none src/**/*.test.ts",
     "lint": "eslint src",
     "format": "prettier --write src",
     "format:check": "prettier --check src",
