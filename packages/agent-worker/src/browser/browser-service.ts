@@ -369,21 +369,36 @@ export class BrowserService {
         };
         signal.addEventListener("abort", cancel, { once: true });
         let timer: ReturnType<typeof setTimeout> | undefined;
+        let finished = false;
         try {
           signal.throwIfAborted();
           // 单次动作的总预算覆盖 goto、条件等待和 evaluate，不让子步骤各自
           // 耗尽一轮超时。超时关闭页面，避免后台继续动作或返回迟到观察。
+          // 动作先完成时必须忽略随后赶到的定时器，否则会把已成功的页面关掉，
+          // 下一轮 observe 就会看到“页面不存在或已关闭”。
+          const work = action();
+          void work.catch(() => {});
           const result = await Promise.race([
-            action(),
+            work,
             new Promise<never>((_, reject) => {
               timer = setTimeout(() => {
+                if (finished) return;
+                let url = state.originalUrl;
+                try {
+                  if (!state.page.isClosed()) {
+                    const current = state.page.url();
+                    url = current === "about:blank" ? state.originalUrl : current;
+                  }
+                } catch {
+                  url = state.originalUrl;
+                }
                 cancel();
                 reject(
                   new BrowserOperationTimeout({
                     ...state.observation,
                     pageId: id,
                     originalUrl: state.originalUrl,
-                    url: state.page.url() === "about:blank" ? state.originalUrl : state.page.url(),
+                    url,
                     title: state.observation?.title || state.originalUrl,
                     version: Math.max(1, state.version),
                     status: "failed",
@@ -394,9 +409,11 @@ export class BrowserService {
               }, this.#timeoutMs);
             }),
           ]);
+          finished = true;
           signal.throwIfAborted();
           return result;
         } finally {
+          finished = true;
           clearTimeout(timer);
           signal.removeEventListener("abort", cancel);
           // 直接把槽位转交等待者，避免新调用抢占已唤醒但尚未运行的槽位。

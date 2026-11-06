@@ -25,6 +25,9 @@
   紧凑人格只读 `personality_records` 的当前生效版本，组装过程不改作者约束。
   P5.11 的 `memory.candidate.submit` 由 Host 映射到 `MemoryWriteCandidate` 后走
   `write_memory`；SQLite 仍只由 Rust Host 打开。`origin` 写入来源备注，不新增列。
+  P5.12 的明确纠正同样走 `write_memory`，但调用者是用户身份：新行不覆盖旧行，
+  只用 supersedes / contradicts 关联；已被 supersede 的等价正文不阻止用户再写
+  回旧值。渐进包对同键偏好只保留用户优先的有效版本。
 
 ## 关键依赖
 

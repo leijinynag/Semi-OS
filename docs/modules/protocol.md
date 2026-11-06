@@ -55,6 +55,15 @@ Worker 通过事件 `memory.candidate.submit` 向 Host 提交结构化候选；H
 回执 `status` 为 `accepted` / `stored` / `duplicate` / `rejected`，拒绝时带 `reason`。
 Host 以 Agent 身份调用 `Storage::write_memory`，用户记录不会被覆盖。
 
+## 用户纠正（P5.12）
+
+Host 在已有用户原文上做确定性识别，不新增协议 kind，也不改 Pi loop：
+
+- `voice.text.submit` 在转发 Worker 之前写入，本轮 `memoryContext` 即可用上新偏好。
+- `voice.transcript.final` 在转写完成后写入，避免挡首句语音；下一轮注入生效。
+
+写入以用户作者走 `write_memory` / `memory_links`，旧记录保留。
+
 ## 待补
 
 - 消息 kind 目录与版本策略。
