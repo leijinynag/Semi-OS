@@ -23,6 +23,8 @@
   普通轮次停在基础包；L4 与未选中的 L5 不进入这一包。
   压缩摘要只经 `compact_session` 写入 L0，不走会拒绝 L0 的 `write_memory`。
   紧凑人格只读 `personality_records` 的当前生效版本，组装过程不改作者约束。
+  P5.11 的 `memory.candidate.submit` 由 Host 映射到 `MemoryWriteCandidate` 后走
+  `write_memory`；SQLite 仍只由 Rust Host 打开。`origin` 写入来源备注，不新增列。
 
 ## 关键依赖
 

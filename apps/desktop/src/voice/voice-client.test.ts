@@ -3,6 +3,20 @@ import test, { type TestContext } from "node:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { VoiceClient } from "./voice-client.ts";
 
+const originalConsole = {
+  info: console.info,
+  log: console.log,
+  debug: console.debug,
+};
+console.info = () => {};
+console.log = () => {};
+console.debug = () => {};
+test.after(() => {
+  console.info = originalConsole.info;
+  console.log = originalConsole.log;
+  console.debug = originalConsole.debug;
+});
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {

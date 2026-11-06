@@ -33,6 +33,28 @@
 - [决策记录](../DECISIONS.md)
 - [任务清单](../../tasks.md)
 
+## 记忆候选（P5.11）
+
+Worker 通过事件 `memory.candidate.submit` 向 Host 提交结构化候选；Host 校验后
+以请求 `memory.candidate.result` 回执，Worker 再响应 `memory.candidate.received`。
+
+协议 JSON 使用现有协议的 camelCase，对应产品字段：
+
+- `memoryId` ← memory_id
+- `recordKind` ← record_kind
+- `layer` ← layer
+- `content` ← content（`MemoryBody` 对象，必须带 `kind`，不能只传无类型字符串）
+- `scope` ← scope
+- `confidence` ← confidence（0–100）
+- `importance` ← importance（0–100）
+- `sourceRefs` ← source_refs（数组，元素至少包含 `sourceRef`）
+- `conflictTarget` ← conflict_target（对象或 `null`，字段本身必填）
+- `origin` ← origin（必填；只写入来源 `note`，形如 `origin=...`，不映射为 `MemorySourceKind`。`user_entry` / `user` 等冒充用户来源的值会被拒绝。本刀 Host 只接受 L2 `preference` / `project_fact`）
+
+可选 `operationId` 用于关联回执；缺省时 Host 使用信封 `requestId`。
+回执 `status` 为 `accepted` / `stored` / `duplicate` / `rejected`，拒绝时带 `reason`。
+Host 以 Agent 身份调用 `Storage::write_memory`，用户记录不会被覆盖。
+
 ## 待补
 
 - 消息 kind 目录与版本策略。

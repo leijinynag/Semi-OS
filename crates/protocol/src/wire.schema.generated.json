@@ -109,7 +109,10 @@
         "desktop.request",
         "desktop.result",
         "desktop.acknowledged",
-        "desktop.cancelled"
+        "desktop.cancelled",
+        "memory.candidate.submit",
+        "memory.candidate.result",
+        "memory.candidate.received"
       ]
     },
     "payload": {
@@ -986,6 +989,198 @@
         }
       }
     },
+    "memoryRecordKind": {
+      "type": "string",
+      "enum": [
+        "pi_session",
+        "recent_turn",
+        "current_plan",
+        "compaction_summary",
+        "safety_rule",
+        "tool_boundary",
+        "confirmation_policy",
+        "profile",
+        "preference",
+        "project_fact",
+        "application_habit",
+        "task_summary",
+        "decision",
+        "verified_outcome",
+        "message_evidence",
+        "task_event_evidence",
+        "artifact_evidence",
+        "receipt_evidence",
+        "workflow_candidate",
+        "skill_candidate"
+      ]
+    },
+    "memoryLayer": {
+      "enum": ["L0", "L1", "L2", "L3", "L4", "L5"]
+    },
+    "memoryScope": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": ["string", "null"]
+        },
+        "workspaceId": {
+          "type": ["string", "null"]
+        },
+        "applicationId": {
+          "type": ["string", "null"]
+        },
+        "taskId": {
+          "type": ["string", "null"]
+        },
+        "skillId": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "memoryBody": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/memoryRecordKind"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "memorySourceKind": {
+      "type": "string",
+      "enum": [
+        "task",
+        "task_event",
+        "conversation_turn",
+        "artifact",
+        "receipt",
+        "user_entry",
+        "system",
+        "pi_session"
+      ]
+    },
+    "memorySourceRef": {
+      "type": "object",
+      "required": ["sourceRef"],
+      "properties": {
+        "sourceId": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "kind": {
+          "$ref": "#/$defs/memorySourceKind"
+        },
+        "sourceRef": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "note": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "memoryConflictTarget": {
+      "type": "object",
+      "required": ["targetMemoryId"],
+      "properties": {
+        "targetMemoryId": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "relation": {
+          "enum": ["supersedes", "contradicts", "consolidates", "associates"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "memoryCandidateSubmit": {
+      "type": "object",
+      "required": [
+        "memoryId",
+        "recordKind",
+        "layer",
+        "content",
+        "scope",
+        "confidence",
+        "importance",
+        "sourceRefs",
+        "conflictTarget",
+        "origin"
+      ],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "memoryId": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "recordKind": {
+          "$ref": "#/$defs/memoryRecordKind"
+        },
+        "layer": {
+          "$ref": "#/$defs/memoryLayer"
+        },
+        "content": {
+          "$ref": "#/$defs/memoryBody"
+        },
+        "scope": {
+          "$ref": "#/$defs/memoryScope"
+        },
+        "confidence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "importance": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "sourceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/memorySourceRef"
+          }
+        },
+        "conflictTarget": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/memoryConflictTarget"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "additionalProperties": false
+    },
+    "memoryCandidateResult": {
+      "type": "object",
+      "required": ["operationId", "status"],
+      "properties": {
+        "operationId": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "memoryId": {
+          "$ref": "#/$defs/nonempty"
+        },
+        "status": {
+          "enum": ["accepted", "stored", "duplicate", "rejected"]
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "existingId": {
+          "$ref": "#/$defs/nonempty"
+        }
+      },
+      "additionalProperties": false
+    },
     "nonempty": {
       "type": "string",
       "minLength": 1
@@ -1845,6 +2040,19 @@
           "const": "request"
         },
         "kind": {
+          "const": "memory.candidate.result"
+        },
+        "payload": {
+          "$ref": "#/$defs/memoryCandidateResult"
+        }
+      }
+    },
+    {
+      "properties": {
+        "direction": {
+          "const": "request"
+        },
+        "kind": {
           "const": "browser.login.open"
         },
         "payload": {
@@ -2148,6 +2356,19 @@
           "const": "response"
         },
         "kind": {
+          "const": "memory.candidate.received"
+        },
+        "payload": {
+          "$ref": "#/$defs/accepted"
+        }
+      }
+    },
+    {
+      "properties": {
+        "direction": {
+          "const": "response"
+        },
+        "kind": {
           "const": "browser.login.accepted"
         },
         "payload": {
@@ -2306,6 +2527,19 @@
         },
         "payload": {
           "type": "object"
+        }
+      }
+    },
+    {
+      "properties": {
+        "direction": {
+          "const": "event"
+        },
+        "kind": {
+          "const": "memory.candidate.submit"
+        },
+        "payload": {
+          "$ref": "#/$defs/memoryCandidateSubmit"
         }
       }
     },
