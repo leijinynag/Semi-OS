@@ -121,6 +121,21 @@ fn record_voice_playback(
         .map_err(|error| error.to_string())
 }
 
+/// 记录语音转写纠正写入失败的诊断，但绝不把错误抛回语音事件路径：
+/// STT/首句合成不能因一次记忆写入故障被阻断。
+fn record_memory_correction_error(app: &tauri::AppHandle, request_id: &str, error: &str) {
+    let Ok(path) = app.path().app_data_dir() else {
+        return;
+    };
+    let store = DiagnosticStore::new(path.join("diagnostics/memory-correction.jsonl"));
+    let _ = store.append(&DiagnosticRecord::now(
+        "memory_correction",
+        error,
+        0,
+        json!({ "requestId": request_id }),
+    ));
+}
+
 struct DesktopState {
     desktop: Mutex<desktop::NativeService>,
     desktop_snapshot: Mutex<Option<desktop::DesktopUiState>>,
@@ -839,18 +854,25 @@ fn handle_voice_message(app: &tauri::AppHandle, message: &Envelope) -> Result<()
         save_voice_conversation(&state, &update.conversation)?;
     }
     // 语音转写完成后写入纠正，不挡 STT/首句合成；下一轮注入会用上新记录。
+    // 写入失败必须可观测：持久化诊断记录，但不向调用方返回错误。
     if kind == "voice.transcript.final" {
         if let Some(text) = payload.get("text").and_then(Value::as_str) {
             let now = unix_time_ms();
-            if let Ok(mut guard) = state.storage.lock() {
-                if let Some(storage) = guard.as_mut() {
-                    let _ = semi_os_host::memory_correction::apply_explicit_correction(
+            let write_result = match state.storage.lock() {
+                Ok(mut guard) => match guard.as_mut() {
+                    Some(storage) => semi_os_host::memory_correction::apply_explicit_correction(
                         storage,
                         text,
                         &format!("turn_{}", request_id.0),
                         now,
-                    );
-                }
+                    )
+                    .map_err(|error| error.to_string()),
+                    None => Err("storage unavailable".to_owned()),
+                },
+                Err(_) => Err("storage lock poisoned".to_owned()),
+            };
+            if let Err(error) = write_result {
+                record_memory_correction_error(app, &request_id.0, &error);
             }
         }
     }

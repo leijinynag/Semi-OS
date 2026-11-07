@@ -387,42 +387,40 @@ fn has_future_marker(text: &str) -> bool {
 }
 
 fn has_remember_marker(text: &str) -> bool {
+    // 只接受「请记住 / 帮我记住 / 记住：」等明确指令形态，避免句中或句首随意
+    // 出现「记住」就把普通陈述误判成要落库的纠正，进而写成 ProjectFact。
     const MARKERS: &[&str] = &[
         "请记住",
         "帮我记住",
         "给我记住",
         "记住：",
         "记住:",
-        "记住我",
         "please remember",
         "remember that",
         "remember:",
     ];
-    if contains_marker(text, MARKERS) {
-        return true;
-    }
-    let trimmed = text.trim_start();
-    trimmed.starts_with("记住") || starts_with_ignore_case(trimmed, "remember ")
+    contains_marker(text, MARKERS)
 }
 
 fn remember_clause(text: &str) -> Option<String> {
+    // 与 [`has_remember_marker`] 保持同一组明确指令前缀，不做裸「记住 / remember」
+    // 前缀提取，否则普通陈述会被截成事实正文。
     const PREFIXES: &[&str] = &[
         "请记住",
         "帮我记住",
         "给我记住",
         "记住：",
         "记住:",
-        "记住我",
-        "记住",
         "please remember",
         "remember that",
         "remember:",
-        "remember",
     ];
     let lower = text.to_lowercase();
     for prefix in PREFIXES {
         if let Some(index) = find_prefix(text, &lower, prefix) {
-            let clause = trim_clause(&text[index + prefix.chars().count()..]);
+            // `find_prefix` 返回字节下标，这里必须用 `prefix.len()` 的字节长度截取，
+            // 否则中文前缀（例如「请记住」）会从中间字节开始，把「记住」留在正文里。
+            let clause = trim_clause(&text[index + prefix.len()..]);
             if !clause.is_empty() {
                 return Some(clause);
             }
@@ -1044,6 +1042,10 @@ mod tests {
             }
         );
         assert_eq!(old.author, MemoryAuthor::Agent);
+        // supersede 后的事实同样要从基础包隐藏旧值，避免 vim/helix 冲突同时进入提示词。
+        let next = build_turn_memory_context(&storage).unwrap().unwrap();
+        assert!(next.contains("helix"));
+        assert!(!next.contains("编辑器使用 vim"));
     }
 
     #[test]
@@ -1120,6 +1122,52 @@ mod tests {
             })
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn casual_remember_sentences_do_not_write() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        for text in [
+            "记住这件事很重要",
+            "记住别忘带伞",
+            "记住我很重要",
+            "别忘了记住带钥匙",
+            "我只是记住了这个快捷键",
+            "remember to buy milk",
+            "i need to remember the meeting time",
+        ] {
+            assert_eq!(
+                apply_explicit_correction(&mut storage, text, "turn_casual", 40).unwrap(),
+                CorrectionOutcome::Ignored,
+                "普通含「记住」但非明确纠正的句子不应落库：{text}"
+            );
+        }
+        assert!(storage
+            .list_memories(&MemoryQuery {
+                user_id: Some(CLIENT_USER_ID.into()),
+                ..MemoryQuery::default()
+            })
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn explicit_remember_forms_still_store() {
+        let colon = recognize_explicit_correction("记住：以后用简短回答").unwrap();
+        assert_eq!(
+            colon.body,
+            MemoryBody::Preference {
+                key: "详略".into(),
+                value: "简短".into(),
+            }
+        );
+        let fact = recognize_explicit_correction("请记住我的编辑器是 helix").unwrap();
+        assert_eq!(
+            fact.body,
+            MemoryBody::ProjectFact {
+                fact: "我的编辑器是 helix".into(),
+            }
+        );
     }
 
     #[test]
