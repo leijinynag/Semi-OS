@@ -1137,6 +1137,35 @@
     Agent Worker 的 `experience-persistence` 测试。
   - Commit 点：`feat(client): explain and control memories`
 
+- [x] **P5.16 记忆闭环验收**
+  - 八项都可以重复验证：用户纠正后下一轮行为改变；Agent 不覆盖用户记录；
+    范围外的记忆不被召回；来源可追踪；冲突版本不同时进入提示词；记忆写入不增加
+    首句语音延迟；进程重启后状态还在；取消、并发和失败任务不产生错误长期记忆。
+  - 同一切片把记忆时间固定显示为 Asia/Shanghai，并带上时区名。已停用或已忘记的
+    同名偏好不能被新建成第二条生效记录；编辑原来那一条并保存后会恢复生效。
+    已忘记时，新建同名偏好会提示先到可恢复列表里恢复。
+  - 不改 Pi Agent Loop，不加向量库、图记忆、Dream Cycle、额外 LLM 或自动
+    Skill 晋升。SQLite 仍只由 Host 打开。本项不代表阶段 5 完成，也不改变
+    P5.8 抽查演示仍未发生、4C 仍未完成的口径。P5.13 遗留的闲聊词表、
+    L1 / 深读 L4 / 点名工作区的 inactive 对齐，以及决策白名单、不要求
+    workspaceId、外部来源摘录、cwd 回退分叉、分层 token 上限和 contradicts
+    专项负例，仍不在本切片。
+  - 证据：`crates/host/src/memory_loop.rs`、
+    `crates/host/src/memory_controls.rs`、
+    `packages/agent-worker/src/experience-persistence.test.ts`、
+    `apps/desktop/src/ui/memory-controls.ts`。
+    `cargo test --locked -p semi-os-host --lib memory_loop`、
+    `cargo test --locked -p semi-os-host --lib memory_controls`、
+    `node --experimental-strip-types --test apps/desktop/src/ui/memory-controls.test.ts`、
+    `node --experimental-strip-types --test packages/agent-worker/src/experience-persistence.test.ts`
+    均通过。
+  - Commit 点：`test(memory): close the memory loop`（`35a4005`）
+
+- [x] **记忆增强计划**
+  - P5.10 到 P5.16 是这条计划的全部切片，均已落地。闭环验收见 P5.16。
+  - 本勾选只闭合记忆增强。阶段 5 的完成定义仍要求 P5.8 抽查演示，该演示仍未发生。
+    4C 真人验收仍未完成。
+
 ## 阶段 6：统一交互与可观测性
 
 依赖：阶段 4A、4B、4C 至少各完成一条代表性工作流。

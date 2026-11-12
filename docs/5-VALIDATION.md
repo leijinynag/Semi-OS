@@ -6,9 +6,11 @@
 
 截至 2026-10-30，产品侧 PR1（P5.1、P5.2）、PR2（P5.3、P5.4、P5.5）、
 PR3（P5.6、P5.7）与 PR4（P5.8、P5.9）均有产品通过记录，对应实现 PR 均已合入 `main`。
-文档「实现证据」已有 PR1、PR2 与 PR3，本次只追加 PR4。
+文档「实现证据」已有 PR1、PR2、PR3 与 PR4。
 PR4 只覆盖 P5.8 与 P5.9。四个有序 PR 的实现均已合入，
 完成定义第 2 条（P5.8 抽查演示）仍未满足，阶段 5 仍未完成。
+2026-11-12 的 P5.16 只补上记忆闭环验收，并勾选记忆增强计划（P5.10–P5.16）。
+完成定义没有改：P5.8 抽查演示仍未发生，阶段 5 仍未完成，4C 仍未完成。
 
 来源：
 
@@ -329,3 +331,36 @@ P5.9 评估：通过。
 本条只说明有序四个 PR 里的第四份已经合并，并且 P5.8、P5.9 产品验收通过。
 只算 PR4。阶段 5 仍未完成：完成定义第 2 条（P5.8 抽查演示）未齐。
 四个有序 PR 的实现均已合入，抽查演示仍未发生。
+
+### 2026-11-12：P5.16 记忆闭环验收
+
+来源：记忆增强计划的收口切片。勾选写在 `tasks.md` 的 P5.16 和记忆增强计划，本文只记验收。
+没有把阶段 5 写成已交付，没有补做 P5.8 抽查演示，也没有改 4C。
+
+八项都有可重复断言，记录在 `crates/host/src/memory_loop.rs`，
+并由 Worker 的经验测试和记忆页测试补上首句时序、取消/失败计划，以及
+Asia/Shanghai 时间与停用/忘记后的同名偏好提示：
+
+| 项               | 断言                                                                                                                                                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 纠正后行为改变   | `correction_changes_the_next_prompt`：下一轮提示含「简短」，不再含「详细」                                                                                                                                                   |
+| 用户记录不被覆盖 | `agent_cannot_overwrite_user_authored_records`：Agent 修订、删除和同编号候选都被拒绝，原文不变                                                                                                                               |
+| 范围外不召回     | `out_of_scope_memories_are_not_recalled`：闲聊不出现项目记忆，其他仓库不进入当前提示                                                                                                                                         |
+| 来源可追踪       | `sources_stay_traceable`：来源表、记忆页和搜索摘要都能看到 `turn_rustfmt`                                                                                                                                                    |
+| 冲突不同时注入   | `conflicting_versions_do_not_enter_the_prompt_together`：旧版本仍在库里，提示词只有当前有效版本                                                                                                                              |
+| 不增加首句延迟   | `memory_writes_are_not_on_the_first_utterance_path` 与 Worker 测试 `memory writes do not run before the first utterance is released`：录音开始和音频分片不写长期记忆，经验提交排在首句之后                                   |
+| 重启后仍在       | `memory_state_survives_process_restart`：关掉连接再打开同一 SQLite 文件，用户偏好还在                                                                                                                                        |
+| 取消、并发、失败 | `cancelled_concurrent_and_failed_tasks_do_not_write_incorrect_memories` 与 Worker 测试 `cancelled, concurrent and failed tasks do not plan incorrect long-term memories`：错误步骤不落库，已验证的另一任务可以留下自己的经验 |
+
+客户端显示时间为 `Asia/Shanghai`，并带时区名。已停用的同名偏好编辑保存后恢复生效；
+已忘记的同名偏好不能新建第二条，界面指向恢复。
+
+`cargo test --locked -p semi-os-host --lib memory_loop`、
+`cargo test --locked -p semi-os-host --lib memory_controls`、
+`node --experimental-strip-types --test apps/desktop/src/ui/memory-controls.test.ts`、
+`node --experimental-strip-types --test packages/agent-worker/src/experience-persistence.test.ts`
+通过。这些命令只说明本切片可以审阅。阶段 5 仍未完成。
+Dream Cycle、图记忆、复杂衰减、自动 Skill 晋升、4C 验收、视觉回退、PV.6 和
+Worker 发行打包都不在本切片。P5.13 留下的闲聊词表、inactive 对齐、决策白名单、
+不要求 workspaceId、外部来源摘录、cwd 回退分叉、分层 token 上限和 contradicts
+专项负例也不在本切片。

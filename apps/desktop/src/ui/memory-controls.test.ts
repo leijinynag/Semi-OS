@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   MEMORY_COMMANDS,
   MEMORY_VOICE_NOTE,
+  formatMemoryTime,
   parseClientMemoryPage,
   projectMemoryPanel,
   readMemoryError,
@@ -198,7 +199,8 @@ test("memory page distinguishes settings, learned items, experience and workflow
   assert.equal(project?.statusLabel, "冲突未生效");
   assert.equal(project?.conflictLabel, "有冲突");
   assert.equal(project?.recallReason, "基础包");
-  assert.equal(project?.recalledLabel, "1970-01-01 00:00");
+  assert.equal(project?.recalledLabel, "1970-01-01 08:00 Asia/Shanghai");
+  assert.equal(project?.restoreHint, null);
   assert.deepEqual(project?.sourceLines, ["任务 task_demo · 来自任务"]);
   assert.equal(project?.actions.correct, true);
   assert.equal(project?.actions.disable, true);
@@ -207,8 +209,10 @@ test("memory page distinguishes settings, learned items, experience and workflow
   assert.equal(view.sections[3]?.items[0]?.recalledLabel, "尚未召回");
   assert.equal(view.sections[3]?.items[0]?.recallReason, "搜索");
   assert.equal(view.sections[4]?.items[0]?.statusLabel, "已停用");
+  assert.equal(view.sections[4]?.items[0]?.restoreHint, null);
   assert.equal(view.sections[4]?.items[0]?.actions.restore, true);
   assert.equal(view.forgotten[0]?.statusLabel, "已忘记");
+  assert.equal(view.forgotten[0]?.restoreHint, null);
   assert.equal(view.forgotten[0]?.actions.restore, true);
   assert.equal(view.forgotten[0]?.actions.correct, false);
   assert.equal(view.activity[0]?.label, "召回");
@@ -306,4 +310,69 @@ test("memory errors stay short and do not invent a success", () => {
   assert.equal(readMemoryError("偏好内容无效"), "偏好内容无效");
   assert.equal(readMemoryError(new Error("找不到这条记录")), "找不到这条记录");
   assert.equal(readMemoryError({ secret: "token" }), "记忆操作失败");
+});
+
+test("memory times use Asia/Shanghai and name the timezone", () => {
+  assert.equal(formatMemoryTime(0), "1970-01-01 08:00 Asia/Shanghai");
+  assert.equal(formatMemoryTime(Date.UTC(2026, 0, 2, 16, 30)), "2026-01-03 00:30 Asia/Shanghai");
+  assert.equal(formatMemoryTime(Number.NaN), "时间无效");
+});
+
+test("disabled and forgotten preferences point at restore instead of a silent duplicate", () => {
+  const disabled = projectMemoryPanel(
+    parseClientMemoryPage({
+      ...page,
+      sections: page.sections.map((section) =>
+        section.id === "user_settings"
+          ? {
+              ...section,
+              items: [
+                item({
+                  memoryId: "pref_disabled",
+                  section: "user_settings",
+                  recordKind: "preference",
+                  summary: "语气：活泼",
+                  preferenceKey: "语气",
+                  preferenceValue: "活泼",
+                  author: "user",
+                  mutability: "user_readonly",
+                  status: "disabled",
+                  actions: { ...actions, disable: false, restore: true },
+                }),
+              ],
+            }
+          : section,
+      ),
+    }),
+  );
+  assert.equal(
+    disabled.sections[0]?.items[0]?.restoreHint,
+    "已停用。直接编辑并保存会重新生效，也可以先点恢复。",
+  );
+  const forgotten = projectMemoryPanel(
+    parseClientMemoryPage({
+      ...page,
+      forgotten: [
+        item({
+          memoryId: "pref_forgotten",
+          section: "user_settings",
+          recordKind: "preference",
+          summary: "字体：宋体",
+          preferenceKey: "字体",
+          preferenceValue: "宋体",
+          author: "user",
+          mutability: "user_readonly",
+          status: "forgotten",
+          actions: {
+            correct: false,
+            disable: false,
+            forget: false,
+            viewSource: true,
+            restore: true,
+          },
+        }),
+      ],
+    }),
+  );
+  assert.equal(forgotten.forgotten[0]?.restoreHint, "已忘记。请先点恢复，再编辑这条偏好。");
 });

@@ -22,6 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const CLIENT_USER_ID: &str = "local";
 
 const DUPLICATE_PREFERENCE: &str = "同一范围已有这个偏好，请直接编辑";
+const DISABLED_SAME_KEY: &str =
+    "这条同名偏好已停用。请编辑原记录，保存后会重新生效；也可以先点恢复。";
+const FORGOTTEN_SAME_KEY: &str = "这条同名偏好已忘记，请先在可恢复列表里恢复后再编辑。";
 const OWN_PREFERENCE_ONLY: &str = "只能修改自己的偏好";
 const NOT_CORRECTABLE: &str = "这条记录不能纠正";
 const CORRECTION_INVALID: &str = "纠正内容无效";
@@ -179,6 +182,8 @@ pub fn client_memory_message(error: &StorageError) -> &'static str {
         StorageError::MemoryNotFound(_) => "找不到这条记录",
         StorageError::InvalidMemory(message) => match message.as_str() {
             DUPLICATE_PREFERENCE => DUPLICATE_PREFERENCE,
+            DISABLED_SAME_KEY => DISABLED_SAME_KEY,
+            FORGOTTEN_SAME_KEY => FORGOTTEN_SAME_KEY,
             OWN_PREFERENCE_ONLY => OWN_PREFERENCE_ONLY,
             NOT_CORRECTABLE => NOT_CORRECTABLE,
             CORRECTION_INVALID => CORRECTION_INVALID,
@@ -199,9 +204,9 @@ pub fn create_user_preference(
     now: i64,
 ) -> StorageResult<ClientMemoryPage> {
     let scope = local_scope();
-    if key_taken(storage, &scope.user_id, &input.key, None)? {
-        return Err(StorageError::InvalidMemory(DUPLICATE_PREFERENCE.to_owned()));
-    }
+    // 停用和忘记的同名偏好仍占着这个键。新建会变成第二条生效副本，
+    // 所以这里拒绝，并告诉用户去恢复或编辑原来那一条。
+    reject_same_key(storage, &scope.user_id, &input.key, None)?;
     let memory_id = allocate_preference_id(storage, now)?;
     let source_id = format!("src_{memory_id}");
     storage.create_memory(
@@ -229,14 +234,13 @@ pub fn revise_user_preference(
     now: i64,
 ) -> StorageResult<ClientMemoryPage> {
     let existing = require_user_preference(storage, memory_id)?;
-    if key_taken(
+    reject_same_key(
         storage,
         &existing.scope.user_id,
         &input.key,
         Some(memory_id),
-    )? {
-        return Err(StorageError::InvalidMemory(DUPLICATE_PREFERENCE.to_owned()));
-    }
+    )?;
+    let effect = storage.memory_effect(memory_id)?;
     storage.revise_memory(
         MemoryActor::User,
         memory_id,
@@ -246,6 +250,20 @@ pub fn revise_user_preference(
         },
         now,
     )?;
+    // 用户刚改过的正文就是他要下一轮生效的版本。若仍保持停用或忘记，
+    // 保存看起来成功，召回却继续跳过。因此编辑这一条时把它恢复为生效。
+    // 这不放行“再新建一条同名偏好”：那条路径仍由 reject_same_key 拒绝。
+    if matches!(
+        effect.status,
+        MemoryEffectStatus::Disabled | MemoryEffectStatus::Forgotten
+    ) {
+        storage.set_memory_effect(
+            MemoryActor::User,
+            memory_id,
+            MemoryEffectStatus::Active,
+            now,
+        )?;
+    }
     page(storage)
 }
 
@@ -838,26 +856,62 @@ fn local_scope() -> MemoryScope {
     }
 }
 
-fn key_taken(
+enum SameKeyHold {
+    None,
+    Active,
+    Disabled,
+    Forgotten,
+}
+
+fn reject_same_key(
     storage: &Storage,
     user_id: &Option<String>,
     key: &str,
     except: Option<&str>,
-) -> StorageResult<bool> {
+) -> StorageResult<()> {
+    let message = match same_key_hold(storage, user_id, key, except)? {
+        SameKeyHold::None => return Ok(()),
+        SameKeyHold::Active => DUPLICATE_PREFERENCE,
+        SameKeyHold::Disabled => DISABLED_SAME_KEY,
+        SameKeyHold::Forgotten => FORGOTTEN_SAME_KEY,
+    };
+    Err(StorageError::InvalidMemory(message.to_owned()))
+}
+
+fn same_key_hold(
+    storage: &Storage,
+    user_id: &Option<String>,
+    key: &str,
+    except: Option<&str>,
+) -> StorageResult<SameKeyHold> {
     let needle = key.trim().to_lowercase();
     if needle.is_empty() {
-        return Ok(false);
+        return Ok(SameKeyHold::None);
     }
     let records = storage.list_memories(&MemoryQuery {
         record_kind: Some(MemoryRecordKind::Preference),
         author: Some(MemoryAuthor::User),
         ..MemoryQuery::default()
     })?;
-    Ok(records.into_iter().any(|record| {
-        except != Some(record.memory_id.as_str())
-            && &record.scope.user_id == user_id
-            && preference_key(&record.body).as_deref() == Some(needle.as_str())
-    }))
+    let mut hold = SameKeyHold::None;
+    for record in records {
+        if except == Some(record.memory_id.as_str())
+            || &record.scope.user_id != user_id
+            || preference_key(&record.body).as_deref() != Some(needle.as_str())
+        {
+            continue;
+        }
+        match storage.memory_effect(&record.memory_id)?.status {
+            MemoryEffectStatus::Active => return Ok(SameKeyHold::Active),
+            MemoryEffectStatus::Disabled => hold = SameKeyHold::Disabled,
+            MemoryEffectStatus::Forgotten => {
+                if !matches!(hold, SameKeyHold::Disabled) {
+                    hold = SameKeyHold::Forgotten;
+                }
+            }
+        }
+    }
+    Ok(hold)
 }
 
 fn preference_key(body: &MemoryBody) -> Option<String> {
@@ -1286,6 +1340,84 @@ mod tests {
         assert_eq!(client_memory_message(&error), DUPLICATE_PREFERENCE);
         let page = list_client_memory(&storage).unwrap();
         assert_eq!(page.preferences, vec![original]);
+    }
+
+    #[test]
+    fn editing_a_disabled_preference_restores_it_and_same_key_create_points_to_restore() {
+        let mut storage = open();
+        let created = create_user_preference(&mut storage, &input("语气", "活泼"), 70).unwrap();
+        let memory_id = created.preferences[0].memory_id.clone();
+        disable_client_memory(&mut storage, &memory_id, 71).unwrap();
+        let hidden = crate::memory_context::build_turn_memory_context(&storage)
+            .unwrap()
+            .unwrap_or_default();
+        assert!(!hidden.contains("活泼"), "停用后的偏好不能进入下一轮");
+
+        let duplicate = create_user_preference(&mut storage, &input("语气", "冷静"), 72);
+        let Err(error) = duplicate else {
+            panic!("disabled same-key preference must not become a second active row");
+        };
+        assert_eq!(client_memory_message(&error), DISABLED_SAME_KEY);
+        assert_eq!(list_client_memory(&storage).unwrap().preferences.len(), 1);
+
+        let restored =
+            revise_user_preference(&mut storage, &memory_id, &input("语气", "平静"), 73).unwrap();
+        let row = section(&restored, ClientMemorySectionId::UserSettings)
+            .into_iter()
+            .find(|item| item.memory_id == memory_id)
+            .expect("edited preference should stay on the page");
+        assert_eq!(row.status, ClientMemoryStatus::Active);
+        assert_eq!(row.preference_value.as_deref(), Some("平静"));
+        let shown = crate::memory_context::build_turn_memory_context(&storage)
+            .unwrap()
+            .expect("restored preference should reach the next turn");
+        assert!(shown.contains("平静"));
+        assert!(!shown.contains("活泼"));
+        assert!(!shown.contains("冷静"));
+    }
+
+    #[test]
+    fn forgotten_same_key_preference_points_to_restore_without_inserting_another_row() {
+        let mut storage = open();
+        let created = create_user_preference(&mut storage, &input("字体", "宋体"), 80).unwrap();
+        let memory_id = created.preferences[0].memory_id.clone();
+        forget_client_memory(&mut storage, &memory_id, 81).unwrap();
+        let before = storage
+            .list_memories(&MemoryQuery::default())
+            .unwrap()
+            .len();
+        let duplicate = create_user_preference(&mut storage, &input("字体", "黑体"), 82);
+        let Err(error) = duplicate else {
+            panic!("forgotten same-key preference must not be copied into a new row");
+        };
+        assert_eq!(client_memory_message(&error), FORGOTTEN_SAME_KEY);
+        assert_eq!(
+            storage
+                .list_memories(&MemoryQuery::default())
+                .unwrap()
+                .len(),
+            before
+        );
+        let page = list_client_memory(&storage).unwrap();
+        assert!(page.forgotten.iter().any(
+            |row| row.memory_id == memory_id && row.preference_value.as_deref() == Some("宋体")
+        ));
+        let hidden = crate::memory_context::build_turn_memory_context(&storage)
+            .unwrap()
+            .unwrap_or_default();
+        assert!(!hidden.contains("宋体"));
+        assert!(!hidden.contains("黑体"));
+
+        let restored =
+            revise_user_preference(&mut storage, &memory_id, &input("字体", "楷体"), 83).unwrap();
+        assert!(section(&restored, ClientMemorySectionId::UserSettings)
+            .iter()
+            .any(|row| {
+                row.memory_id == memory_id
+                    && row.status == ClientMemoryStatus::Active
+                    && row.preference_value.as_deref() == Some("楷体")
+            }));
+        assert!(restored.forgotten.is_empty());
     }
 
     #[test]

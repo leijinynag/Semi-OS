@@ -14,6 +14,8 @@ pub mod memory_candidate;
 pub mod memory_context;
 pub mod memory_controls;
 pub mod memory_correction;
+#[cfg(test)]
+mod memory_loop;
 mod outbound_rpc;
 pub mod research;
 pub mod research_router;

@@ -193,6 +193,7 @@ export interface MemoryPanelItem {
   recallReason: string | null;
   statusLabel: string;
   conflictLabel: string;
+  restoreHint: string | null;
   actions: ClientMemoryActions;
   editablePreference: boolean;
 }
@@ -343,8 +344,35 @@ export function preferenceEditable(row: ClientPreferenceRow): boolean {
   return row.author === "user" && row.mutability === "user_readonly";
 }
 
+/** 记忆页固定用上海时间，并写明时区，避免把 UTC 显示成本地时间。 */
+export const MEMORY_TIME_ZONE = "Asia/Shanghai";
+
 export function formatMemoryTime(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 16).replace("T", " ");
+  if (!Number.isFinite(ms)) return "时间无效";
+  const formatted = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: MEMORY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date(ms));
+  return `${formatted} ${MEMORY_TIME_ZONE}`;
+}
+
+export function preferenceRestoreHint(row: {
+  status: MemoryStatus;
+  preferenceKey: string | null;
+}): string | null {
+  if (!row.preferenceKey) return null;
+  if (row.status === "disabled") {
+    return "已停用。直接编辑并保存会重新生效，也可以先点恢复。";
+  }
+  if (row.status === "forgotten") {
+    return "已忘记。请先点恢复，再编辑这条偏好。";
+  }
+  return null;
 }
 
 export function projectMemoryPanel(page: ClientMemoryPage): MemoryPanelView {
@@ -456,6 +484,7 @@ function panelItem(row: ClientMemoryItem): MemoryPanelItem {
     recallReason: row.recallReason,
     statusLabel: statusLabel(row.status),
     conflictLabel: row.hasConflict ? "有冲突" : "无冲突",
+    restoreHint: preferenceRestoreHint(row),
     actions: row.actions,
     editablePreference:
       row.section === "user_settings" &&

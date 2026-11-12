@@ -25,7 +25,9 @@
 
 ## 模块说明
 
-下列页面是骨架。它们说明目标路径、职责和必须保持的边界，不代替实现清单。
+下列页面说明目标路径、职责和必须保持的边界。记忆闭环（P5.10–P5.16）已经写进
+host、storage、desktop、agent-worker、protocol 和 testing。某项能力是否已经交付，
+仍以 `tasks.md` 和对应验收记录为准。各页「待补」只保留尚未落地的事项。
 
 - [desktop](modules/desktop.md)：React UI 与 Tauri 入口
 - [host](modules/host.md)：Rust 生命周期、策略、监督与命令
