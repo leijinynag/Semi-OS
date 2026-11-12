@@ -405,6 +405,60 @@ fn delete_user_preference(
 }
 
 #[tauri::command]
+fn correct_client_memory(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    memory_id: String,
+    text: String,
+) -> Result<ClientMemoryPage, String> {
+    let now = unix_time_ms();
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::correct_client_memory(
+            storage,
+            &memory_id,
+            &memory_controls::MemoryCorrectionInput { text },
+            now,
+        )
+    })
+}
+
+#[tauri::command]
+fn disable_client_memory(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    memory_id: String,
+) -> Result<ClientMemoryPage, String> {
+    let now = unix_time_ms();
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::disable_client_memory(storage, &memory_id, now)
+    })
+}
+
+#[tauri::command]
+fn forget_client_memory(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    memory_id: String,
+) -> Result<ClientMemoryPage, String> {
+    let now = unix_time_ms();
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::forget_client_memory(storage, &memory_id, now)
+    })
+}
+
+#[tauri::command]
+fn restore_client_memory(
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<DesktopState>>,
+    memory_id: String,
+) -> Result<ClientMemoryPage, String> {
+    let now = unix_time_ms();
+    with_client_memory(&window, &state, move |storage| {
+        memory_controls::restore_client_memory(storage, &memory_id, now)
+    })
+}
+
+#[tauri::command]
 fn get_client_sessions(state: State<'_, Arc<DesktopState>>) -> Result<Vec<ClientSession>, String> {
     state
         .storage
@@ -1871,6 +1925,10 @@ fn main() {
             create_user_preference,
             revise_user_preference,
             delete_user_preference,
+            correct_client_memory,
+            disable_client_memory,
+            forget_client_memory,
+            restore_client_memory,
             change_client_session,
             rename_client_session,
             activate_client_session,

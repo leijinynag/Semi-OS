@@ -76,6 +76,12 @@ export type ExperienceObservation = {
 
 export type ExperienceWriter = (candidate: SubmitPayload, signal: AbortSignal) => Promise<unknown>;
 
+/** 单条写入失败。调用方可以继续后续候选，失败原因不进入语音。 */
+export type ExperienceWriteFailure = {
+  memoryId: string;
+  reason: string;
+};
+
 /** 工具回执里只有结构化状态能决定能不能变成经验，输出文本只作摘要。 */
 export function toolObservationFromReceipt(
   receipt: ToolExecutionReceipt,
@@ -166,29 +172,45 @@ export function persistVerifiedExperience(
   observation: ExperienceObservation,
   write: ExperienceWriter,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<ExperienceWriteFailure[]> {
   const candidates = planVerifiedExperience(observation);
-  if (candidates.length === 0 || signal.aborted) return Promise.resolve();
+  if (candidates.length === 0 || signal.aborted) return Promise.resolve([]);
   return new Promise((resolve) => {
     queueMicrotask(() => {
-      void writeCandidates(candidates, write, signal).then(resolve, resolve);
+      void writeCandidates(candidates, write, signal).then(resolve, () => resolve([]));
     });
   });
 }
 
+/**
+ * 逐条提交。一条失败只记录这一条，后面的候选继续写。
+ * 以前这里直接 return，会把同批尚未提交的经验整批丢掉。
+ */
 async function writeCandidates(
   candidates: readonly SubmitPayload[],
   write: ExperienceWriter,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<ExperienceWriteFailure[]> {
+  const failures: ExperienceWriteFailure[] = [];
   for (const candidate of candidates) {
-    if (signal.aborted) return;
+    if (signal.aborted) return failures;
     try {
       await write(candidate, signal);
-    } catch {
-      return;
+    } catch (error) {
+      failures.push({
+        memoryId: candidate.memoryId,
+        reason: failureReason(error),
+      });
     }
   }
+  return failures;
+}
+
+function failureReason(error: unknown): string {
+  const text = error instanceof Error ? error.message : "write_failed";
+  const clean = text.replace(/[\u0000-\u001f]/g, " ").trim();
+  const clipped = [...clean].slice(0, 180).join("");
+  return clipped || "write_failed";
 }
 
 function verifiedOutcomeCandidate(

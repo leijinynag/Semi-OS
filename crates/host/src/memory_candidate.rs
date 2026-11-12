@@ -11,9 +11,9 @@
 
 use semi_os_protocol::{Envelope, EnvelopeContext, RequestId};
 use semi_os_storage::{
-    MemoryActor, MemoryAuthor, MemoryBody, MemoryLayer, MemoryRecordKind, MemoryRelation,
-    MemoryScope, MemorySourceKind, MemoryWriteCandidate, MemoryWriteConflict, MemoryWriteOutcome,
-    NewMemorySource, Storage, StorageError,
+    MemoryActivityKind, MemoryActor, MemoryAuthor, MemoryBody, MemoryLayer, MemoryRecordKind,
+    MemoryRelation, MemoryScope, MemorySourceKind, MemoryWriteCandidate, MemoryWriteConflict,
+    MemoryWriteOutcome, NewMemorySource, Storage, StorageError,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -67,10 +67,13 @@ pub fn apply_memory_candidate(
         .get("memoryId")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    match persist_candidate(storage, payload, now) {
+    let result = match persist_candidate(storage, payload, now) {
         Ok(outcome) => map_outcome(operation_id, outcome),
         Err(reason) => rejected(operation_id, memory_id, reason),
-    }
+    };
+    // 失败必须留在记忆动态里。动态写失败不能把已经明确的拒绝再吞掉。
+    observe_candidate_activity(storage, &result, now);
+    result
 }
 
 /// 存储不可用时仍要给出明确拒绝，避免候选被丢弃。
@@ -433,6 +436,33 @@ fn operation_id(message: &Envelope, payload: &Value) -> String {
     }
 }
 
+/// 写入和拒绝都记到记忆页动态。摘要只用稳定原因码，不回放候选正文，也不发语音。
+fn observe_candidate_activity(storage: &mut Storage, result: &MemoryCandidateResult, now: i64) {
+    let (kind, summary) = match result.status {
+        MemoryCandidateStatus::Stored => (MemoryActivityKind::Written, "写入了一条记忆".to_owned()),
+        MemoryCandidateStatus::Rejected => (
+            MemoryActivityKind::WriteFailed,
+            safe_failure_summary(result.reason.as_deref()),
+        ),
+        MemoryCandidateStatus::Duplicate | MemoryCandidateStatus::Accepted => return,
+    };
+    let _ = storage.record_memory_activity(result.memory_id.as_deref(), kind, &summary, now);
+}
+
+fn safe_failure_summary(reason: Option<&str>) -> String {
+    match reason {
+        Some(reason)
+            if reason.len() <= 80
+                && reason.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '_' | ':' | '-')
+                }) =>
+        {
+            format!("写入被拒绝：{reason}")
+        }
+        _ => "写入被拒绝".to_owned(),
+    }
+}
+
 fn rejected(
     operation_id: String,
     memory_id: Option<String>,
@@ -552,6 +582,10 @@ mod tests {
                 value: "use rustfmt".into(),
             }
         );
+        let activity = storage.list_memory_activity(5).unwrap();
+        assert!(activity
+            .iter()
+            .any(|row| row.kind == MemoryActivityKind::Written && !row.summary.contains("voice")));
         let sources = storage.list_memory_sources("mem_pref_editor").unwrap();
         assert!(sources.iter().any(|source| {
             source.source_ref == "turn_pref_1"
@@ -560,6 +594,35 @@ mod tests {
                     .as_deref()
                     .is_some_and(|note| note.contains("origin=conversation_turn"))
         }));
+    }
+
+    #[test]
+    fn a_rejected_candidate_is_visible_and_does_not_block_the_next_write() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        let mut rejected_payload = preference_payload();
+        rejected_payload["memoryId"] = json!("mem_secret");
+        rejected_payload["content"] = json!({
+            "kind": "preference",
+            "key": "token",
+            "value": "api_key=abcd1234efgh"
+        });
+        let rejected = apply_memory_candidate(&mut storage, &event(rejected_payload), 11);
+        assert_eq!(rejected.status, MemoryCandidateStatus::Rejected);
+        let stored = apply_memory_candidate(&mut storage, &event(preference_payload()), 12);
+        assert_eq!(stored.status, MemoryCandidateStatus::Stored);
+        let activity = storage.list_memory_activity(10).unwrap();
+        assert!(activity.iter().any(|row| {
+            row.kind == MemoryActivityKind::WriteFailed
+                && row.summary.contains("secret")
+                && !row.summary.contains("abcd1234efgh")
+        }));
+        assert!(activity
+            .iter()
+            .all(|row| !row.kind.as_str().starts_with("voice")));
+        let reply = result_envelope(RequestId("req_memory_candidate".into()), &rejected);
+        assert!(
+            matches!(reply, Envelope::Request { ref kind, .. } if kind == "memory.candidate.result")
+        );
     }
 
     #[test]
@@ -992,7 +1055,9 @@ mod tests {
                 trace_id: None,
             },
         };
-        assert!(crate::memory_context::attach_turn_memory_context(&storage, &mut later).unwrap());
+        assert!(
+            crate::memory_context::attach_turn_memory_context(&mut storage, &mut later).unwrap()
+        );
         let Envelope::Request { payload, .. } = &later else {
             panic!("later turn should stay a request");
         };
