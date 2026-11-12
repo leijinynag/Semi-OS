@@ -30,6 +30,8 @@
   P5.12 的明确纠正同样走 `write_memory`，但调用者是用户身份：新行不覆盖旧行，
   只用 supersedes / contradicts 关联；已被 supersede 的等价正文不阻止用户再写
   回旧值。渐进包对同键偏好只保留用户优先的有效版本。
+  P5.14 的已验证经验仍由 Host 把 `memory.candidate.submit` 映射进 `write_memory`。
+  秘密过滤和作者门禁不变；失败或 unknown 的来源证明在映射前就被拒绝。
 
 ## 关键依赖
 
