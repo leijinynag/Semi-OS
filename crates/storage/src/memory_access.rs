@@ -432,10 +432,11 @@ impl Storage {
         }
 
         let existing = self.records_in_exact_scope(candidate.body.kind(), &candidate.scope)?;
-        if let Some(duplicate) = existing
-            .iter()
-            .find(|record| canonical_text(&record.body) == canonical_text(&candidate.body))
-        {
+        let superseded = self.load_superseded_ids()?;
+        if let Some(duplicate) = existing.iter().find(|record| {
+            canonical_text(&record.body) == canonical_text(&candidate.body)
+                && !superseded.contains(&record.memory_id)
+        }) {
             if actor_may_mutate(actor, duplicate.author) {
                 self.attach_missing_sources(actor, &duplicate.memory_id, candidate, now)?;
             }
@@ -727,7 +728,7 @@ impl Storage {
         }
         // 用户明确写下的偏好必须每轮进入基础包。Agent 推断的偏好只保留高置信项，
         // 低置信候选仍留在库中，但不能借 L2 名额或偏好槽影响普通对话。
-        let preferences = ranked_records(
+        let preferences = unique_preference_versions(ranked_records(
             records.iter().filter(|record| {
                 record.record_kind == MemoryRecordKind::Preference
                     && !superseded.contains(&record.memory_id)
@@ -735,7 +736,7 @@ impl Storage {
                         || confidence_of(record, &admission) >= HIGH_CONFIDENCE)
             }),
             &admission,
-        );
+        ));
         push_records(
             &mut entries,
             &mut included,
@@ -1324,6 +1325,51 @@ fn high_confidence_l2<'a>(
         }),
         admission,
     )
+}
+
+fn unique_preference_versions(records: Vec<&MemoryRecord>) -> Vec<&MemoryRecord> {
+    let mut best: HashMap<String, &MemoryRecord> = HashMap::new();
+    for record in &records {
+        let Some(key) = preference_key(&record.body) else {
+            continue;
+        };
+        match best.get(&key) {
+            Some(current) if !preference_wins(record, current) => {}
+            _ => {
+                best.insert(key, *record);
+            }
+        }
+    }
+    let winner_ids: HashSet<&str> = best
+        .values()
+        .map(|record| record.memory_id.as_str())
+        .collect();
+    records
+        .into_iter()
+        .filter(|record| {
+            winner_ids.contains(record.memory_id.as_str()) || preference_key(&record.body).is_none()
+        })
+        .collect()
+}
+
+fn preference_wins(candidate: &MemoryRecord, current: &MemoryRecord) -> bool {
+    match author_rank(candidate.author).cmp(&author_rank(current.author)) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => candidate
+            .updated_at_ms
+            .cmp(&current.updated_at_ms)
+            .then(current.memory_id.cmp(&candidate.memory_id))
+            .is_gt(),
+    }
+}
+
+fn author_rank(author: MemoryAuthor) -> u8 {
+    match author {
+        MemoryAuthor::User => 3,
+        MemoryAuthor::System => 2,
+        MemoryAuthor::Agent => 1,
+    }
 }
 
 fn ranked_records<'a, I>(records: I, admission: &HashMap<String, (u8, u8)>) -> Vec<&'a MemoryRecord>
