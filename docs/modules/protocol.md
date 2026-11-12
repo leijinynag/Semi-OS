@@ -49,11 +49,17 @@ Worker 通过事件 `memory.candidate.submit` 向 Host 提交结构化候选；H
 - `importance` ← importance（0–100）
 - `sourceRefs` ← source_refs（数组，元素至少包含 `sourceRef`）
 - `conflictTarget` ← conflict_target（对象或 `null`，字段本身必填）
-- `origin` ← origin（必填；只写入来源 `note`，形如 `origin=...`，不映射为 `MemorySourceKind`。`user_entry` / `user` 等冒充用户来源的值会被拒绝。本刀 Host 只接受 L2 `preference` / `project_fact`）
+- `origin` ← origin（必填；只写入来源 `note`，形如 `origin=...`，不映射为 `MemorySourceKind`。`user_entry` / `user` 等冒充用户来源的值会被拒绝。L2 自动写入仍是 `preference` / `project_fact`；P5.14 另接受带来源证明的 L3/L5 经验）
 
 可选 `operationId` 用于关联回执；缺省时 Host 使用信封 `requestId`。
 回执 `status` 为 `accepted` / `stored` / `duplicate` / `rejected`，拒绝时带 `reason`。
 Host 以 Agent 身份调用 `Storage::write_memory`，用户记录不会被覆盖。
+P5.11 只自动接受 L2 `preference` / `project_fact`。P5.14 不新增 kind，沿用同一提交写入已验证的
+L3 `task_summary` / `verified_outcome` 和 L5 `workflow_candidate`。`origin` 必须是
+`verified_experience`，来源备注要带 `completion=completed` 或
+`status=succeeded` + `verification=passed` + 非模型的 `method`。失败、unknown、
+未验证和 `method=model_prose` 返回 `unverified_experience`，不落库。
+`skill_candidate` 仍然拒绝，避免这条路径自动晋升 Skill。
 
 ## 用户纠正（P5.12）
 
@@ -70,6 +76,14 @@ Host 仍把结果写入已有的 `memoryContext`，不新增协议 kind，也不
 `voice.text.submit` 在转发前按原文决定基础、上下文、搜索和深读。
 `voice.turn.start` 还没有转写，只附基础包，避免挡住首句，也不提前搜索项目记忆。
 工作区、应用、任务和 Skill 来自轮次上的当前范围；闲聊即使带了这些字段也不召回项目记忆。
+
+## 已验证经验（P5.14）
+
+Worker 在 `voice.sentence`、`voice.answer` 和 `voice.turn.completed` 已经送出之后，
+才根据结构化工具回执、完成状态和任务摘要生成 L3/L5 候选，并后台提交
+`memory.candidate.submit`。提交不在首句或本轮结果的返回路径上等待。
+失败和 unknown 回执不会生成可执行的 `workflow_candidate` 或 `verified_outcome`。
+记忆范围绑定用户和工作区，不绑定刚结束的任务编号，这样下一轮任务还能召回。
 
 ## 待补
 

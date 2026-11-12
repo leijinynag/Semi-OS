@@ -27,6 +27,16 @@ import {
   buildStructuredMemoryCandidate,
   type StructuredMemoryInput,
 } from "./memory-candidate.ts";
+import {
+  experienceCompletionStatus,
+  experienceScopeId,
+  persistVerifiedExperience,
+  toolObservationFromReceipt,
+  EXPERIENCE_USER_ID,
+  type ExperienceObservation,
+  type ExperienceScope,
+  type ExperienceToolObservation,
+} from "./experience-persistence.ts";
 import { DesktopHost } from "./desktop/desktop-host.ts";
 import { createDesktopTools } from "./desktop/desktop-tools.ts";
 import { LarkService } from "./lark/lark-service.ts";
@@ -128,6 +138,12 @@ export class WorkerService {
   readonly #userTurns = new Map<string, RequestId>();
   readonly #deletedSessions = new Set<string>();
   readonly #sessionCwd = new Map<string, string>();
+  // 经验范围跟着本轮会话走，不放进 Pi。任务编号不写入记忆范围，否则下一轮任务看不见。
+  readonly #experienceScopes = new Map<string, ExperienceScope>();
+  readonly #experienceTurns = new Map<
+    string,
+    { tools: ExperienceToolObservation[]; summary?: string; taskId?: string }
+  >();
   readonly #operations = new Set<Promise<void>>();
   readonly #operationAbort = new AbortController();
   #disposed = false;
@@ -505,6 +521,8 @@ export class WorkerService {
       // 先撤销事件身份再释放资源；dispose 期间的迟到回调不能再写入已删除的聊天。
       const loop = this.#sessionLoops.get(sessionId);
       this.#sessionLoops.delete(sessionId);
+      this.#experienceScopes.delete(sessionId);
+      this.#experienceTurns.delete(sessionId);
       for (const [id, turn] of this.#turns) {
         if (turn.sessionId === sessionId) {
           turn.audio.close(true);
@@ -533,6 +551,7 @@ export class WorkerService {
         if (this.#activeTaskId) await this.#voiceLoop?.interrupt(this.#activeTaskId, "pause");
         await this.#yieldSupervision(payload.sessionId);
         this.#sessionCwd.set(payload.sessionId, payload.cwd);
+        this.#rememberExperienceScope(payload.sessionId, payload);
         this.#activeRequestId = request.requestId;
         this.#activeTaskId = payload.taskId;
         this.#activeSessionId = payload.sessionId;
@@ -577,6 +596,7 @@ export class WorkerService {
       try {
         await this.#yieldSupervision(payload.sessionId);
         this.#sessionCwd.set(payload.sessionId, payload.cwd);
+        this.#rememberExperienceScope(payload.sessionId, payload);
         if (this.#turns.size || this.#activeRequestId) {
           for (const previous of this.#turns.values()) previous.audio.close(true);
           this.#turns.clear();
@@ -756,12 +776,14 @@ export class WorkerService {
     const loop = this.#createVoiceLoop(
       (event) => {
         // 不活跃会话的迟到事件不得贴上当前会话身份；轮次内代际仍由 VoiceLoop 校验。
-        if (
+        const active =
           this.#sessionLoops.get(sessionId) === loop &&
           this.#activeSessionId === sessionId &&
-          this.#activeRequestId
-        ) {
+          this.#activeRequestId;
+        if (active && this.#activeRequestId) {
+          // 先交出首句、回答和轮次完成，再记录经验。记忆提交在完成事件之后排队，不 await。
           this.#emitVoice(this.#activeRequestId, event);
+          this.#captureExperience(sessionId, event);
         }
       },
       sessionId,
@@ -769,6 +791,74 @@ export class WorkerService {
     );
     this.#sessionLoops.set(sessionId, loop);
     return loop;
+  }
+
+  #rememberExperienceScope(sessionId: string, payload: { cwd: string }): void {
+    const extra = payload as {
+      cwd: string;
+      workspaceId?: unknown;
+      applicationId?: unknown;
+      skillId?: unknown;
+    };
+    this.#experienceScopes.set(sessionId, {
+      userId: EXPERIENCE_USER_ID,
+      workspaceId: experienceScopeId(extra.workspaceId) ?? experienceScopeId(extra.cwd),
+      applicationId: experienceScopeId(extra.applicationId),
+      skillId: experienceScopeId(extra.skillId),
+    });
+  }
+
+  /**
+   * 只累积结构化回执和已经送出的任务摘要。`voice.turn.completed` 表示本轮结果
+   * 已经返回，这时才把候选交给 Host；提交本身再推迟一个微任务，不能挡首句。
+   */
+  #captureExperience(sessionId: string, event: VoiceLoopEvent): void {
+    if (event.kind === "voice.transcript.final" || event.kind === "research.interrupted") {
+      this.#experienceTurns.delete(sessionId);
+      return;
+    }
+    if (event.kind === "research.receipt") {
+      const turn = this.#experienceTurn(sessionId);
+      turn.tools.push(toolObservationFromReceipt(event.payload));
+      return;
+    }
+    if (event.kind === "voice.answer") {
+      const turn = this.#experienceTurn(sessionId);
+      turn.summary = event.payload.summary;
+      turn.taskId = event.payload.taskId;
+      return;
+    }
+    if (event.kind !== "voice.turn.completed") return;
+    const turn = this.#experienceTurns.get(sessionId);
+    this.#experienceTurns.delete(sessionId);
+    if (!turn?.summary || !turn.taskId || turn.taskId !== event.payload.taskId) return;
+    const observation: ExperienceObservation = {
+      scope: this.#experienceScopes.get(sessionId) ?? { userId: EXPERIENCE_USER_ID },
+      tools: turn.tools,
+      completion: {
+        taskId: event.payload.taskId,
+        status: experienceCompletionStatus(turn.tools),
+      },
+      summary: { taskId: turn.taskId, summary: turn.summary },
+    };
+    const pending = persistVerifiedExperience(
+      observation,
+      (candidate, signal) => this.#memoryCandidates.submit(candidate, signal),
+      this.#operationAbort.signal,
+    );
+    this.#track(pending);
+  }
+
+  #experienceTurn(sessionId: string): {
+    tools: ExperienceToolObservation[];
+    summary?: string;
+    taskId?: string;
+  } {
+    const existing = this.#experienceTurns.get(sessionId);
+    if (existing) return existing;
+    const created = { tools: [] };
+    this.#experienceTurns.set(sessionId, created);
+    return created;
   }
 
   #requireTurn(requestId: RequestId): BufferedVoiceTurn {

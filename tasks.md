@@ -1098,6 +1098,23 @@
     工作区字段也不出现项目记忆，也不产生 TaskRun。
   - Commit 点：`feat(memory): add scoped runtime recall`
 
+- [x] **P5.14 异步持久化已验证经验**
+  - 已验证的工具回执、成功完成状态和任务摘要用确定性规则生成 L3
+    `task_summary` / `verified_outcome` 与 L5 `workflow_candidate`，经已有
+    `memory.candidate.submit` 在后台写入。失败、unknown、未验证和模型自述
+    不会变成可执行经验。秘密仍由 `write_memory` 拒绝。Agent 候选不能覆盖用户行。
+    首句、`voice.answer` 和 `voice.turn.completed` 先送出，记忆提交不在这条路径上等待。
+    不改 Pi Agent Loop，不加向量库、图记忆、Dream Cycle、额外 LLM 或自动 Skill 晋升。
+  - 证据：`packages/agent-worker/src/experience-persistence.ts`、
+    `packages/agent-worker/src/worker-service.ts`、
+    `crates/host/src/memory_candidate.rs`；
+    `cargo test -p semi-os-host memory_candidate`、
+    Agent Worker 的 `experience-persistence` 测试。
+    正例：成功的 browser_open 流程写入后，下一轮能在上下文和搜索里看到步骤。
+    反例：失败和 unknown 回执不提交可执行候选。
+    时序：`voice.sentence` 与 `voice.answer` 早于 `memory.candidate.submit`。
+  - Commit 点：`feat(memory): persist verified experiences`
+
 ## 阶段 6：统一交互与可观测性
 
 依赖：阶段 4A、4B、4C 至少各完成一条代表性工作流。

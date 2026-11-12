@@ -3,6 +3,11 @@
 //! 本模块把 `memory.candidate.submit` 校验后映射到 [`semi_os_storage::MemoryWriteCandidate`]，
 //! 由 Rust Host 独占调用 SQLite。非法或缺字段返回明确拒绝回执，不会静默丢弃。
 //! 写入始终以 Agent 身份进行，因此不能覆盖用户记录。
+//!
+//! P5.11 接受 L2 偏好和项目事实。P5.14 仍走同一条提交，不另开写入接口：
+//! 已验证的 L3 情节和 L5 工作流候选必须带 `verified_experience` 来源证明。
+//! 失败、unknown、未验证或模型自述不能变成可执行经验。`skill_candidate` 继续拒绝，
+//! 这条路径不自动晋升 Skill。
 
 use semi_os_protocol::{Envelope, EnvelopeContext, RequestId};
 use semi_os_storage::{
@@ -138,10 +143,7 @@ fn persist_candidate(
     let memory_id = required_string(payload, "memoryId")?;
     let record_kind = required_enum::<MemoryRecordKind>(payload, "recordKind")?;
     let layer = required_enum::<MemoryLayer>(payload, "layer")?;
-    if !matches!(
-        record_kind,
-        MemoryRecordKind::Preference | MemoryRecordKind::ProjectFact
-    ) {
+    if !is_admitted_kind(record_kind) {
         return Err(format!("unsupported_record_kind:{}", record_kind.as_str()));
     }
     if layer != record_kind.layer() {
@@ -169,6 +171,15 @@ fn persist_candidate(
     let origin = required_string(payload, "origin")?;
     if impersonates_user_origin(&origin) {
         return Err("impersonated_user_entry".into());
+    }
+    // 可执行经验的证明必须来自结构化来源备注，不能靠正文自称“已验证”。
+    if is_experience_kind(record_kind) {
+        if origin != VERIFIED_EXPERIENCE_ORIGIN {
+            return Err("experience_origin_required".into());
+        }
+        if let Some(reason) = experience_source_problem(record_kind, source_refs) {
+            return Err(reason.into());
+        }
     }
     let sources = map_sources(&memory_id, source_refs, &origin)?;
     let conflict = parse_conflict(payload)?;
@@ -268,6 +279,98 @@ fn map_sources(
             })
         })
         .collect()
+}
+
+const VERIFIED_EXPERIENCE_ORIGIN: &str = "verified_experience";
+
+fn is_admitted_kind(kind: MemoryRecordKind) -> bool {
+    matches!(
+        kind,
+        MemoryRecordKind::Preference | MemoryRecordKind::ProjectFact
+    ) || is_experience_kind(kind)
+}
+
+/// L3/L5 经验种类。Skill 候选故意不在这里，避免自动晋升。
+fn is_experience_kind(kind: MemoryRecordKind) -> bool {
+    matches!(
+        kind,
+        MemoryRecordKind::TaskSummary
+            | MemoryRecordKind::Decision
+            | MemoryRecordKind::VerifiedOutcome
+            | MemoryRecordKind::WorkflowCandidate
+    )
+}
+
+/// 来源备注是 Host 能核对的唯一证明。失败或 unknown 混进任一来源都拒绝整条候选。
+fn experience_source_problem(kind: MemoryRecordKind, refs: &[Value]) -> Option<&'static str> {
+    let mut verified_step = false;
+    let mut completed = false;
+    for item in refs {
+        let note = item
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if note.is_empty() || bad_experience_note(&note) {
+            return Some("unverified_experience");
+        }
+        let step = proves_verified_step(&note);
+        let done = note.contains("completion=completed");
+        if !step && !done {
+            return Some("unverified_experience");
+        }
+        verified_step |= step;
+        completed |= done;
+    }
+    let admitted = match kind {
+        MemoryRecordKind::VerifiedOutcome => verified_step,
+        MemoryRecordKind::WorkflowCandidate => verified_step && completed,
+        MemoryRecordKind::TaskSummary | MemoryRecordKind::Decision => completed,
+        _ => false,
+    };
+    if admitted {
+        None
+    } else {
+        Some("unverified_experience")
+    }
+}
+
+fn bad_experience_note(note: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "status=failed",
+        "status=unknown",
+        "status=cancelled",
+        "status=needs_user",
+        "status=started",
+        "result=failure",
+        "result=unknown",
+        "result=cancelled",
+        "verification=failed",
+        "verification=unknown",
+        "verification=inconclusive",
+        "verification=not_run",
+        "completion=failed",
+        "completion=unknown",
+        "completion=cancelled",
+        "method=model_prose",
+        "method=none",
+    ];
+    MARKERS.iter().any(|marker| note.contains(marker))
+}
+
+fn proves_verified_step(note: &str) -> bool {
+    if !note.contains("status=succeeded") || !note.contains("verification=passed") {
+        return false;
+    }
+    let Some(method) = note
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("method="))
+    else {
+        return false;
+    };
+    !method.is_empty() && method != "none" && method != "model_prose"
 }
 
 fn impersonates_user_origin(origin: &str) -> bool {
@@ -394,7 +497,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use semi_os_storage::{MemoryAuthor, MemoryMutability, NewMemory, Storage};
+    use semi_os_storage::{
+        MemoryAuthor, MemoryBody, MemoryMutability, MemoryScope, MemorySourceKind, NewMemory,
+        NewMemorySource, Storage,
+    };
 
     fn event(payload: Value) -> Envelope {
         Envelope::Event {
@@ -596,14 +702,14 @@ mod tests {
                 json!({ "kind": "skill_candidate", "name": "search", "summary": "自动晋升" }),
             ),
             (
-                "workflow_candidate",
-                "L5",
-                json!({ "kind": "workflow_candidate", "name": "review", "summary": "候选工作流" }),
+                "compaction_summary",
+                "L0",
+                json!({ "kind": "compaction_summary", "objective": "保持在工作上下文" }),
             ),
             (
-                "task_summary",
-                "L3",
-                json!({ "kind": "task_summary", "summary": "本不应写入" }),
+                "message_evidence",
+                "L4",
+                json!({ "kind": "message_evidence", "reference": "msg_1" }),
             ),
         ] {
             let mut payload = preference_payload();
@@ -739,5 +845,249 @@ mod tests {
         };
         let envelope = result_envelope(RequestId("req_memory_candidate".into()), &result);
         semi_os_protocol::validate_envelope(&envelope).expect("result should match protocol");
+    }
+
+    fn experience_payload(
+        memory_id: &str,
+        record_kind: &str,
+        layer: &str,
+        content: Value,
+        notes: &[(&str, &str, &str)],
+    ) -> Value {
+        json!({
+            "memoryId": memory_id,
+            "recordKind": record_kind,
+            "layer": layer,
+            "content": content,
+            "scope": { "userId": "local", "workspaceId": "repo_semi" },
+            "confidence": 85,
+            "importance": 64,
+            "sourceRefs": notes.iter().enumerate().map(|(index, (kind, source_ref, note))| json!({
+                "sourceId": format!("src_{memory_id}_{index}"),
+                "kind": kind,
+                "sourceRef": source_ref,
+                "note": note
+            })).collect::<Vec<_>>(),
+            "conflictTarget": null,
+            "origin": "verified_experience"
+        })
+    }
+
+    #[test]
+    fn verified_workflow_is_recalled_by_a_later_task_without_overwriting_user_memory() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        storage
+            .create_memory(
+                MemoryActor::User,
+                &NewMemory {
+                    memory_id: "pref_tone".into(),
+                    body: MemoryBody::Preference {
+                        key: "语气".into(),
+                        value: "简洁".into(),
+                    },
+                    scope: MemoryScope {
+                        user_id: Some("local".into()),
+                        workspace_id: Some("repo_semi".into()),
+                        ..MemoryScope::default()
+                    },
+                    sources: vec![NewMemorySource {
+                        source_id: "src_pref_tone".into(),
+                        kind: MemorySourceKind::UserEntry,
+                        source_ref: "client-preference".into(),
+                        note: None,
+                    }],
+                },
+                1,
+            )
+            .unwrap();
+        let user_before = storage.load_memory("pref_tone").unwrap().unwrap();
+        let step = "status=succeeded; verification=passed; method=fixture; tool=browser_open";
+        let summary = experience_payload(
+            "exp_task_release_l3_summary",
+            "task_summary",
+            "L3",
+            json!({ "kind": "task_summary", "summary": "browser_open 打开资料页并核对标题" }),
+            &[
+                (
+                    "task_event",
+                    "task.completed:task_release",
+                    "completion=completed",
+                ),
+                ("receipt", "attempt_open", step),
+            ],
+        );
+        let outcome = experience_payload(
+            "exp_task_release_l3_out_0",
+            "verified_outcome",
+            "L3",
+            json!({ "kind": "verified_outcome", "summary": "browser_open 已验证：打开资料页" }),
+            &[("receipt", "attempt_open", step)],
+        );
+        let workflow = experience_payload(
+            "exp_task_release_l5_flow",
+            "workflow_candidate",
+            "L5",
+            json!({
+                "kind": "workflow_candidate",
+                "name": "browser_open",
+                "summary": "已验证步骤：browser_open：打开资料页。结论：打开资料页并核对标题。"
+            }),
+            &[
+                (
+                    "task_event",
+                    "task.completed:task_release",
+                    "completion=completed",
+                ),
+                ("receipt", "attempt_open", step),
+            ],
+        );
+        for (payload, now) in [(summary, 2), (outcome, 3), (workflow, 4)] {
+            let stored = apply_memory_candidate(&mut storage, &event(payload), now);
+            assert_eq!(stored.status, MemoryCandidateStatus::Stored, "{stored:?}");
+        }
+        assert_eq!(
+            storage.load_memory("pref_tone").unwrap().unwrap(),
+            user_before
+        );
+        let mut hijack = experience_payload(
+            "pref_tone",
+            "workflow_candidate",
+            "L5",
+            json!({
+                "kind": "workflow_candidate",
+                "name": "browser_open",
+                "summary": "已验证步骤：browser_open：打开资料页。结论：打开资料页并核对标题。"
+            }),
+            &[
+                (
+                    "task_event",
+                    "task.completed:task_release",
+                    "completion=completed",
+                ),
+                ("receipt", "attempt_open", step),
+            ],
+        );
+        hijack["memoryId"] = json!("pref_tone");
+        let overwrite = apply_memory_candidate(&mut storage, &event(hijack), 5);
+        assert_eq!(overwrite.status, MemoryCandidateStatus::Rejected);
+        assert_eq!(
+            storage.load_memory("pref_tone").unwrap().unwrap(),
+            user_before
+        );
+
+        let mut later = Envelope::Request {
+            protocol_version: 1,
+            request_id: RequestId("req_later".into()),
+            kind: "voice.text.submit".into(),
+            payload: json!({
+                "sessionId": "session_later",
+                "taskId": "task_later",
+                "cwd": "repo_semi",
+                "text": "继续这个项目里上次 browser 打开资料页的经验",
+                "workspaceId": "repo_semi"
+            }),
+            context: EnvelopeContext {
+                task_id: None,
+                task_run_id: None,
+                trace_id: None,
+            },
+        };
+        assert!(crate::memory_context::attach_turn_memory_context(&storage, &mut later).unwrap());
+        let Envelope::Request { payload, .. } = &later else {
+            panic!("later turn should stay a request");
+        };
+        let context = payload["memoryContext"].as_str().unwrap();
+        assert!(context.contains("browser_open 打开资料页并核对标题"));
+        assert!(context.contains("已验证步骤：browser_open：打开资料页"));
+        assert!(context.contains("[context]"));
+        assert!(context.contains("[search]"));
+        assert!(storage.load_task("task_later").unwrap().is_none());
+        assert!(storage.load_task("task_release").unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_or_unknown_operations_are_not_stored_as_executable_experience() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        let content = json!({
+            "kind": "workflow_candidate",
+            "name": "browser_open",
+            "summary": "不应执行的失败步骤"
+        });
+        for note in [
+            "status=failed; verification=failed; method=fixture",
+            "status=unknown; verification=inconclusive; method=fixture",
+            "status=succeeded; verification=passed; method=model_prose",
+            "completion=completed",
+        ] {
+            let payload = experience_payload(
+                "exp_task_failed_l5_flow",
+                "workflow_candidate",
+                "L5",
+                content.clone(),
+                &[("receipt", "attempt_bad", note)],
+            );
+            let result = apply_memory_candidate(&mut storage, &event(payload), 8);
+            assert_eq!(result.status, MemoryCandidateStatus::Rejected, "{note}");
+            assert_eq!(result.reason.as_deref(), Some("unverified_experience"));
+        }
+        let missing_origin = experience_payload(
+            "exp_task_failed_l3_out",
+            "verified_outcome",
+            "L3",
+            json!({ "kind": "verified_outcome", "summary": "browser_open 已验证：打开资料页" }),
+            &[(
+                "receipt",
+                "attempt_open",
+                "status=succeeded; verification=passed; method=fixture",
+            )],
+        );
+        let mut wrong_origin = missing_origin;
+        wrong_origin["origin"] = json!("conversation_turn");
+        wrong_origin["memoryId"] = json!("exp_task_failed_l3_out");
+        let result = apply_memory_candidate(&mut storage, &event(wrong_origin), 9);
+        assert_eq!(result.status, MemoryCandidateStatus::Rejected);
+        assert_eq!(result.reason.as_deref(), Some("experience_origin_required"));
+        assert!(storage
+            .load_memory("exp_task_failed_l5_flow")
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .load_memory("exp_task_failed_l3_out")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn secret_experience_is_filtered_before_it_is_stored() {
+        let mut storage = Storage::open_in_memory().unwrap();
+        let payload = experience_payload(
+            "exp_task_secret_l5_flow",
+            "workflow_candidate",
+            "L5",
+            json!({
+                "kind": "workflow_candidate",
+                "name": "browser_open",
+                "summary": "已验证步骤：browser_open。结论：api_key=abcd1234efgh"
+            }),
+            &[
+                (
+                    "task_event",
+                    "task.completed:task_secret",
+                    "completion=completed",
+                ),
+                (
+                    "receipt",
+                    "attempt_open",
+                    "status=succeeded; verification=passed; method=fixture",
+                ),
+            ],
+        );
+        let result = apply_memory_candidate(&mut storage, &event(payload), 11);
+        assert_eq!(result.status, MemoryCandidateStatus::Rejected);
+        assert_eq!(result.reason.as_deref(), Some("secret"));
+        assert!(storage
+            .load_memory("exp_task_secret_l5_flow")
+            .unwrap()
+            .is_none());
     }
 }
