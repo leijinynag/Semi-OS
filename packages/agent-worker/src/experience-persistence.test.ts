@@ -146,6 +146,60 @@ test("secret text is removed before a candidate is submitted", () => {
   );
 });
 
+test("memory writes do not run before the first utterance is released", async () => {
+  const order: string[] = [];
+  order.push("voice.sentence");
+  const pending = persistVerifiedExperience(
+    observation([verifiedTool]),
+    async () => {
+      order.push("memory.candidate.submit");
+    },
+    new AbortController().signal,
+  );
+  order.push("voice.answer");
+  assert.deepEqual(order, ["voice.sentence", "voice.answer"]);
+  await pending;
+  assert.equal(order.at(-1), "memory.candidate.submit");
+  assert.ok(order.indexOf("voice.sentence") < order.indexOf("memory.candidate.submit"));
+});
+
+test("cancelled, concurrent and failed tasks do not plan incorrect long-term memories", () => {
+  const good = planVerifiedExperience(observation([verifiedTool]));
+  const cancelled = planVerifiedExperience({
+    scope: { userId: "local", workspaceId: "repo_semi" },
+    tools: [],
+    completion: { taskId: "task_cancel", status: "cancelled" },
+    summary: { taskId: "task_cancel", summary: "取消后不该留下的步骤" },
+  });
+  const failedTool: ExperienceToolObservation = {
+    ...verifiedTool,
+    attemptId: "attempt_failed",
+    taskId: "task_failed",
+    toolName: "browser_click",
+    status: "failed",
+    resultType: "failure",
+    verificationStatus: "failed",
+    outputSummary: "失败后不该留下的步骤",
+  };
+  const failed = planVerifiedExperience({
+    scope: { userId: "local", workspaceId: "repo_semi" },
+    tools: [failedTool],
+    completion: { taskId: "task_failed", status: "failed" },
+    summary: { taskId: "task_failed", summary: "失败后不该留下的步骤" },
+  });
+  const concurrent = [...good, ...cancelled, ...failed];
+  const rendered = JSON.stringify(concurrent);
+  assert.equal(cancelled.length, 0);
+  assert.equal(failed.length, 0);
+  assert.ok(good.some((candidate) => candidate.recordKind === "workflow_candidate"));
+  assert.equal(rendered.includes("取消后不该留下的步骤"), false);
+  assert.equal(rendered.includes("失败后不该留下的步骤"), false);
+  assert.equal(rendered.includes("browser_click"), false);
+  assert.equal(rendered.includes("打开资料页"), true);
+  assert.ok(good.every((candidate) => !candidate.memoryId.includes("task_failed")));
+  assert.ok(good.every((candidate) => !candidate.memoryId.includes("task_cancel")));
+});
+
 test("one write failure does not drop the rest of the batch", async () => {
   const seen: string[] = [];
   const failures = await persistVerifiedExperience(

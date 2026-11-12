@@ -85,7 +85,13 @@ Worker 在 `voice.sentence`、`voice.answer` 和 `voice.turn.completed` 已经�
 失败和 unknown 回执不会生成可执行的 `workflow_candidate` 或 `verified_outcome`。
 记忆范围绑定用户和工作区，不绑定刚结束的任务编号，这样下一轮任务还能召回。
 
+## 记忆闭环（P5.16）
+
+P5.16 不新增协议 kind。纠正、召回和经验提交仍走上面三条已有路径。
+取消、失败和并发任务若提交了不可验证的候选，Host 以既有
+`memory.candidate.result` 拒绝，不另开消息。首句和音频分片不携带记忆写入。
+
 ## 待补
 
-- 消息 kind 目录与版本策略。
+- 记忆消息以外的 kind 目录与版本策略。P5.11–P5.16 使用的记忆消息已写在上文。
 - 生成命令和契约测试入口。

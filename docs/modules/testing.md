@@ -17,6 +17,10 @@
   断网、重复提交风险，以及无法对账的 `unknown`。
 - 夹具保持合成且确定。测试通过不作为放宽工具能力的理由。
 - 各模块自己的单元测试留在模块目录内。本页覆盖 `tests/` 下的三层。
+- 记忆闭环验收不在 `tests/e2e/`。八项断言在 `crates/host/src/memory_loop.rs`，
+  首句时序和取消/失败计划在 `packages/agent-worker/src/experience-persistence.test.ts`，
+  记忆页时间与恢复提示在 `apps/desktop/src/ui/memory-controls.test.ts`。
+  这些测试通过也不把阶段 5 或 4C 记为完成。
 
 ## 关键依赖
 
@@ -34,5 +38,6 @@
 
 ## 待补
 
-- 每一层目前覆盖的场景索引。
-- 仍须人工验收、不能用自动测试代替的项目。
+- `tests/contract`、`tests/integration`、`tests/e2e` 三层目前覆盖的场景索引。
+  记忆闭环的自动断言留在模块测试里，见上文。
+- 仍须人工验收、不能用自动测试代替的项目。阶段 5 抽查演示和 4C 仍在其中。

@@ -1041,6 +1041,44 @@ This progressive strategy is a first-release priority. It keeps ordinary voice
 turns fast while allowing complex tasks to discover deeper context only when
 needed.
 
+### 9.6 Memory-loop acceptance
+
+The memory enhancement plan (P5.10 through P5.16) closes when the following
+eight outcomes are repeatable. P5.16 records them in
+`crates/host/src/memory_loop.rs`, the worker experience tests, and
+`docs/5-VALIDATION.md`. Passing this loop does not complete Stage 5, the P5.8
+spot-check demo, or 4C.
+
+1. After a user correction, the next prompt uses the corrected preference and
+   leaves the previous wording out.
+2. The Agent cannot revise, delete, or reuse the id of a user-authored record.
+   A correction of an Agent record adds a user row and a link; the Agent
+   original stays unchanged.
+3. Recall is scoped. A greeting does not load project memory, and another
+   workspace's records do not enter the current prompt.
+4. Sources stay queryable apart from the body: `memory_sources`, the memory
+   page, and search summaries all carry the source reference.
+5. Conflicting versions of the same preference are both retained, but only the
+   current winning version is injected.
+6. Long-term memory writes are not on the first-utterance path. `voice.turn.start`
+   and audio chunks do not insert memories. Verified-experience submission is
+   queued after the first sentence and the turn result.
+7. Reopening the SQLite file after the writing process drops its connection
+   returns the same user-authored record.
+8. Cancelled, failed, and concurrent task completions do not persist incorrect
+   long-term memories. A verified sibling task may still store its own
+   experience. Rejected candidates do not overwrite a user row.
+
+Client display uses `Asia/Shanghai` and includes that timezone name. Stored
+timestamps remain epoch milliseconds. A disabled or forgotten preference keeps
+its key. Creating the same key is refused, with copy that points at restore.
+Editing the existing disabled or forgotten preference restores it to active so
+the saved text is what the next turn recalls.
+
+This loop still does not add a vector database, graph memory, Dream Cycle,
+automatic Skill promotion, or a second model. SQLite remains Host-exclusive.
+The Pi Agent Loop is unchanged.
+
 ## 10. Data model
 
 SQLite is owned by Rust and uses WAL mode for local concurrent reads. All
@@ -1183,7 +1221,9 @@ side effects.
 - evaluation set for relevant vs distracting recall.
 
 Exit criterion: repeat tasks measurably require less instruction without
-leaking unrelated context.
+leaking unrelated context. The P5.16 loop in section 9.6 is the acceptance
+closeout for that memory behavior. It does not by itself complete Stage 5, the
+P5.8 spot check, or 4C.
 
 ## 14. Key risks
 

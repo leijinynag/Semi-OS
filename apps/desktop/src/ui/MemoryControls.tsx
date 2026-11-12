@@ -425,6 +425,7 @@ function MemoryItem({
           {row.recalledLabel}
           {row.recallReason ? ` · 召回原因 ${row.recallReason}` : ""}
         </small>
+        {row.restoreHint && <small className="memory-record-meta">{row.restoreHint}</small>}
       </div>
       <div className="memory-row-actions">
         {row.editablePreference && (
