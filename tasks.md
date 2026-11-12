@@ -1159,7 +1159,7 @@
     `node --experimental-strip-types --test apps/desktop/src/ui/memory-controls.test.ts`、
     `node --experimental-strip-types --test packages/agent-worker/src/experience-persistence.test.ts`
     均通过。
-  - Commit 点：`test(memory): close the memory loop`
+  - Commit 点：`test(memory): close the memory loop`（`35a4005`）
 
 - [x] **记忆增强计划**
   - P5.10 到 P5.16 是这条计划的全部切片，均已落地。闭环验收见 P5.16。
