@@ -64,6 +64,13 @@ Host 在已有用户原文上做确定性识别，不新增协议 kind，也不�
 
 写入以用户作者走 `write_memory` / `memory_links`，旧记录保留。
 
+## 运行时范围召回（P5.13）
+
+Host 仍把结果写入已有的 `memoryContext`，不新增协议 kind，也不改 Pi loop。
+`voice.text.submit` 在转发前按原文决定基础、上下文、搜索和深读。
+`voice.turn.start` 还没有转写，只附基础包，避免挡住首句，也不提前搜索项目记忆。
+工作区、应用、任务和 Skill 来自轮次上的当前范围；闲聊即使带了这些字段也不召回项目记忆。
+
 ## 待补
 
 - 消息 kind 目录与版本策略。

@@ -1082,6 +1082,22 @@
     `cargo test -p semi-os-storage`。
   - Commit 点：`feat(memory): learn explicit corrections`
 
+- [x] **P5.13 运行时范围记忆召回**
+  - Host 在 `voice.text.submit` 上把当前工作区、应用、任务和 Skill 放进
+    `MemoryRecallScope`，并按确定性规则调用基础包、上下文包、`memory_search`
+    和深读。基础包含人格、用户偏好、L1、少量全局高置信事实和当前任务 L0。
+    上下文只在范围明确时出现；搜索只给复杂任务或明确回忆；L4 只在核对证据时
+    读取。闲聊不搜索项目、不装入其他任务记忆、不创建 TaskRun。录音开始没有
+    转写，只附基础包，不挡首句。不改 Pi loop，不加向量库、图记忆、Dream Cycle
+    或自动 Skill 晋升。冲突版本不同时注入，搜索摘要保留范围、来源、更新时间、
+    冲突和置信度。
+  - 证据：`crates/host/src/memory_context.rs`、`crates/storage/src/memory_access.rs`；
+    `cargo test -p semi-os-host memory_context`、
+    `cargo test -p semi-os-storage --lib memory_access`。
+    正例：带工作区的项目任务召回 rustfmt 经验。反例：闲聊「你好」即使带了
+    工作区字段也不出现项目记忆，也不产生 TaskRun。
+  - Commit 点：`feat(memory): add scoped runtime recall`
+
 ## 阶段 6：统一交互与可观测性
 
 依赖：阶段 4A、4B、4C 至少各完成一条代表性工作流。
