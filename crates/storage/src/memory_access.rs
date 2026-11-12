@@ -14,10 +14,13 @@
 //! 其他仓库的行，也没有“倒出整库”的接口；返回条数有上限，并且每条都带来源。
 //!
 //! 渐进包是给 Host 的有序材料，不是完整提示词组装。顺序固定为 Host 策略、
-//! 紧凑人格、用户偏好、L1、L0、再按阶段追加 L2–L5。普通轮次只用基础包：
-//! 紧凑人格、用户偏好、L1、当前项目身份和少量高置信 L2。偏好单独成槽，不占用
+//! 紧凑人格、用户偏好、L1、L0、再按阶段追加 L2–L5。Host 决定这一轮要哪些阶段：
+//! 基础包每轮都取，上下文、搜索和 L4 只在对应阶段出现。偏好单独成槽，不占用
 //! `BASE_L2_LIMIT` 的少量名额。超出调用方给出的 token 预算时截断，不能靠把
 //! 预算调大来一次性装入全部 L2–L5。具体预算数字仍未决，所以预算由 Host 传入。
+//!
+//! 排序固定为：用户明确设置、当前范围匹配、已验证记录、置信度、最近更新、重要度。
+//! 被 supersede 的旧版本，以及 contradicts 里输掉的那一版，不再和当前有效版本一起注入。
 //! 紧凑人格只读当前生效的 `personality_records`，组装过程不写人格、不改作者。
 
 use crate::memory::{actor_may_mutate, check_memory_id};
@@ -432,10 +435,10 @@ impl Storage {
         }
 
         let existing = self.records_in_exact_scope(candidate.body.kind(), &candidate.scope)?;
-        let superseded = self.load_superseded_ids()?;
+        let inactive = self.load_inactive_ids()?;
         if let Some(duplicate) = existing.iter().find(|record| {
             canonical_text(&record.body) == canonical_text(&candidate.body)
-                && !superseded.contains(&record.memory_id)
+                && !inactive.contains(&record.memory_id)
         }) {
             if actor_may_mutate(actor, duplicate.author) {
                 self.attach_missing_sources(actor, &duplicate.memory_id, candidate, now)?;
@@ -684,9 +687,10 @@ impl Storage {
         }))
     }
 
-    /// 先按范围过滤，再按全文、置信度、重要度和冲突降权排序。
+    /// 先按范围过滤，再按用户明确设置、范围匹配、已验证、置信度、更新时间和重要度排序。
     ///
-    /// `limit` 超过 [`MAX_RECALL`] 会被截断。空查询仍受范围和条数限制，不会返回其他仓库的记录。
+    /// 已被替换或在冲突中落败的版本不返回。`limit` 超过 [`MAX_RECALL`] 会被截断。
+    /// 空查询仍受范围和条数限制，不会返回其他仓库的记录。
     pub fn search_memories(
         &self,
         scope: &MemoryRecallScope,
@@ -704,7 +708,7 @@ impl Storage {
     pub fn load_memory_pack(&self, request: &MemoryPackRequest) -> StorageResult<MemoryPack> {
         let records = self.load_scoped_records(&request.scope)?;
         let admission = self.load_admission()?;
-        let superseded = self.load_superseded_ids()?;
+        let inactive = self.load_inactive_ids()?;
         let tokens = query_tokens(&request.query);
         let mut entries = Vec::new();
         let mut included = HashSet::new();
@@ -731,11 +735,12 @@ impl Storage {
         let preferences = unique_preference_versions(ranked_records(
             records.iter().filter(|record| {
                 record.record_kind == MemoryRecordKind::Preference
-                    && !superseded.contains(&record.memory_id)
+                    && !inactive.contains(&record.memory_id)
                     && (record.author == MemoryAuthor::User
                         || confidence_of(record, &admission) >= HIGH_CONFIDENCE)
             }),
             &admission,
+            &request.scope,
         ));
         push_records(
             &mut entries,
@@ -760,7 +765,7 @@ impl Storage {
             .filter(|record| {
                 record.layer == MemoryLayer::L0
                     && !(record.record_kind == MemoryRecordKind::CompactionSummary
-                        && superseded.contains(&record.memory_id))
+                        && inactive.contains(&record.memory_id))
             })
             .collect();
         push_records(
@@ -771,8 +776,8 @@ impl Storage {
             self,
         )?;
 
-        let project = project_identity(&records, &request.scope, &admission, &superseded);
-        let mut base_l2 = high_confidence_l2(&records, &admission, &superseded);
+        let project = project_identity(&records, &request.scope, &admission, &inactive);
+        let mut base_l2 = high_confidence_l2(&records, &request.scope, &admission, &inactive);
         if let Some(project) = project {
             if let Some(position) = base_l2
                 .iter()
@@ -805,10 +810,11 @@ impl Storage {
                         record.layer == MemoryLayer::L2
                             && record.record_kind != MemoryRecordKind::Preference
                             && !included.contains(&record.memory_id)
-                            && !superseded.contains(&record.memory_id)
+                            && !inactive.contains(&record.memory_id)
                             && confidence_of(record, &admission) >= 40
                     }),
                     &admission,
+                    &request.scope,
                 );
                 push_records(
                     &mut entries,
@@ -820,10 +826,11 @@ impl Storage {
                 let episodes = ranked_records(
                     records.iter().filter(|record| {
                         record.layer == MemoryLayer::L3
-                            && !superseded.contains(&record.memory_id)
+                            && !inactive.contains(&record.memory_id)
                             && confidence_of(record, &admission) >= 40
                     }),
                     &admission,
+                    &request.scope,
                 );
                 push_records(
                     &mut entries,
@@ -838,19 +845,24 @@ impl Storage {
                     self,
                     &mut entries,
                     &mut included,
-                    &records,
-                    &admission,
-                    &superseded,
-                    &tokens,
+                    &SearchHitInput {
+                        records: &records,
+                        scope: &request.scope,
+                        admission: &admission,
+                        inactive: &inactive,
+                        tokens: &tokens,
+                    },
                 )?;
             }
             MemoryPackStage::DeepEvidence => {
+                // 和搜索一样按词命中即可。整句必须同时出现会让中文长句永远配不上证据指针。
                 let evidence = ranked_records(
                     records.iter().filter(|record| {
                         record.layer == MemoryLayer::L4
-                            && text_matches(&render_body(&record.body), &tokens)
+                            && token_overlaps(&render_body(&record.body), &tokens)
                     }),
                     &admission,
+                    &request.scope,
                 );
                 push_records(
                     &mut entries,
@@ -979,9 +991,12 @@ impl Storage {
     ) -> StorageResult<Vec<RankedMemory>> {
         let tokens = query_tokens(query);
         let admission = self.load_admission()?;
-        let superseded = self.load_superseded_ids()?;
+        let inactive = self.load_inactive_ids()?;
         let mut ranked = Vec::new();
         for record in self.load_scoped_records(scope)? {
+            if inactive.contains(&record.memory_id) {
+                continue;
+            }
             let matches = token_matches(&render_body(&record.body), &tokens);
             if !tokens.is_empty() && matches == 0 {
                 continue;
@@ -990,12 +1005,10 @@ impl Storage {
                 .get(&record.memory_id)
                 .copied()
                 .unwrap_or_else(|| default_scores(&record));
-            let score = rank_score(
-                confidence,
-                importance,
-                matches,
-                superseded.contains(&record.memory_id),
-            );
+            let score = i64::from(user_explicit_rank(&record)) * 1_000_000
+                + i64::from(scope_match_rank(scope, &record.scope)) * 10_000
+                + i64::from(verified_rank(&record)) * 1_000
+                + i64::from(confidence);
             ranked.push(RankedMemory {
                 record,
                 confidence,
@@ -1003,13 +1016,7 @@ impl Storage {
                 score,
             });
         }
-        ranked.sort_by(|left, right| {
-            right
-                .score
-                .cmp(&left.score)
-                .then(right.record.updated_at_ms.cmp(&left.record.updated_at_ms))
-                .then(left.record.memory_id.cmp(&right.record.memory_id))
-        });
+        ranked.sort_by(|left, right| cmp_recall(&left.record, &right.record, scope, &admission));
         Ok(ranked)
     }
 
@@ -1191,12 +1198,102 @@ impl Storage {
         Ok(scores)
     }
 
-    fn load_superseded_ids(&self) -> StorageResult<HashSet<String>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT to_memory_id FROM memory_links WHERE relation = 'supersedes'")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<HashSet<_>, _>>().map_err(Into::into)
+    /// 不能和当前有效版本一起注入的记录。
+    ///
+    /// `supersedes` 的目标就是被替换的旧版。`contradicts` 只去掉落败的一侧：
+    /// 用户明确记录优先于 Agent，同一作者再比更新时间。胜出的一侧保留链接，
+    /// 调用方仍能追到冲突来源。
+    fn load_inactive_ids(&self) -> StorageResult<HashSet<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT relation, from_memory_id, to_memory_id FROM memory_links
+             WHERE relation IN ('supersedes', 'contradicts')",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut inactive = HashSet::new();
+        for row in rows {
+            let (relation, from_id, to_id) = row?;
+            if relation == "supersedes" {
+                inactive.insert(to_id);
+                continue;
+            }
+            let from = self
+                .load_memory(&from_id)?
+                .ok_or_else(|| StorageError::InvalidMemory(format!("冲突来源缺失：{from_id}")))?;
+            let to = self
+                .load_memory(&to_id)?
+                .ok_or_else(|| StorageError::InvalidMemory(format!("冲突目标缺失：{to_id}")))?;
+            inactive.insert(conflict_loser(&from, &to).memory_id.clone());
+        }
+        Ok(inactive)
+    }
+
+    /// 用户点名了某个项目、工作流或对象时，返回唯一匹配的工作区。
+    ///
+    /// 平局不猜测，避免闲聊或含糊句子串到错误仓库。调用方只在已经确定
+    /// 这不是闲聊之后才查，这里不会为了匹配去放宽用户边界。
+    pub fn mentioned_workspace(&self, user_id: &str, text: &str) -> StorageResult<Option<String>> {
+        ensure_scope(&MemoryRecallScope {
+            user_id: user_id.to_owned(),
+            workspace_id: None,
+            application_id: None,
+            task_id: None,
+            skill_id: None,
+        })?;
+        let tokens = recall_tokens(text);
+        if tokens.is_empty() {
+            return Ok(None);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT memory_id FROM memories
+             WHERE user_id IS NULL OR user_id = ?1
+             ORDER BY updated_at_ms DESC, memory_id ASC",
+        )?;
+        let ids = statement.query_map(params![user_id], |row| row.get::<_, String>(0))?;
+        let mut scores: HashMap<String, u32> = HashMap::new();
+        for memory_id in ids {
+            let memory_id = memory_id?;
+            let Some(record) = self.load_memory(&memory_id)? else {
+                return Err(StorageError::InvalidMemory(format!(
+                    "范围内的记忆缺失：{memory_id}"
+                )));
+            };
+            let Some(workspace_id) = record.scope.workspace_id.clone() else {
+                continue;
+            };
+            if !matches!(
+                record.layer,
+                MemoryLayer::L2 | MemoryLayer::L3 | MemoryLayer::L5
+            ) || record.record_kind == MemoryRecordKind::Preference
+            {
+                continue;
+            }
+            let body = render_body(&record.body).to_lowercase();
+            let mut score = 0u32;
+            for token in &tokens {
+                if body.contains(token) {
+                    score += u32::try_from(token.chars().count()).unwrap_or(0);
+                }
+            }
+            if score == 0 {
+                continue;
+            }
+            let entry = scores.entry(workspace_id).or_insert(0);
+            *entry = entry.saturating_add(score);
+        }
+        let mut ranked: Vec<_> = scores.into_iter().collect();
+        ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+        match ranked.as_slice() {
+            [] => Ok(None),
+            [only] => Ok(Some(only.0.clone())),
+            [best, next, ..] if best.1 > next.1 => Ok(Some(best.0.clone())),
+            _ => Ok(None),
+        }
     }
 }
 
@@ -1224,24 +1321,30 @@ where
     Ok(())
 }
 
+struct SearchHitInput<'a> {
+    records: &'a [MemoryRecord],
+    scope: &'a MemoryRecallScope,
+    admission: &'a HashMap<String, (u8, u8)>,
+    inactive: &'a HashSet<String>,
+    tokens: &'a [String],
+}
+
 fn push_search_hits(
     storage: &Storage,
     entries: &mut Vec<MemoryPackEntry>,
     included: &mut HashSet<String>,
-    records: &[MemoryRecord],
-    admission: &HashMap<String, (u8, u8)>,
-    superseded: &HashSet<String>,
-    tokens: &[String],
+    input: &SearchHitInput<'_>,
 ) -> StorageResult<()> {
     for layer in [MemoryLayer::L2, MemoryLayer::L3] {
         let matched = ranked_records(
-            records.iter().filter(|record| {
+            input.records.iter().filter(|record| {
                 record.layer == layer
                     && record.record_kind != MemoryRecordKind::Preference
-                    && !superseded.contains(&record.memory_id)
-                    && text_matches(&render_body(&record.body), tokens)
+                    && !input.inactive.contains(&record.memory_id)
+                    && token_overlaps(&render_body(&record.body), input.tokens)
             }),
-            admission,
+            input.admission,
+            input.scope,
         );
         push_records(
             entries,
@@ -1252,12 +1355,13 @@ fn push_search_hits(
         )?;
     }
     let procedures = ranked_records(
-        records.iter().filter(|record| {
+        input.records.iter().filter(|record| {
             record.layer == MemoryLayer::L5
-                && !superseded.contains(&record.memory_id)
-                && text_matches(&procedure_name(&record.body), tokens)
+                && !input.inactive.contains(&record.memory_id)
+                && token_overlaps(&procedure_name(&record.body), input.tokens)
         }),
-        admission,
+        input.admission,
+        input.scope,
     );
     for record in procedures.into_iter().take(SEARCH_L5_LIMIT) {
         if !included.insert(record.memory_id.clone()) {
@@ -1293,7 +1397,7 @@ fn project_identity<'a>(
     records: &'a [MemoryRecord],
     scope: &MemoryRecallScope,
     admission: &HashMap<String, (u8, u8)>,
-    superseded: &HashSet<String>,
+    inactive: &HashSet<String>,
 ) -> Option<&'a MemoryRecord> {
     let Some(workspace_id) = &scope.workspace_id else {
         return None;
@@ -1302,10 +1406,11 @@ fn project_identity<'a>(
         records.iter().filter(|record| {
             record.record_kind == MemoryRecordKind::ProjectFact
                 && record.scope.workspace_id.as_ref() == Some(workspace_id)
-                && !superseded.contains(&record.memory_id)
+                && !inactive.contains(&record.memory_id)
                 && confidence_of(record, admission) >= HIGH_CONFIDENCE
         }),
         admission,
+        scope,
     )
     .into_iter()
     .next()
@@ -1313,17 +1418,19 @@ fn project_identity<'a>(
 
 fn high_confidence_l2<'a>(
     records: &'a [MemoryRecord],
+    scope: &MemoryRecallScope,
     admission: &HashMap<String, (u8, u8)>,
-    superseded: &HashSet<String>,
+    inactive: &HashSet<String>,
 ) -> Vec<&'a MemoryRecord> {
     ranked_records(
         records.iter().filter(|record| {
             record.layer == MemoryLayer::L2
                 && record.record_kind != MemoryRecordKind::Preference
-                && !superseded.contains(&record.memory_id)
+                && !inactive.contains(&record.memory_id)
                 && confidence_of(record, admission) >= HIGH_CONFIDENCE
         }),
         admission,
+        scope,
     )
 }
 
@@ -1372,29 +1479,16 @@ fn author_rank(author: MemoryAuthor) -> u8 {
     }
 }
 
-fn ranked_records<'a, I>(records: I, admission: &HashMap<String, (u8, u8)>) -> Vec<&'a MemoryRecord>
+fn ranked_records<'a, I>(
+    records: I,
+    admission: &HashMap<String, (u8, u8)>,
+    scope: &MemoryRecallScope,
+) -> Vec<&'a MemoryRecord>
 where
     I: Iterator<Item = &'a MemoryRecord>,
 {
     let mut records: Vec<_> = records.collect();
-    records.sort_by(|left, right| {
-        confidence_of(right, admission)
-            .cmp(&confidence_of(left, admission))
-            .then(
-                admission
-                    .get(&right.memory_id)
-                    .map(|(_, importance)| *importance)
-                    .unwrap_or(50)
-                    .cmp(
-                        &admission
-                            .get(&left.memory_id)
-                            .map(|(_, importance)| *importance)
-                            .unwrap_or(50),
-                    ),
-            )
-            .then(right.updated_at_ms.cmp(&left.updated_at_ms))
-            .then(left.memory_id.cmp(&right.memory_id))
-    });
+    records.sort_by(|left, right| cmp_recall(left, right, scope, admission));
     records
 }
 
@@ -1444,13 +1538,89 @@ fn default_scores(record: &MemoryRecord) -> (u8, u8) {
     (confidence, 50)
 }
 
-fn rank_score(confidence: u8, importance: u8, matches: usize, superseded: bool) -> i64 {
-    let mut score = i64::from(confidence) * 1_000 + i64::from(importance);
-    score += i64::try_from(matches).unwrap_or(i64::MAX) * 50;
-    if superseded {
-        score -= 100_000;
+fn conflict_loser<'a>(from: &'a MemoryRecord, to: &'a MemoryRecord) -> &'a MemoryRecord {
+    match author_rank(from.author).cmp(&author_rank(to.author)) {
+        std::cmp::Ordering::Greater => to,
+        std::cmp::Ordering::Less => from,
+        std::cmp::Ordering::Equal => {
+            if from.updated_at_ms >= to.updated_at_ms {
+                to
+            } else {
+                from
+            }
+        }
     }
-    score
+}
+
+fn cmp_recall(
+    left: &MemoryRecord,
+    right: &MemoryRecord,
+    scope: &MemoryRecallScope,
+    admission: &HashMap<String, (u8, u8)>,
+) -> std::cmp::Ordering {
+    recall_tuple(right, scope, admission)
+        .cmp(&recall_tuple(left, scope, admission))
+        .then(left.memory_id.cmp(&right.memory_id))
+}
+
+fn recall_tuple(
+    record: &MemoryRecord,
+    scope: &MemoryRecallScope,
+    admission: &HashMap<String, (u8, u8)>,
+) -> (u8, u8, u8, u8, i64, u8) {
+    (
+        user_explicit_rank(record),
+        scope_match_rank(scope, &record.scope),
+        verified_rank(record),
+        confidence_of(record, admission),
+        record.updated_at_ms,
+        importance_of(record, admission),
+    )
+}
+
+fn user_explicit_rank(record: &MemoryRecord) -> u8 {
+    if record.author != MemoryAuthor::User {
+        return 0;
+    }
+    if record.record_kind == MemoryRecordKind::Preference {
+        2
+    } else {
+        1
+    }
+}
+
+fn scope_match_rank(scope: &MemoryRecallScope, stored: &MemoryScope) -> u8 {
+    let mut rank = 0;
+    if dimension_matches(&scope.workspace_id, &stored.workspace_id) {
+        rank += 8;
+    }
+    if dimension_matches(&scope.application_id, &stored.application_id) {
+        rank += 4;
+    }
+    if dimension_matches(&scope.task_id, &stored.task_id) {
+        rank += 2;
+    }
+    if dimension_matches(&scope.skill_id, &stored.skill_id) {
+        rank += 1;
+    }
+    rank
+}
+
+fn dimension_matches(requested: &Option<String>, stored: &Option<String>) -> bool {
+    requested
+        .as_ref()
+        .is_some_and(|value| stored.as_ref() == Some(value))
+}
+
+fn verified_rank(record: &MemoryRecord) -> u8 {
+    u8::from(record.record_kind == MemoryRecordKind::VerifiedOutcome)
+}
+
+fn importance_of(record: &MemoryRecord, admission: &HashMap<String, (u8, u8)>) -> u8 {
+    admission
+        .get(&record.memory_id)
+        .map(|(_, importance)| *importance)
+        .unwrap_or(50)
 }
 
 fn pack_entry(
@@ -1779,6 +1949,11 @@ fn procedure_name(body: &MemoryBody) -> String {
     }
 }
 
+/// 记忆正文的稳定文本。Host 组装搜索摘要时使用，不另写一套格式。
+pub fn memory_text(body: &MemoryBody) -> String {
+    render_body(body)
+}
+
 fn render_body(body: &MemoryBody) -> String {
     match body {
         MemoryBody::PiSession {
@@ -1885,8 +2060,70 @@ fn token_matches(text: &str, tokens: &[String]) -> usize {
         .count()
 }
 
-fn text_matches(text: &str, tokens: &[String]) -> bool {
-    tokens.is_empty() || token_matches(text, tokens) == tokens.len()
+fn token_overlaps(text: &str, tokens: &[String]) -> bool {
+    tokens.is_empty() || token_matches(text, tokens) > 0
+}
+
+const RECALL_STOPWORDS: &[&str] = &[
+    "这个",
+    "那个",
+    "一下",
+    "帮我",
+    "请问",
+    "继续",
+    "上次",
+    "之前",
+    "以前",
+    "项目",
+    "仓库",
+    "工作区",
+    "任务",
+    "技能",
+    "应用",
+    "配置",
+    "经验",
+    "证据",
+    "原文",
+    "历史",
+    "什么",
+    "怎么",
+    "如何",
+];
+
+/// 从用户原文抽出检索词。英文按词切，中文按连续汉字切，停用词不参与匹配。
+pub fn recall_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut ascii = String::new();
+    let mut cjk = String::new();
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() {
+            push_recall_token(&mut tokens, &mut cjk, 2);
+            ascii.push(character.to_ascii_lowercase());
+        } else if is_cjk(character) {
+            push_recall_token(&mut tokens, &mut ascii, 4);
+            cjk.push(character);
+        } else {
+            push_recall_token(&mut tokens, &mut ascii, 4);
+            push_recall_token(&mut tokens, &mut cjk, 2);
+        }
+    }
+    push_recall_token(&mut tokens, &mut ascii, 4);
+    push_recall_token(&mut tokens, &mut cjk, 2);
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn push_recall_token(tokens: &mut Vec<String>, buffer: &mut String, minimum: usize) {
+    if buffer.chars().count() >= minimum && !RECALL_STOPWORDS.contains(&buffer.as_str()) {
+        tokens.push(std::mem::take(buffer));
+    } else {
+        buffer.clear();
+    }
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(character, '\u{4E00}'..='\u{9FFF}')
 }
 
 fn nonempty(text: &str) -> Option<String> {
@@ -2520,6 +2757,133 @@ mod tests {
             .iter()
             .all(|hit| hit.record.memory_id != "mem_batch_other"));
         assert!(batched.iter().all(|hit| !hit.sources.is_empty()));
+    }
+
+    #[test]
+    fn recall_rank_prefers_user_scope_and_verified_before_recency() {
+        let mut db = open();
+        let scoped = scope("user_a", Some("repo_a"), None, None, None);
+        let mut user_pref = candidate(
+            "mem_user_pref",
+            preference("editor", "marker user explicit"),
+            scoped.clone(),
+            40,
+        );
+        user_pref.importance = 10;
+        db.write_memory(MemoryActor::User, &user_pref, 1).unwrap();
+
+        let mut global_pref = candidate(
+            "mem_global_pref",
+            preference("editor", "marker global user"),
+            scope("user_a", None, None, None, None),
+            99,
+        );
+        global_pref.importance = 99;
+        db.write_memory(MemoryActor::User, &global_pref, 2).unwrap();
+
+        db.write_memory(
+            MemoryActor::Agent,
+            &candidate(
+                "mem_verified",
+                MemoryBody::VerifiedOutcome {
+                    summary: "marker verified outcome".into(),
+                },
+                scoped.clone(),
+                50,
+            ),
+            3,
+        )
+        .unwrap();
+
+        let mut older = candidate(
+            "mem_old",
+            MemoryBody::ProjectFact {
+                fact: "marker older fact".into(),
+            },
+            scoped.clone(),
+            90,
+        );
+        older.importance = 99;
+        db.write_memory(MemoryActor::Agent, &older, 4).unwrap();
+
+        let mut newer = candidate(
+            "mem_new",
+            MemoryBody::ProjectFact {
+                fact: "marker newer fact".into(),
+            },
+            scoped.clone(),
+            90,
+        );
+        newer.importance = 10;
+        db.write_memory(MemoryActor::Agent, &newer, 5).unwrap();
+
+        let hits = db
+            .search_memories(
+                &recall("user_a", Some("repo_a"), None, None, None),
+                "marker",
+                8,
+            )
+            .unwrap();
+        assert_eq!(
+            hits.iter()
+                .map(|hit| hit.record.memory_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "mem_user_pref",
+                "mem_global_pref",
+                "mem_verified",
+                "mem_new",
+                "mem_old"
+            ]
+        );
+    }
+
+    #[test]
+    fn conflicting_version_is_not_recalled_with_the_current_one() {
+        let mut db = open();
+        let scoped = scope("user_a", Some("repo_a"), None, None, None);
+        db.write_memory(
+            MemoryActor::Agent,
+            &candidate(
+                "fact_old",
+                MemoryBody::ProjectFact {
+                    fact: "marker edition2018".into(),
+                },
+                scoped.clone(),
+                80,
+            ),
+            10,
+        )
+        .unwrap();
+        let mut current = candidate(
+            "fact_new",
+            MemoryBody::ProjectFact {
+                fact: "marker edition2024".into(),
+            },
+            scoped,
+            90,
+        );
+        current.conflict = Some(MemoryWriteConflict {
+            target_memory_id: "fact_old".into(),
+            relation: MemoryRelation::Supersedes,
+        });
+        db.write_memory(MemoryActor::User, &current, 11).unwrap();
+
+        let hits = db
+            .search_memories(
+                &recall("user_a", Some("repo_a"), None, None, None),
+                "marker",
+                8,
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.memory_id, "fact_new");
+        assert!(hits[0]
+            .links
+            .iter()
+            .any(|link| link.relation == MemoryRelation::Supersedes
+                && link.to_memory_id == "fact_old"));
+        assert!(db.load_memory("fact_old").unwrap().is_some());
     }
 
     struct PackFixture {
