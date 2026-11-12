@@ -1115,6 +1115,28 @@
     时序：`voice.sentence` 与 `voice.answer` 早于 `memory.candidate.submit`。
   - Commit 点：`feat(memory): persist verified experiences`
 
+- [x] **P5.15 客户端记忆解释与控制**
+  - 记忆页区分用户设置、Agent 学到的、项目与应用经验、任务经验和未验证工作流。
+    每条显示摘要、来源、范围、作者、更新时间、上次召回时间和原因、状态和是否冲突。
+    用户可以纠正、停用、忘记、查看来源，并恢复误忘记的记录。纠正 Agent 记录时新增
+    用户记录并 supersede，不改 Agent 原文。用户记录对 Agent 只读。写入、拒绝和召回
+    记在记忆页动态里，不产生语音事件。
+  - 同批经验写入不再在第一条失败时丢掉后续候选。Host 拒绝会记成 `write_failed`，
+    摘要只保留原因码。传输超时还没到达 Host 时，失败留在 Worker 的返回值里，
+    不新增协议消息。
+  - 本切片不改 Pi Agent Loop，不加向量库、图记忆、Dream Cycle、额外 LLM 或自动
+    Skill 晋升。P5.13 遗留的闲聊词表、L1 / 深读 L4 / 点名工作区的 inactive 对齐，
+    以及决策白名单、不要求 workspaceId、外部来源摘录、cwd 回退分叉、分层 token
+    上限和 contradicts 负例，都不在本切片。
+  - 证据：`crates/host/src/memory_controls.rs`、`crates/storage/src/memory_effect.rs`、
+    `apps/desktop/src/ui/MemoryControls.tsx`、
+    `packages/agent-worker/src/experience-persistence.ts`。
+    `cargo test -p semi-os-host --lib memory_controls`、
+    `cargo test -p semi-os-storage --lib memory_effect`、
+    `node --experimental-strip-types --test apps/desktop/src/ui/memory-controls.test.ts`、
+    Agent Worker 的 `experience-persistence` 测试。
+  - Commit 点：`feat(client): explain and control memories`
+
 ## 阶段 6：统一交互与可观测性
 
 依赖：阶段 4A、4B、4C 至少各完成一条代表性工作流。

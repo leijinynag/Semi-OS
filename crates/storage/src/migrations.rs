@@ -78,6 +78,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "memory admission scores",
         include_str!("../migrations/0015_memory_admission.sql"),
     ),
+    (
+        16,
+        "memory effect and activity",
+        include_str!("../migrations/0016_memory_effect.sql"),
+    ),
 ];
 
 /// 在单个排他事务中依次执行迁移。

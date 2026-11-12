@@ -1435,7 +1435,7 @@ html[data-surface="assistant"] #root {
 }
 
 .client-settings.memory-controls {
-  width: min(560px, calc(100% - 40px));
+  width: min(640px, calc(100% - 40px));
   padding: 0;
   overflow-y: auto;
 }
@@ -1626,8 +1626,48 @@ html[data-surface="assistant"] #root {
 }
 
 .memory-record-row {
+  display: flex;
+  min-height: 72px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-start;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
+}
+
+.memory-record-row .memory-record-copy {
+  flex: 1 1 280px;
+}
+
+.memory-record-row .memory-row-actions {
+  flex: 0 0 auto;
+  min-height: 28px;
+}
+
+.memory-source-list {
+  flex: 1 1 100%;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--client-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-activity-list {
+  border-top: 1px solid var(--border);
+}
+
+.memory-activity-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 2px 12px;
+  min-height: 44px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-activity-row .memory-record-meta {
+  grid-column: 2;
 }
 
 .memory-record-kind {

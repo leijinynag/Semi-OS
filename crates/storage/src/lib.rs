@@ -8,6 +8,7 @@ mod error;
 mod execution;
 mod memory;
 mod memory_access;
+mod memory_effect;
 mod migrations;
 mod models;
 mod outbound_rpc;
@@ -32,6 +33,10 @@ pub use memory_access::{
     CompactionRejection, CompactionTurn, CompletedAction, MemoryHit, MemoryPack, MemoryPackEntry,
     MemoryPackRequest, MemoryPackSlot, MemoryPackStage, MemoryRecallScope, MemoryWriteCandidate,
     MemoryWriteConflict, MemoryWriteOutcome, MemoryWriteRejection, SessionCompactionRequest,
+};
+pub use memory_effect::{
+    MemoryActivityKind, MemoryActivityRecord, MemoryEffectSnapshot, MemoryEffectStatus,
+    MemoryRecallNote,
 };
 pub use models::{
     AgentSessionCheckpoint, NewTaskEvent, TaskEvent, TaskSnapshot, ToolAttempt, ToolReplayDecision,

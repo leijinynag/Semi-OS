@@ -1,21 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DeleteIcon, DismissIcon, RenameIcon } from "./icons";
+import { DismissIcon } from "./icons";
 import {
+  MEMORY_COMMANDS,
   parseClientMemoryPage,
   projectMemoryPanel,
   readMemoryError,
+  validateCorrectionDraft,
   validatePreferenceDraft,
   type ClientMemoryPage,
+  type MemoryPanelItem,
   type MemoryPanelView,
 } from "./memory-controls";
 
 /**
- * 记忆与偏好对话框。成功与否只看 Host 返回的快照；人格区没有输入框。
- *
- * 添加表单是偏好 section 的一部分，默认收起；只有空偏好列表在首次加载时
- * 自动展开一次，避免用户面对空白 section 找不到入口。编辑复用同一表单，
- * 因此界面上始终只有一个偏好编辑区。
+ * 记忆页按 Host 快照分节。纠正、停用、忘记和恢复都把整页快照换回来，
+ * 不在界面上改原文。查看来源只展开快照里的来源，不另开数据库。
  */
 export function MemoryControls({ open, onClose }: { open: boolean; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -26,6 +26,9 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
   const [preferenceValue, setPreferenceValue] = useState("");
   const [editingId, setEditingId] = useState<string>();
   const [editorOpen, setEditorOpen] = useState(false);
+  const [correctingId, setCorrectingId] = useState<string>();
+  const [correctionText, setCorrectionText] = useState("");
+  const [sourceId, setSourceId] = useState<string>();
   const [pending, setPending] = useState(false);
   const [reload, setReload] = useState(0);
 
@@ -44,6 +47,9 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
     setPreferenceKey("");
     setPreferenceValue("");
     setEditorOpen(false);
+    setCorrectingId(undefined);
+    setCorrectionText("");
+    setSourceId(undefined);
     setError("");
   }, [open]);
 
@@ -52,12 +58,11 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
     let cancelled = false;
     setStatus("loading");
     setError("");
-    invoke("list_client_memory")
+    invoke(MEMORY_COMMANDS.list)
       .then((payload) => {
         if (cancelled) return;
         const next = parseClientMemoryPage(payload);
         setPage(next);
-        // 空列表才自动展开；有数据时保持 section 紧凑，由“添加”显式打开。
         setEditorOpen(next.preferences.length === 0);
         setStatus("ready");
       })
@@ -74,11 +79,18 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
 
   const view: MemoryPanelView | undefined = page ? projectMemoryPanel(page) : undefined;
 
+  function applyPage(payload: unknown) {
+    setPage(parseClientMemoryPage(payload));
+    setStatus("ready");
+    setError("");
+  }
+
   function beginAdd() {
     setEditingId(undefined);
     setPreferenceKey("");
     setPreferenceValue("");
     setEditorOpen(true);
+    setCorrectingId(undefined);
     setError("");
   }
 
@@ -87,6 +99,15 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
     setPreferenceKey(key);
     setPreferenceValue(value);
     setEditorOpen(true);
+    setCorrectingId(undefined);
+    setError("");
+  }
+
+  function beginCorrect(row: MemoryPanelItem) {
+    setCorrectingId(row.memoryId);
+    setCorrectionText(row.preferenceValue ?? row.summary);
+    setEditorOpen(false);
+    setEditingId(undefined);
     setError("");
   }
 
@@ -111,11 +132,10 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
     setError("");
     try {
       const payload = await invoke(
-        editingId ? "revise_user_preference" : "create_user_preference",
+        editingId ? MEMORY_COMMANDS.revisePreference : MEMORY_COMMANDS.createPreference,
         editingId ? { memoryId: editingId, ...draft } : draft,
       );
-      setPage(parseClientMemoryPage(payload));
-      setStatus("ready");
+      applyPage(payload);
       setEditingId(undefined);
       setPreferenceKey("");
       setPreferenceValue("");
@@ -127,14 +147,34 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
     }
   }
 
-  async function remove(memoryId: string) {
+  async function submitCorrection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!correctingId) return;
+    let text: string;
+    try {
+      text = validateCorrectionDraft(correctionText);
+    } catch (reason) {
+      setError(readMemoryError(reason));
+      return;
+    }
+    await runCommand(MEMORY_COMMANDS.correct, { memoryId: correctingId, text }, () => {
+      setCorrectingId(undefined);
+      setCorrectionText("");
+    });
+  }
+
+  async function runCommand(
+    command: string,
+    args: { memoryId: string; text?: string },
+    after?: () => void,
+  ) {
     setPending(true);
     setError("");
     try {
-      const payload = await invoke("delete_user_preference", { memoryId });
-      setPage(parseClientMemoryPage(payload));
-      setStatus("ready");
-      if (editingId === memoryId) cancelEdit();
+      const payload = await invoke(command, args);
+      applyPage(payload);
+      after?.();
+      if (editingId === args.memoryId) cancelEdit();
     } catch (reason) {
       setError(readMemoryError(reason));
     } finally {
@@ -185,114 +225,152 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
             </p>
           )}
           <p className="memory-persona">{view.personaLine}</p>
-          <section className="memory-section" aria-labelledby="memory-preferences-heading">
-            <div className="memory-section-head">
-              <h3 id="memory-preferences-heading">偏好</h3>
-              {!editorOpen && (
-                <button
-                  type="button"
-                  className="memory-ghost-button"
-                  disabled={pending}
-                  onClick={beginAdd}
-                >
-                  添加
-                </button>
-              )}
-            </div>
-            {view.preferences.length === 0 ? (
-              !editorOpen && <p className="memory-empty">{view.preferenceEmpty}</p>
-            ) : (
-              <ul className="memory-list memory-preference-list">
-                {view.preferences.map((row) => (
-                  <li key={row.memoryId} className="memory-preference-row">
-                    <div className="memory-preference-copy">
-                      <span className="memory-preference-key">{row.key}</span>
-                      <span className="memory-preference-value">{row.value}</span>
-                      <small className="memory-preference-meta">{row.metaLabel}</small>
-                    </div>
-                    {row.editable && (
-                      <div className="memory-row-actions">
-                        <button
-                          type="button"
-                          className="memory-icon-button"
-                          aria-label={`编辑偏好 ${row.key}`}
-                          title={`编辑偏好 ${row.key}`}
-                          disabled={pending}
-                          onClick={() => beginEdit(row.memoryId, row.key, row.value)}
-                        >
-                          <RenameIcon size={16} />
-                        </button>
-                        <button
-                          type="button"
-                          className="memory-icon-button is-destructive"
-                          aria-label={`删除偏好 ${row.key}`}
-                          title={`删除偏好 ${row.key}`}
-                          disabled={pending}
-                          onClick={() => void remove(row.memoryId)}
-                        >
-                          <DeleteIcon size={16} />
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {editorOpen && (
-              <form className="memory-form" onSubmit={(event) => void submit(event)}>
-                <label className="memory-field" htmlFor="memory-preference-key">
-                  <span>名称</span>
-                  <input
-                    id="memory-preference-key"
-                    value={preferenceKey}
-                    disabled={pending}
-                    autoFocus
-                    onChange={(event) => setPreferenceKey(event.target.value)}
-                  />
-                </label>
-                <label className="memory-field" htmlFor="memory-preference-value">
-                  <span>内容</span>
-                  <input
-                    id="memory-preference-value"
-                    value={preferenceValue}
-                    disabled={pending}
-                    onChange={(event) => setPreferenceValue(event.target.value)}
-                  />
-                </label>
-                <div className="memory-form-actions">
+          <p className="memory-note">{view.voiceNote}</p>
+          {view.sections.map((section) => (
+            <section
+              key={section.id}
+              className="memory-section"
+              aria-labelledby={`memory-section-${section.id}`}
+              data-section={section.id}
+            >
+              <div className="memory-section-head">
+                <h3 id={`memory-section-${section.id}`}>{section.title}</h3>
+                {section.id === "user_settings" && !editorOpen && (
                   <button
                     type="button"
                     className="memory-ghost-button"
                     disabled={pending}
-                    onClick={cancelEdit}
+                    onClick={beginAdd}
                   >
-                    取消
+                    添加
                   </button>
-                  <button type="submit" className="client-dark-button" disabled={pending}>
-                    {editingId ? "保存" : "添加"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </section>
-          <section className="memory-section" aria-labelledby="memory-records-heading">
-            <div className="memory-section-head">
-              <h3 id="memory-records-heading">记忆</h3>
-            </div>
-            <p className="memory-note">只读 · 含作者与权限</p>
-            {view.memoryEmpty ? (
-              <p className="memory-empty">{view.memoryEmpty}</p>
-            ) : (
+                )}
+              </div>
+              {section.empty ? (
+                <p className="memory-empty">{section.empty}</p>
+              ) : (
+                <ul className="memory-list memory-record-list">
+                  {section.items.map((row) => (
+                    <MemoryItem
+                      key={row.memoryId}
+                      row={row}
+                      pending={pending}
+                      sourceOpen={sourceId === row.memoryId}
+                      correcting={correctingId === row.memoryId}
+                      correctionText={correctionText}
+                      onToggleSource={() =>
+                        setSourceId((current) =>
+                          current === row.memoryId ? undefined : row.memoryId,
+                        )
+                      }
+                      onEdit={() =>
+                        beginEdit(row.memoryId, row.preferenceKey ?? "", row.preferenceValue ?? "")
+                      }
+                      onCorrect={() => beginCorrect(row)}
+                      onCorrectionText={setCorrectionText}
+                      onSubmitCorrection={(event) => void submitCorrection(event)}
+                      onCancelCorrection={() => {
+                        setCorrectingId(undefined);
+                        setCorrectionText("");
+                      }}
+                      onDisable={() =>
+                        void runCommand(MEMORY_COMMANDS.disable, { memoryId: row.memoryId })
+                      }
+                      onForget={() =>
+                        void runCommand(MEMORY_COMMANDS.forget, { memoryId: row.memoryId })
+                      }
+                      onRestore={() =>
+                        void runCommand(MEMORY_COMMANDS.restore, { memoryId: row.memoryId })
+                      }
+                    />
+                  ))}
+                </ul>
+              )}
+              {section.id === "user_settings" && editorOpen && (
+                <form className="memory-form" onSubmit={(event) => void submit(event)}>
+                  <label className="memory-field" htmlFor="memory-preference-key">
+                    <span>名称</span>
+                    <input
+                      id="memory-preference-key"
+                      value={preferenceKey}
+                      disabled={pending}
+                      autoFocus
+                      onChange={(event) => setPreferenceKey(event.target.value)}
+                    />
+                  </label>
+                  <label className="memory-field" htmlFor="memory-preference-value">
+                    <span>内容</span>
+                    <input
+                      id="memory-preference-value"
+                      value={preferenceValue}
+                      disabled={pending}
+                      onChange={(event) => setPreferenceValue(event.target.value)}
+                    />
+                  </label>
+                  <div className="memory-form-actions">
+                    <button
+                      type="button"
+                      className="memory-ghost-button"
+                      disabled={pending}
+                      onClick={cancelEdit}
+                    >
+                      取消
+                    </button>
+                    <button type="submit" className="client-dark-button" disabled={pending}>
+                      {editingId ? "保存" : "添加"}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+          ))}
+          {view.forgotten.length > 0 && (
+            <section className="memory-section" aria-labelledby="memory-forgotten-heading">
+              <div className="memory-section-head">
+                <h3 id="memory-forgotten-heading">{view.forgottenTitle}</h3>
+              </div>
               <ul className="memory-list memory-record-list">
-                {view.memories.map((row) => (
-                  <li key={row.memoryId} className="memory-record-row">
-                    <div className="memory-record-copy">
-                      <span className="memory-record-kind">
-                        {row.layer} · {row.recordKind}
-                      </span>
-                      <span className="memory-record-summary">{row.summary}</span>
-                      <small className="memory-record-meta">{row.metaLabel}</small>
-                    </div>
+                {view.forgotten.map((row) => (
+                  <MemoryItem
+                    key={row.memoryId}
+                    row={row}
+                    pending={pending}
+                    sourceOpen={sourceId === row.memoryId}
+                    correcting={false}
+                    correctionText=""
+                    onToggleSource={() =>
+                      setSourceId((current) =>
+                        current === row.memoryId ? undefined : row.memoryId,
+                      )
+                    }
+                    onEdit={() => undefined}
+                    onCorrect={() => undefined}
+                    onCorrectionText={() => undefined}
+                    onSubmitCorrection={(event) => event.preventDefault()}
+                    onCancelCorrection={() => undefined}
+                    onDisable={() => undefined}
+                    onForget={() => undefined}
+                    onRestore={() =>
+                      void runCommand(MEMORY_COMMANDS.restore, { memoryId: row.memoryId })
+                    }
+                  />
+                ))}
+              </ul>
+            </section>
+          )}
+          <section className="memory-section" aria-labelledby="memory-activity-heading">
+            <div className="memory-section-head">
+              <h3 id="memory-activity-heading">记忆动态</h3>
+            </div>
+            {view.activityEmpty ? (
+              <p className="memory-empty">{view.activityEmpty}</p>
+            ) : (
+              <ul className="memory-list memory-activity-list">
+                {view.activity.map((row) => (
+                  <li key={row.activityId} className="memory-activity-row">
+                    <span className="memory-record-kind">{row.label}</span>
+                    <span className="memory-record-summary">{row.summary}</span>
+                    <small className="memory-record-meta">{row.timeLabel}</small>
                   </li>
                 ))}
               </ul>
@@ -301,5 +379,144 @@ export function MemoryControls({ open, onClose }: { open: boolean; onClose: () =
         </div>
       )}
     </dialog>
+  );
+}
+
+function MemoryItem({
+  row,
+  pending,
+  sourceOpen,
+  correcting,
+  correctionText,
+  onToggleSource,
+  onEdit,
+  onCorrect,
+  onCorrectionText,
+  onSubmitCorrection,
+  onCancelCorrection,
+  onDisable,
+  onForget,
+  onRestore,
+}: {
+  row: MemoryPanelItem;
+  pending: boolean;
+  sourceOpen: boolean;
+  correcting: boolean;
+  correctionText: string;
+  onToggleSource: () => void;
+  onEdit: () => void;
+  onCorrect: () => void;
+  onCorrectionText: (value: string) => void;
+  onSubmitCorrection: (event: FormEvent<HTMLFormElement>) => void;
+  onCancelCorrection: () => void;
+  onDisable: () => void;
+  onForget: () => void;
+  onRestore: () => void;
+}) {
+  return (
+    <li className="memory-record-row">
+      <div className="memory-record-copy">
+        <span className="memory-record-summary">{row.summary}</span>
+        <small className="memory-record-meta">
+          {row.scopeLabel} · {row.authorLabel} · {row.mutabilityLabel}
+        </small>
+        <small className="memory-record-meta">
+          状态 {row.statusLabel} · {row.conflictLabel} · 更新 {row.updatedLabel} · 上次召回{" "}
+          {row.recalledLabel}
+          {row.recallReason ? ` · 召回原因 ${row.recallReason}` : ""}
+        </small>
+      </div>
+      <div className="memory-row-actions">
+        {row.editablePreference && (
+          <button type="button" className="memory-ghost-button" disabled={pending} onClick={onEdit}>
+            编辑
+          </button>
+        )}
+        {row.actions.correct && !row.editablePreference && (
+          <button
+            type="button"
+            className="memory-ghost-button"
+            disabled={pending}
+            onClick={onCorrect}
+          >
+            纠正
+          </button>
+        )}
+        {row.actions.disable && (
+          <button
+            type="button"
+            className="memory-ghost-button"
+            disabled={pending}
+            onClick={onDisable}
+          >
+            停用
+          </button>
+        )}
+        {row.actions.forget && (
+          <button
+            type="button"
+            className="memory-ghost-button"
+            disabled={pending}
+            onClick={onForget}
+          >
+            忘记
+          </button>
+        )}
+        {row.actions.restore && (
+          <button
+            type="button"
+            className="memory-ghost-button"
+            disabled={pending}
+            onClick={onRestore}
+          >
+            恢复
+          </button>
+        )}
+        {row.actions.viewSource && (
+          <button
+            type="button"
+            className="memory-ghost-button"
+            aria-expanded={sourceOpen}
+            disabled={pending}
+            onClick={onToggleSource}
+          >
+            来源
+          </button>
+        )}
+      </div>
+      {sourceOpen && (
+        <ul className="memory-source-list">
+          {row.sourceLines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {correcting && (
+        <form className="memory-form" onSubmit={onSubmitCorrection}>
+          <label className="memory-field" htmlFor={`memory-correct-${row.memoryId}`}>
+            <span>纠正内容</span>
+            <input
+              id={`memory-correct-${row.memoryId}`}
+              value={correctionText}
+              disabled={pending}
+              onChange={(event) => onCorrectionText(event.target.value)}
+            />
+          </label>
+          <div className="memory-form-actions">
+            <button
+              type="button"
+              className="memory-ghost-button"
+              disabled={pending}
+              onClick={onCancelCorrection}
+            >
+              取消
+            </button>
+            <button type="submit" className="client-dark-button" disabled={pending}>
+              保存纠正
+            </button>
+          </div>
+        </form>
+      )}
+    </li>
   );
 }

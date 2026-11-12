@@ -846,7 +846,7 @@ export class WorkerService {
       (candidate, signal) => this.#memoryCandidates.submit(candidate, signal),
       this.#operationAbort.signal,
     );
-    this.#track(pending);
+    this.#track(pending.then(() => undefined));
   }
 
   #experienceTurn(sessionId: string): {

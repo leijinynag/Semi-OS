@@ -11,16 +11,19 @@
 //! 深读只在核对证据、冲突或 unknown 时读取 L4。闲聊不搜索项目，不装入其他任务
 //! 的记忆，也不创建 TaskRun。录音开始时还没有转写，只做基础包，避免挡住首句。
 //!
+//! 真正装进这一轮的记录会记下召回原因，只供记忆页显示，不产生语音事件。
 //! 偏好写入不修改人格表，人格指纹也不会因偏好变化而改变。
 
 use crate::memory_controls::CLIENT_USER_ID;
 use semi_os_protocol::Envelope;
 use semi_os_storage::{
     memory_text, recall_tokens, MemoryLayer, MemoryLink, MemoryPack, MemoryPackEntry,
-    MemoryPackRequest, MemoryPackSlot, MemoryPackStage, MemoryRecallScope, MemoryRecordKind,
-    MemoryRelation, MemoryScope, MemorySource, Storage, StorageResult,
+    MemoryPackRequest, MemoryPackSlot, MemoryPackStage, MemoryRecallNote, MemoryRecallScope,
+    MemoryRecordKind, MemoryRelation, MemoryScope, MemorySource, Storage, StorageResult,
 };
 use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 普通轮次的记忆预算。精确 tokenizer 尚未落地，存储层用同一字符估算比较预算。
 pub const TURN_MEMORY_TOKEN_BUDGET: u32 = 4_000;
@@ -63,7 +66,7 @@ pub fn build_turn_memory_context(storage: &Storage) -> StorageResult<Option<Stri
         deep: false,
         query: String::new(),
     };
-    render_plan(storage, &plan)
+    Ok(render_plan(storage, &plan)?.map(|(text, _)| text))
 }
 
 /// 按确定性规则决定这一轮的范围和阶段。
@@ -168,7 +171,7 @@ pub fn memory_search(
 /// 和中断不需要重复读取记忆。字段由 Host 覆盖写入，WebView 无法伪造偏好上下文。
 /// 召回失败会让这一轮失败，避免对话在缺少已保存偏好的情况下继续。
 pub fn attach_turn_memory_context(
-    storage: &Storage,
+    storage: &mut Storage,
     envelope: &mut Envelope,
 ) -> StorageResult<bool> {
     let is_user_turn = matches!(
@@ -181,9 +184,13 @@ pub fn attach_turn_memory_context(
     }
     // 先按不可变信封决定召回，再写入 memoryContext。不能在持有 payload 可变借用时重读信封。
     let plan = plan_turn_recall(envelope, storage)?;
-    let Some(context) = render_plan(storage, &plan)? else {
+    let Some((context, notes)) = render_plan(storage, &plan)? else {
         return Ok(false);
     };
+    // 先完成只读组装，再写召回痕迹。失败要让这一轮失败，避免页面显示“从未召回”。
+    if !notes.is_empty() {
+        storage.note_memory_recall(&notes, recall_now_ms())?;
+    }
     let Envelope::Request { payload, .. } = envelope else {
         return Ok(false);
     };
@@ -194,7 +201,10 @@ pub fn attach_turn_memory_context(
     Ok(true)
 }
 
-fn render_plan(storage: &Storage, plan: &TurnRecallPlan) -> StorageResult<Option<String>> {
+fn render_plan(
+    storage: &Storage,
+    plan: &TurnRecallPlan,
+) -> StorageResult<Option<(String, Vec<MemoryRecallNote>)>> {
     let base = storage.load_memory_pack(&pack_request(&plan.scope, MemoryPackStage::Base, ""))?;
     let context = if plan.context {
         Some(storage.load_memory_pack(&pack_request(&plan.scope, MemoryPackStage::Context, ""))?)
@@ -245,11 +255,18 @@ fn render_layers(
     scope: &MemoryRecallScope,
     search: &[MemorySearchHit],
     deep: Option<&MemoryPack>,
-) -> Option<String> {
+) -> Option<(String, Vec<MemoryRecallNote>)> {
     let mut included = Vec::new();
+    let mut reasons = HashMap::<String, String>::new();
     let mut text = String::from(CONTEXT_HEADER);
     text.push('\n');
-    append_entries(&mut text, &mut included, base.entries.iter());
+    append_entries(
+        &mut text,
+        &mut included,
+        &mut reasons,
+        "基础包",
+        base.entries.iter(),
+    );
     if let Some(context) = context {
         let extra: Vec<_> = context
             .entries
@@ -264,7 +281,7 @@ fn render_layers(
             .collect();
         if !extra.is_empty() {
             text.push_str("\n[context]\n");
-            append_entries(&mut text, &mut included, extra);
+            append_entries(&mut text, &mut included, &mut reasons, "上下文包", extra);
         }
     }
     if !search.is_empty() {
@@ -272,6 +289,7 @@ fn render_layers(
         text.push_str(&recall_scope_label(scope));
         text.push('\n');
         for hit in search {
+            reasons.insert(hit.memory_id.clone(), "搜索".to_owned());
             text.push_str("\n[");
             text.push_str(&hit.memory_id);
             text.push_str("]\n");
@@ -297,7 +315,7 @@ fn render_layers(
             .collect();
         if !evidence.is_empty() {
             text.push_str("\n[deep]\n");
-            append_entries(&mut text, &mut included, evidence);
+            append_entries(&mut text, &mut included, &mut reasons, "深读证据", evidence);
         }
     }
     if base.truncated
@@ -310,13 +328,20 @@ fn render_layers(
     if trimmed == CONTEXT_HEADER {
         None
     } else {
-        Some(trimmed.to_owned())
+        let mut notes: Vec<_> = reasons
+            .into_iter()
+            .map(|(memory_id, reason)| MemoryRecallNote { memory_id, reason })
+            .collect();
+        notes.sort_by(|left, right| left.memory_id.cmp(&right.memory_id));
+        Some((trimmed.to_owned(), notes))
     }
 }
 
 fn append_entries<'a>(
     text: &mut String,
     included: &mut Vec<String>,
+    reasons: &mut HashMap<String, String>,
+    reason: &str,
     entries: impl IntoIterator<Item = &'a MemoryPackEntry>,
 ) {
     for entry in entries {
@@ -325,6 +350,7 @@ fn append_entries<'a>(
         }
         if let Some(memory_id) = &entry.memory_id {
             included.push(memory_id.clone());
+            reasons.insert(memory_id.clone(), reason.to_owned());
         }
         text.push_str("\n[");
         text.push_str(entry.slot.as_str());
@@ -332,6 +358,13 @@ fn append_entries<'a>(
         text.push_str(entry.text.trim());
         text.push('\n');
     }
+}
+
+fn recall_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 fn empty_scope() -> MemoryRecallScope {
@@ -696,14 +729,30 @@ mod tests {
                 trace_id: None,
             },
         };
-        assert!(attach_turn_memory_context(&storage, &mut turn).unwrap());
-        let Envelope::Request { payload, .. } = &turn else {
+        assert!(attach_turn_memory_context(&mut storage, &mut turn).unwrap());
+        let Envelope::Request { kind, payload, .. } = &turn else {
             panic!("request should stay a request");
         };
+        assert_eq!(kind, "voice.text.submit");
         let context = payload["memoryContext"].as_str().unwrap();
         assert!(context.contains("语气"));
         assert!(context.contains("活泼"));
         assert!(!context.contains("伪造上下文"));
+        let activity = storage.list_memory_activity(5).unwrap();
+        assert!(activity.iter().any(|row| {
+            row.kind == semi_os_storage::MemoryActivityKind::Recalled
+                && row.summary.contains("基础包")
+                && !row.summary.contains("voice")
+        }));
+        let page = memory_controls::list_client_memory(&storage).unwrap();
+        let preference = page
+            .sections
+            .iter()
+            .flat_map(|section| section.items.iter())
+            .find(|item| item.summary.contains("活泼"))
+            .expect("recalled preference should stay on the memory page");
+        assert_eq!(preference.recall_reason.as_deref(), Some("基础包"));
+        assert!(preference.last_recalled_at_ms.is_some());
 
         let mut interrupt = Envelope::Request {
             protocol_version: 1,
@@ -716,7 +765,7 @@ mod tests {
                 trace_id: None,
             },
         };
-        assert!(!attach_turn_memory_context(&storage, &mut interrupt).unwrap());
+        assert!(!attach_turn_memory_context(&mut storage, &mut interrupt).unwrap());
         let Envelope::Request { payload, .. } = &interrupt else {
             panic!("request should stay a request");
         };
@@ -745,7 +794,7 @@ mod tests {
         assert!(plan.search);
         assert!(plan.deep);
 
-        assert!(attach_turn_memory_context(&storage, &mut turn).unwrap());
+        assert!(attach_turn_memory_context(&mut storage, &mut turn).unwrap());
         let context = context_of(&turn);
         assert!(context.contains("[preference]"));
         assert!(context.contains("语气"));
@@ -794,7 +843,7 @@ mod tests {
         assert!(!plan.search);
         assert!(!plan.deep);
 
-        assert!(attach_turn_memory_context(&storage, &mut turn).unwrap());
+        assert!(attach_turn_memory_context(&mut storage, &mut turn).unwrap());
         let context = context_of(&turn);
         assert!(context.contains("语气"));
         assert!(context.contains("全局事实：回答保持简短"));
@@ -837,7 +886,7 @@ mod tests {
         assert!(plan.scope.workspace_id.is_none());
         assert!(!plan.search);
         assert!(!plan.context);
-        assert!(attach_turn_memory_context(&storage, &mut turn).unwrap());
+        assert!(attach_turn_memory_context(&mut storage, &mut turn).unwrap());
         let context = context_of(&turn);
         assert!(context.contains(TURN_HOST_POLICY));
         assert!(!context.contains("rustfmt"));
@@ -858,7 +907,7 @@ mod tests {
         assert_eq!(plan.scope.workspace_id.as_deref(), Some("repo_semi"));
         assert!(plan.context);
         assert!(plan.search);
-        assert!(attach_turn_memory_context(&storage, &mut turn).unwrap());
+        assert!(attach_turn_memory_context(&mut storage, &mut turn).unwrap());
         let context = context_of(&turn);
         assert!(context.contains("上次把 rustfmt 配成 edition2024"));
         assert!(!context.contains("无关任务的发布笔记"));

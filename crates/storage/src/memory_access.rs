@@ -709,6 +709,8 @@ impl Storage {
         let records = self.load_scoped_records(&request.scope)?;
         let admission = self.load_admission()?;
         let inactive = self.load_inactive_ids()?;
+        // 停用和忘记是用户控制，和 supersedes 的失效分开。这里只让它们退出召回。
+        let withheld = self.load_withheld_ids()?;
         let tokens = query_tokens(&request.query);
         let mut entries = Vec::new();
         let mut included = HashSet::new();
@@ -736,6 +738,7 @@ impl Storage {
             records.iter().filter(|record| {
                 record.record_kind == MemoryRecordKind::Preference
                     && !inactive.contains(&record.memory_id)
+                    && !withheld.contains(&record.memory_id)
                     && (record.author == MemoryAuthor::User
                         || confidence_of(record, &admission) >= HIGH_CONFIDENCE)
             }),
@@ -753,17 +756,16 @@ impl Storage {
             &mut entries,
             &mut included,
             MemoryPackSlot::L1,
-            chronological(
-                records
-                    .iter()
-                    .filter(|record| record.layer == MemoryLayer::L1),
-            ),
+            chronological(records.iter().filter(|record| {
+                record.layer == MemoryLayer::L1 && !withheld.contains(&record.memory_id)
+            })),
             self,
         )?;
         let l0: Vec<_> = records
             .iter()
             .filter(|record| {
                 record.layer == MemoryLayer::L0
+                    && !withheld.contains(&record.memory_id)
                     && !(record.record_kind == MemoryRecordKind::CompactionSummary
                         && inactive.contains(&record.memory_id))
             })
@@ -776,8 +778,9 @@ impl Storage {
             self,
         )?;
 
-        let project = project_identity(&records, &request.scope, &admission, &inactive);
-        let mut base_l2 = high_confidence_l2(&records, &request.scope, &admission, &inactive);
+        let project = project_identity(&records, &request.scope, &admission, &inactive, &withheld);
+        let mut base_l2 =
+            high_confidence_l2(&records, &request.scope, &admission, &inactive, &withheld);
         if let Some(project) = project {
             if let Some(position) = base_l2
                 .iter()
@@ -811,6 +814,7 @@ impl Storage {
                             && record.record_kind != MemoryRecordKind::Preference
                             && !included.contains(&record.memory_id)
                             && !inactive.contains(&record.memory_id)
+                            && !withheld.contains(&record.memory_id)
                             && confidence_of(record, &admission) >= 40
                     }),
                     &admission,
@@ -827,6 +831,7 @@ impl Storage {
                     records.iter().filter(|record| {
                         record.layer == MemoryLayer::L3
                             && !inactive.contains(&record.memory_id)
+                            && !withheld.contains(&record.memory_id)
                             && confidence_of(record, &admission) >= 40
                     }),
                     &admission,
@@ -850,6 +855,7 @@ impl Storage {
                         scope: &request.scope,
                         admission: &admission,
                         inactive: &inactive,
+                        withheld: &withheld,
                         tokens: &tokens,
                     },
                 )?;
@@ -859,6 +865,7 @@ impl Storage {
                 let evidence = ranked_records(
                     records.iter().filter(|record| {
                         record.layer == MemoryLayer::L4
+                            && !withheld.contains(&record.memory_id)
                             && token_overlaps(&render_body(&record.body), &tokens)
                     }),
                     &admission,
@@ -992,9 +999,10 @@ impl Storage {
         let tokens = query_tokens(query);
         let admission = self.load_admission()?;
         let inactive = self.load_inactive_ids()?;
+        let withheld = self.load_withheld_ids()?;
         let mut ranked = Vec::new();
         for record in self.load_scoped_records(scope)? {
-            if inactive.contains(&record.memory_id) {
+            if inactive.contains(&record.memory_id) || withheld.contains(&record.memory_id) {
                 continue;
             }
             let matches = token_matches(&render_body(&record.body), &tokens);
@@ -1104,6 +1112,9 @@ impl Storage {
         if !record_in_scope(scope, &record.scope) {
             return Err(StorageError::InvalidMemory("选中的记忆超出当前范围".into()));
         }
+        if self.load_withheld_ids()?.contains(memory_id) {
+            return Err(StorageError::InvalidMemory("这条记录已停用或已忘记".into()));
+        }
         Ok(record)
     }
 
@@ -1196,6 +1207,11 @@ impl Storage {
             scores.insert(memory_id, (confidence, importance));
         }
         Ok(scores)
+    }
+
+    /// 被替换或冲突落败、因而不能和当前有效版本一起注入的记录。
+    pub fn recall_inactive_ids(&self) -> StorageResult<HashSet<String>> {
+        self.load_inactive_ids()
     }
 
     /// 不能和当前有效版本一起注入的记录。
@@ -1326,6 +1342,7 @@ struct SearchHitInput<'a> {
     scope: &'a MemoryRecallScope,
     admission: &'a HashMap<String, (u8, u8)>,
     inactive: &'a HashSet<String>,
+    withheld: &'a HashSet<String>,
     tokens: &'a [String],
 }
 
@@ -1341,6 +1358,7 @@ fn push_search_hits(
                 record.layer == layer
                     && record.record_kind != MemoryRecordKind::Preference
                     && !input.inactive.contains(&record.memory_id)
+                    && !input.withheld.contains(&record.memory_id)
                     && token_overlaps(&render_body(&record.body), input.tokens)
             }),
             input.admission,
@@ -1358,6 +1376,7 @@ fn push_search_hits(
         input.records.iter().filter(|record| {
             record.layer == MemoryLayer::L5
                 && !input.inactive.contains(&record.memory_id)
+                && !input.withheld.contains(&record.memory_id)
                 && token_overlaps(&procedure_name(&record.body), input.tokens)
         }),
         input.admission,
@@ -1398,6 +1417,7 @@ fn project_identity<'a>(
     scope: &MemoryRecallScope,
     admission: &HashMap<String, (u8, u8)>,
     inactive: &HashSet<String>,
+    withheld: &HashSet<String>,
 ) -> Option<&'a MemoryRecord> {
     let Some(workspace_id) = &scope.workspace_id else {
         return None;
@@ -1407,6 +1427,7 @@ fn project_identity<'a>(
             record.record_kind == MemoryRecordKind::ProjectFact
                 && record.scope.workspace_id.as_ref() == Some(workspace_id)
                 && !inactive.contains(&record.memory_id)
+                && !withheld.contains(&record.memory_id)
                 && confidence_of(record, admission) >= HIGH_CONFIDENCE
         }),
         admission,
@@ -1421,12 +1442,14 @@ fn high_confidence_l2<'a>(
     scope: &MemoryRecallScope,
     admission: &HashMap<String, (u8, u8)>,
     inactive: &HashSet<String>,
+    withheld: &HashSet<String>,
 ) -> Vec<&'a MemoryRecord> {
     ranked_records(
         records.iter().filter(|record| {
             record.layer == MemoryLayer::L2
                 && record.record_kind != MemoryRecordKind::Preference
                 && !inactive.contains(&record.memory_id)
+                && !withheld.contains(&record.memory_id)
                 && confidence_of(record, admission) >= HIGH_CONFIDENCE
         }),
         admission,

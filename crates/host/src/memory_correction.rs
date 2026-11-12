@@ -948,7 +948,7 @@ mod tests {
         seed_verbose_preference(&mut storage, 11);
         let mut envelope = text_request("以后用简短回答，以后都这样");
         assert!(apply_turn_explicit_corrections(&mut storage, &envelope, 21).unwrap());
-        assert!(attach_turn_memory_context(&storage, &mut envelope).unwrap());
+        assert!(attach_turn_memory_context(&mut storage, &mut envelope).unwrap());
         let Envelope::Request { payload, .. } = &envelope else {
             panic!("request should stay a request");
         };

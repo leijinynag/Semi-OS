@@ -146,6 +146,22 @@ test("secret text is removed before a candidate is submitted", () => {
   );
 });
 
+test("one write failure does not drop the rest of the batch", async () => {
+  const seen: string[] = [];
+  const failures = await persistVerifiedExperience(
+    observation([verifiedTool]),
+    async (candidate) => {
+      seen.push(candidate.memoryId);
+      if (seen.length === 1) throw new Error("storage rejected");
+    },
+    new AbortController().signal,
+  );
+  assert.equal(seen.length, 3);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0]?.reason, "storage rejected");
+  assert.equal(failures[0]?.reason.includes("voice"), false);
+});
+
 test("background persistence returns before the host write finishes", async () => {
   let entered = false;
   let release: () => void = () => {};
